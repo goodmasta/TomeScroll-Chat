@@ -93,9 +93,17 @@ public static class ChatMessageRenderer
             ImGui.SameLine(0, 4);
         }
 
+        // Hanging indent: any wrapped/fresh line inside DrawBody (wrapped plain text, or a link that
+        // always starts its own line) should line up under where the message text starts, not under
+        // the timestamp at the far left.
+        var indentWidth = ImGui.GetCursorPosX() - ImGui.GetWindowContentRegionMin().X;
+        ImGui.Indent(indentWidth);
+
         ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
         DrawBody(msg.Body, config, emotes);
         ImGui.PopStyleColor();
+
+        ImGui.Unindent(indentWidth);
     }
 
     private static string BuildCopyText(ChatMessageRecord msg)
@@ -199,8 +207,9 @@ public static class ChatMessageRenderer
     /// plain text and emotes) - a link always immediately follows a flushed, possibly multi-line
     /// wrapped plain-text run, and querying the cursor position right after one of those turned out
     /// to be unreliable, which is what caused both the "links don't wrap" and the "wall of blank
-    /// lines" bugs seen earlier. Always starting fresh means the wrap decision below only ever needs
-    /// the message's fixed right edge and the window's fixed left margin - no cursor-state guessing.
+    /// lines" bugs seen earlier. Always starting fresh means the wrap decision below only needs the
+    /// message's fixed right edge and the cursor's current (indent-respecting) X - read *before*
+    /// drawing anything, i.e. the reliable case, not the post-widget read that caused those bugs.
     /// </summary>
     private static void DrawLink(string token, Configuration config, float rightEdge)
     {
@@ -210,7 +219,7 @@ public static class ChatMessageRenderer
             return;
         }
 
-        var fullWidth = rightEdge - ImGui.GetWindowContentRegionMin().X;
+        var fullWidth = rightEdge - ImGui.GetCursorPosX();
         if (ImGui.CalcTextSize(token).X > fullWidth)
         {
             ImGui.PushTextWrapPos(rightEdge);
