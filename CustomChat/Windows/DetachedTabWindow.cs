@@ -46,7 +46,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
             if (child.Success)
             {
                 var messages = plugin.TabMessageBuffer.GetMessages(Tab);
-                ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService);
+                ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey);
 
                 if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                     ImGui.SetScrollHereY(1f);

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -40,13 +41,15 @@ public static class ChatMessageRenderer
         [XivChatType.SystemMessage] = new Vector4(0.75f, 0.75f, 0.75f, 1f),
     };
 
-    public static void DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes)
+    /// <param name="onSendTell">Called with a "Name@World" key when the user picks "Send Tell" from a
+    /// sender name's right-click menu. Only offered for messages with a resolvable player sender.</param>
+    public static void DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell)
     {
-        foreach (var msg in messages)
-            DrawMessage(tab, msg, config, emotes);
+        for (var i = 0; i < messages.Count; i++)
+            DrawMessage(tab, messages[i], i, config, emotes, onSendTell);
     }
 
-    private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, Configuration config, EmoteService emotes)
+    private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell)
     {
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
         ImGui.SameLine(0, 4);
@@ -58,6 +61,17 @@ public static class ChatMessageRenderer
         if (!string.IsNullOrEmpty(sender))
         {
             ImGui.TextUnformatted($"{sender}:");
+
+            // Right-click a sender name to whisper them - the game's own "Send Tell" menu item only
+            // works from native UI (party list, target, etc.) and does nothing here since this window
+            // isn't a native addon, so this is the only way to whisper someone straight from chat.
+            if (!string.IsNullOrEmpty(msg.SenderKey) && ImGui.BeginPopupContextItem($"senderctx_{index}"))
+            {
+                if (ImGui.MenuItem("Send Tell"))
+                    onSendTell(msg.SenderKey);
+                ImGui.EndPopup();
+            }
+
             ImGui.SameLine(0, 4);
         }
 

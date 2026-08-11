@@ -105,11 +105,15 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>Opens (creating if necessary) the whisper tab for this player and brings it to front -
-    /// the "Send Tell (Custom Chat)" right-click menu item's handler.</summary>
-    public void OpenTellTo(string name, string world)
+    /// the native right-click menu's "Send Tell (Custom Chat)" handler.</summary>
+    public void OpenTellTo(string name, string world) => OpenTellToKey($"{name}@{world}");
+
+    /// <summary>Same as <see cref="OpenTellTo"/> but from an already-combined "Name@World" key - used by
+    /// the in-chat "Send Tell" right-click on a message's sender name.</summary>
+    public void OpenTellToKey(string partnerKey)
     {
-        var partnerKey = $"{name}@{world}";
-        var tab = TabManager.GetOrCreatePmTab(partnerKey, name);
+        var displayName = partnerKey.Split('@')[0];
+        var tab = TabManager.GetOrCreatePmTab(partnerKey, displayName);
 
         if (tab.IsDetached)
         {
