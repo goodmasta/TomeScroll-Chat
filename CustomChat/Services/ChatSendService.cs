@@ -24,13 +24,18 @@ public sealed unsafe class ChatSendService
     }
 
     /// <param name="channelCommand">Outgoing slash-command prefix (e.g. "/p", "/fc", "/tell Name@World"), or empty to use whatever channel the message text/game default resolves to.</param>
-    /// <param name="message">Message body, without any channel prefix.</param>
+    /// <param name="message">Message body, without any channel prefix - unless it's itself a slash
+    /// command the player typed (e.g. "/who", "/invite Name"), in which case it's sent completely
+    /// as-is: prefixing a tab's channel command in front of an already-explicit command would just
+    /// produce an invalid double command (e.g. "/p /invite Name"), which is why typing any command
+    /// used to only work from the one tab whose channel command happened to be empty (Log).</param>
     public void Send(string channelCommand, string message)
     {
         if (string.IsNullOrWhiteSpace(message))
             return;
 
-        var full = string.IsNullOrEmpty(channelCommand) ? message : $"{channelCommand} {message}";
+        var isExplicitCommand = message.TrimStart().StartsWith('/');
+        var full = string.IsNullOrEmpty(channelCommand) || isExplicitCommand ? message : $"{channelCommand} {message}";
         var byteCount = Encoding.UTF8.GetByteCount(full);
         if (byteCount > MaxUtf8Bytes)
         {
