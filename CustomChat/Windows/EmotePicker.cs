@@ -36,11 +36,19 @@ public static class EmotePicker
                     if (!string.IsNullOrEmpty(search) && emote.Code.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
                         continue;
 
-                    // Every cell is a fixed-size, single-line Button/ImageButton (never multi-line
-                    // wrapped), so - unlike wrapping actual message text - GetCursorPosX() is always a
-                    // reliable "would this fit on the current line" reference here.
-                    if (!isFirst && ImGui.GetCursorPosX() + CellSpacing + CellSize <= rightEdge)
-                        ImGui.SameLine(0, CellSpacing);
+                    // GetCursorPosX() here (before deciding whether to SameLine) always reads the
+                    // "fresh next line" position, not "continuing after the previous item" - the exact
+                    // same mistake already fixed once in ChatMessageRenderer. That trivially satisfies
+                    // the fit-check every time, so SameLine() got called unconditionally and every cell
+                    // piled onto one endless row instead of ever wrapping. GetItemRectMax() of the
+                    // *previous* item is the reliable reference (safe here specifically because every
+                    // cell is a fixed-size, single-line Button/ImageButton, never wrapped internally).
+                    if (!isFirst)
+                    {
+                        var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+                        if (prevRightX + CellSpacing + CellSize <= rightEdge)
+                            ImGui.SameLine(0, CellSpacing);
+                    }
 
                     ImGui.PushID(emote.Code);
                     var texture = emotes.TryGetTexture(emote.Code);
