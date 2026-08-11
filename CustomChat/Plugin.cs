@@ -55,7 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
         contextMenuService = new ContextMenuService(this, ContextMenu, Log);
-        nativeTellWatcher = new NativeTellWatcher(Framework, Log, GetLocalHomeWorldName, OpenTellTo);
+        nativeTellWatcher = new NativeTellWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 

@@ -1,29 +1,37 @@
 using System;
+using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.UI.Shell;
+using FFXIVClientStructs.FFXIV.Client.UI;
 
 namespace CustomChat.Services;
 
 /// <summary>
-/// Detects when the game sets a pending whisper target on its own shell module - which happens for
-/// the native right-click "Send Tell" (any context: target, party list, friends list, ...) as well
-/// as the "R" reply-to-last-tell shortcut and manually typed "/tell" commands - and opens/focuses
-/// the matching whisper tab in this plugin instead. This is what actually makes the *native*
-/// "Send Tell" flow work with this plugin: that flow normally focuses the game's own chat input,
-/// which stays hidden while this plugin is acting as the chat window, so without this the native
-/// option would never visibly do anything.
+/// Watches the native chat log's own input textbox (<see cref="AddonChatLog.TextInput"/>) for the
+/// "/tell Name[@World] " the game pre-fills there the instant "Send Tell" is picked from any
+/// right-click menu, the friends list, or the "R" reply shortcut. Confirmed by direct observation:
+/// that text visibly appears in the native input even while this plugin hides the rest of the chat
+/// log, so the native input isn't fully inert - reading it directly is the one reliable signal.
+/// On the rising edge (text just started with "/tell "/"/t ") this opens/focuses the matching
+/// whisper tab in this plugin's own UI and clears the native box, so the pre-filled command ends up
+/// in this plugin's chat "instead of" the original one, per the user's request.
 /// </summary>
 public sealed unsafe class NativeTellWatcher : IDisposable
 {
+    private static readonly Regex TellPrefix = new(
+        @"^/te?ll?\s+(?<name>[A-Za-z'\-]+(?:\s[A-Za-z'\-]+)?)(?:@(?<world>[A-Za-z]+))?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private readonly IFramework framework;
+    private readonly IGameGui gameGui;
     private readonly IPluginLog log;
     private readonly Func<string?> getLocalHomeWorld;
     private readonly Action<string, string> onTellTargetChanged;
-    private ulong lastContentId;
+    private string lastTriggerKey = string.Empty;
 
-    public NativeTellWatcher(IFramework framework, IPluginLog log, Func<string?> getLocalHomeWorld, Action<string, string> onTellTargetChanged)
+    public NativeTellWatcher(IFramework framework, IGameGui gameGui, IPluginLog log, Func<string?> getLocalHomeWorld, Action<string, string> onTellTargetChanged)
     {
         this.framework = framework;
+        this.gameGui = gameGui;
         this.log = log;
         this.getLocalHomeWorld = getLocalHomeWorld;
         this.onTellTargetChanged = onTellTargetChanged;
@@ -32,37 +40,37 @@ public sealed unsafe class NativeTellWatcher : IDisposable
 
     private void OnFrameworkUpdate(IFramework _)
     {
-        var shell = RaptureShellModule.Instance();
-        if (shell == null)
-            return;
-
-        // ContentId is a reliable non-string signal (0 = no pending tell target); TellWorld can be
-        // genuinely empty for a same-world target (no "@World" needed for those), so it can't be
-        // used to gate detection the way an earlier version of this did.
-        var contentId = shell->ContentId;
-        if (contentId == 0)
+        var addon = gameGui.GetAddonByName<AddonChatLog>("ChatLog");
+        if (addon == null || addon->TextInput == null)
         {
-            lastContentId = 0;
+            lastTriggerKey = string.Empty;
             return;
         }
 
-        if (contentId == lastContentId)
+        var raw = addon->TextInput->RawString.ToString();
+        var match = TellPrefix.Match(raw);
+        if (!match.Success)
+        {
+            lastTriggerKey = string.Empty;
             return;
+        }
 
-        lastContentId = contentId;
-
-        var name = shell->TellName.ToString();
-        var world = shell->TellWorld.ToString();
-        if (string.IsNullOrEmpty(world))
-            world = getLocalHomeWorld() ?? string.Empty;
-
-        log.Info("CustomChat: native tell target detected - name='{Name}' world='{World}' contentId={ContentId}", name, world, contentId);
-
+        var name = match.Groups["name"].Value.Trim();
+        var world = match.Groups["world"].Success ? match.Groups["world"].Value : (getLocalHomeWorld() ?? string.Empty);
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
-        {
-            log.Warning("CustomChat: native tell target had no usable name/world (name='{Name}' world='{World}'), ignoring", name, world);
             return;
-        }
+
+        var key = $"{name}@{world}";
+        if (key == lastTriggerKey)
+            return;
+
+        lastTriggerKey = key;
+        log.Info("CustomChat: native tell input detected - '{Raw}' -> {Key}", raw, key);
+
+        // Clear the native box so the pre-filled command doesn't sit there once our tab takes over -
+        // safe here because we act on the very next frame after the game populates it, before the
+        // player could plausibly have typed anything past the auto-filled "/tell Name@World ".
+        addon->TextInput->SetText(string.Empty);
 
         onTellTargetChanged(name, world);
     }
