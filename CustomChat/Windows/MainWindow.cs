@@ -27,7 +27,16 @@ public sealed class MainWindow : Window, IDisposable
         };
         Size = new Vector2(640, 420);
         SizeCondition = ImGuiCond.FirstUseEver;
+
+        // Always-on chat window: no close button, Esc doesn't close it, and OnClose() below
+        // refuses the close so nothing (hotkey, another plugin, a stray IsOpen = false) can hide it.
+        ShowCloseButton = false;
+        RespectCloseHotkey = false;
+        IsOpen = true;
     }
+
+    /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
+    public override void OnClose() => IsOpen = true;
 
     public override void Draw()
     {
@@ -138,6 +147,21 @@ public sealed class MainWindow : Window, IDisposable
     {
         if (tab.Id != selectedTabId || !IsOpen)
             tab.UnreadCount++;
+    }
+
+    /// <summary>Switches the sidebar selection to this tab (clearing its unread count) - e.g. when the
+    /// right-click "Send Tell" menu item opens a whisper conversation.</summary>
+    public void SelectTab(Guid tabId)
+    {
+        selectedTabId = tabId;
+        foreach (var tab in plugin.TabManager.Tabs)
+        {
+            if (tab.Id == tabId)
+            {
+                tab.UnreadCount = 0;
+                break;
+            }
+        }
     }
 
     private ChatTabConfig? ResolveSelectedTab()

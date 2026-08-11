@@ -13,8 +13,11 @@ namespace CustomChat.Services;
 /// Hooks incoming/outgoing chat, classifies each message into every matching regular tab (by
 /// channel + optional keyword/regex filter) or into the relevant whisper tab, and forwards it to
 /// both the UI (<see cref="MessageRouted"/>) and <see cref="ChatHistoryService"/> for persistence.
-/// Subscribes to <c>ChatMessageUnhandled</c> rather than the raw <c>ChatMessage</c> event so a
-/// message another plugin has already claimed/suppressed isn't shown a second time here.
+/// Subscribes to the raw <c>ChatMessage</c> event (fires unconditionally for every message) rather
+/// than <c>ChatMessageUnhandled</c> - the latter only fires once "handled" status has been decided,
+/// which turned out not to be a reliable signal to depend on for "did this message happen at all".
+/// We don't call <see cref="IHandleableChatMessage.PreventOriginal"/>, so other plugins and the
+/// (hidden) native chat log still see every message exactly as before.
 /// </summary>
 public sealed class ChatCaptureService : IDisposable
 {
@@ -36,10 +39,10 @@ public sealed class ChatCaptureService : IDisposable
         this.log = log;
         this.tabManager = tabManager;
         this.historyService = historyService;
-        chatGui.ChatMessageUnhandled += OnChatMessageUnhandled;
+        chatGui.ChatMessage += OnChatMessage;
     }
 
-    private void OnChatMessageUnhandled(IChatMessage message)
+    private void OnChatMessage(IHandleableChatMessage message)
     {
         try
         {
@@ -162,6 +165,6 @@ public sealed class ChatCaptureService : IDisposable
 
     public void Dispose()
     {
-        chatGui.ChatMessageUnhandled -= OnChatMessageUnhandled;
+        chatGui.ChatMessage -= OnChatMessage;
     }
 }

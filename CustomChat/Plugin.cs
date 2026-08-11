@@ -19,6 +19,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -32,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     public EmoteService EmoteService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     private readonly NativeChatHider nativeChatHider;
+    private readonly ContextMenuService contextMenuService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
     private readonly MainWindow mainWindow;
@@ -50,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
+        contextMenuService = new ContextMenuService(this, ContextMenu);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 
@@ -93,6 +96,27 @@ public sealed class Plugin : IDalamudPlugin
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
         ChatSendService.Send(tab.OutgoingChannelCommand, text);
+    }
+
+    /// <summary>Opens (creating if necessary) the whisper tab for this player and brings it to front -
+    /// the "Send Tell (Custom Chat)" right-click menu item's handler.</summary>
+    public void OpenTellTo(string name, string world)
+    {
+        var partnerKey = $"{name}@{world}";
+        var tab = TabManager.GetOrCreatePmTab(partnerKey, name);
+
+        if (tab.IsDetached)
+        {
+            CreateDetachedWindow(tab);
+            if (detachedWindows.TryGetValue(tab.Id, out var window))
+                window.RequestFocus = true;
+        }
+        else
+        {
+            mainWindow.IsOpen = true;
+            mainWindow.SelectTab(tab.Id);
+            mainWindow.RequestFocus = true;
+        }
     }
 
     public void SetTabDetached(ChatTabConfig tab, bool detached)
@@ -165,6 +189,7 @@ public sealed class Plugin : IDalamudPlugin
             window.Dispose();
 
         nativeChatHider.Dispose();
+        contextMenuService.Dispose();
         EmoteService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();
@@ -183,5 +208,10 @@ public sealed class Plugin : IDalamudPlugin
 
     private void ToggleConfigUi() => configWindow.Toggle();
 
-    private void ToggleMainUi() => mainWindow.Toggle();
+    /// <summary>The main chat window is always open and can't be closed - this just brings it to front.</summary>
+    private void ToggleMainUi()
+    {
+        mainWindow.IsOpen = true;
+        mainWindow.RequestFocus = true;
+    }
 }
