@@ -238,6 +238,9 @@ public sealed class MainWindow : Window, IDisposable
         {
             if (child.Success)
             {
+                // Scoped to just this child (not the sidebar/buttons/whole window) - resets
+                // automatically when the child ends. 14pt is the slider's default, i.e. 1x scale.
+                ImGui.SetWindowFontScale(Plugin.Configuration.FontSize / 14f);
                 if (pendingScrollToBottom)
                 {
                     ImGui.SetScrollY(ImGui.GetScrollMaxY());

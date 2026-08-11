@@ -61,6 +61,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             if (child.Success)
             {
+                ImGui.SetWindowFontScale(Plugin.Configuration.FontSize / 14f);
+
                 if (pendingScrollToBottom)
                 {
                     ImGui.SetScrollY(ImGui.GetScrollMaxY());
