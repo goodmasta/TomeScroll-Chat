@@ -33,6 +33,9 @@ public sealed class MainWindow : Window, IDisposable
         ShowCloseButton = false;
         RespectCloseHotkey = false;
         IsOpen = true;
+
+        // Always stays on top of other plugin windows instead of getting buried behind them.
+        IsTopMost = true;
     }
 
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
