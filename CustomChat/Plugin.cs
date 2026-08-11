@@ -52,7 +52,7 @@ public sealed class Plugin : IDalamudPlugin
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
-        contextMenuService = new ContextMenuService(this, ContextMenu);
+        contextMenuService = new ContextMenuService(this, ContextMenu, Log);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 
@@ -105,11 +105,11 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>Opens (creating if necessary) the whisper tab for this player and brings it to front -
-    /// the native right-click menu's "Send Tell (Custom Chat)" handler.</summary>
+    /// the right-click menu's "Whisper (Custom Chat)" handler.</summary>
     public void OpenTellTo(string name, string world) => OpenTellToKey($"{name}@{world}");
 
     /// <summary>Same as <see cref="OpenTellTo"/> but from an already-combined "Name@World" key - used by
-    /// the in-chat "Send Tell" right-click on a message's sender name.</summary>
+    /// both the context menu and the in-chat "Send Tell" right-click on a message's sender name.</summary>
     public void OpenTellToKey(string partnerKey)
     {
         var displayName = partnerKey.Split('@')[0];
