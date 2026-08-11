@@ -23,6 +23,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
+    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -39,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly NativeChatHider nativeChatHider;
     private readonly ContextMenuService contextMenuService;
     private readonly NativeTellWatcher nativeTellWatcher;
+    private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
     private readonly MainWindow mainWindow;
@@ -67,6 +69,8 @@ public sealed class Plugin : IDalamudPlugin
         configWindow = new ConfigWindow(this);
         WindowSystem.AddWindow(mainWindow);
         WindowSystem.AddWindow(configWindow);
+
+        enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -261,6 +265,7 @@ public sealed class Plugin : IDalamudPlugin
         nativeChatHider.Dispose();
         contextMenuService.Dispose();
         nativeTellWatcher.Dispose();
+        enterToChatService.Dispose();
         EmoteService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();

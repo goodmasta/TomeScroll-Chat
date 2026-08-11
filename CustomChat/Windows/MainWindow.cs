@@ -66,6 +66,14 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
     public override void OnClose() => IsOpen = true;
 
+    /// <summary>Brings the window to front and focuses the current tab's input box - the "press Enter
+    /// to open chat" keybind's handler (see <see cref="Services.EnterToChatService"/>).</summary>
+    public void RequestFocusInput()
+    {
+        RequestFocus = true;
+        refocusInput = true;
+    }
+
     public override void Draw()
     {
         using var table = ImRaii.Table("CustomChatLayout", 2, ImGuiTableFlags.Resizable);
