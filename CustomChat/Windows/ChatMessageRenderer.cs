@@ -119,18 +119,21 @@ public static class ChatMessageRenderer
     /// <see cref="ImGui.TextUnformatted"/> call under <see cref="ImGui.PushTextWrapPos"/> - i.e. real
     /// word-wrap, delegated to ImGui's own tested implementation instead of reimplemented by hand.
     /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
-    /// single-token placement, so wrapping the rest of a long message can't be thrown off by that.
+    /// single-token placement.
     /// </summary>
     private static void DrawBody(string body, Configuration config, EmoteService emotes)
     {
-        // A fixed boundary computed once, instead of repeatedly asking ImGui for "available" width -
-        // GetContentRegionAvail() measured right after a wrapped multi-line TextUnformitted call turned
-        // out not to reliably reflect the cursor's true position on that widget's last line, which threw
-        // off the fit-check for whatever token came right after it (typically a link, since a link
-        // always follows a flushed plain-text run in the loop below). Comparing GetCursorPosX() (which
-        // stays accurate) against this fixed right edge sidesteps that entirely.
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
+
+        // Whether the *previous* thing drawn ended on a single line, so ImGui.SameLine() after it can
+        // be trusted. Turns out ImGui.SameLine()'s continuation point after a WRAPPED multi-line
+        // TextUnformitted is based on that block's *widest* line, not its actual last line - so
+        // calling SameLine() right after a paragraph that wrapped can place the next token far closer
+        // to the right edge than it visually looks like it should be, which is what caused both the
+        // "links don't wrap" and the "wall of blank lines" bugs seen earlier. When the previous run
+        // fit on one line this isn't an issue at all, so only multi-line runs need to skip inlining.
+        var canInline = true;
 
         void FlushPlain()
         {
@@ -140,17 +143,22 @@ public static class ChatMessageRenderer
             var text = plain.ToString();
             plain.Clear();
 
-            // Continue on the current line if the run's first word still fits what's left of it;
-            // PushTextWrapPos then lets ImGui wrap everything past that within the run on its own.
-            var firstWordEnd = text.IndexOf(' ');
-            var firstWord = firstWordEnd < 0 ? text : text[..firstWordEnd];
             var spacing = ImGui.GetStyle().ItemSpacing.X;
-            if (ImGui.GetCursorPosX() + spacing + ImGui.CalcTextSize(firstWord).X <= rightEdge)
-                ImGui.SameLine(0, spacing);
+            if (canInline)
+            {
+                var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+                var firstWordEnd = text.IndexOf(' ');
+                var firstWord = firstWordEnd < 0 ? text : text[..firstWordEnd];
+                if (prevRightX + spacing + ImGui.CalcTextSize(firstWord).X <= rightEdge)
+                    ImGui.SameLine(0, spacing);
+            }
 
+            var wrapWidth = rightEdge - ImGui.GetCursorPosX();
             ImGui.PushTextWrapPos(0f);
             ImGui.TextUnformatted(text);
             ImGui.PopTextWrapPos();
+
+            canInline = ImGui.CalcTextSize(text, false, wrapWidth).Y <= ImGui.GetTextLineHeight() * 1.5f;
         }
 
         foreach (var span in LinkDetector.Split(body))
@@ -159,7 +167,7 @@ public static class ChatMessageRenderer
             if (span.IsLink)
             {
                 FlushPlain();
-                DrawLink(text, config, rightEdge);
+                canInline = DrawLink(text, config, rightEdge, canInline);
                 continue;
             }
 
@@ -171,7 +179,8 @@ public static class ChatMessageRenderer
                 if (emotes.IsKnownEmote(word))
                 {
                     FlushPlain();
-                    DrawToken(word, isLink: false, config, emotes, rightEdge);
+                    DrawEmote(word, config, emotes, rightEdge, canInline);
+                    canInline = true; // a single small image/fallback token, never wraps
                 }
                 else
                 {
@@ -185,16 +194,20 @@ public static class ChatMessageRenderer
         FlushPlain();
     }
 
-    /// <summary>Draws one emote token, trying to keep it inline with whatever came right before it.</summary>
-    private static void DrawToken(string token, bool isLink, Configuration config, EmoteService emotes, float rightEdge)
+    /// <summary>Draws one emote token, inlining after the previous item only when that's known-safe.</summary>
+    private static void DrawEmote(string token, Configuration config, EmoteService emotes, float rightEdge, bool canInline)
     {
         var texture = emotes.TryGetTexture(token);
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
         var size = new Vector2(lineHeight, lineHeight);
 
-        var spacing = ImGui.GetStyle().ItemSpacing.X;
-        if (ImGui.GetCursorPosX() + spacing + size.X <= rightEdge)
-            ImGui.SameLine(0, spacing);
+        if (canInline)
+        {
+            var spacing = ImGui.GetStyle().ItemSpacing.X;
+            var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+            if (prevRightX + spacing + size.X <= rightEdge)
+                ImGui.SameLine(0, spacing);
+        }
 
         if (texture != null)
             ImGui.Image(texture.Handle, size);
@@ -203,24 +216,30 @@ public static class ChatMessageRenderer
     }
 
     /// <summary>
-    /// Draws one link. Deliberately never tries to continue the previous line via SameLine (unlike
-    /// plain text and emotes) - a link always immediately follows a flushed, possibly multi-line
-    /// wrapped plain-text run, and querying the cursor position right after one of those turned out
-    /// to be unreliable, which is what caused both the "links don't wrap" and the "wall of blank
-    /// lines" bugs seen earlier. Always starting fresh means the wrap decision below only needs the
-    /// message's fixed right edge and the cursor's current (indent-respecting) X - read *before*
-    /// drawing anything, i.e. the reliable case, not the post-widget read that caused those bugs.
+    /// Draws one link, inlining after the previous item only when <paramref name="canInline"/> says
+    /// that's safe (see <see cref="DrawBody"/>). Returns whether this link itself ended up wrapped to
+    /// multiple lines, so the caller knows whether inlining after *it* is safe in turn.
     /// </summary>
-    private static void DrawLink(string token, Configuration config, float rightEdge)
+    private static bool DrawLink(string token, Configuration config, float rightEdge, bool canInline)
     {
         if (!config.OpenLinksOnClick)
         {
             ImGui.TextUnformatted(token);
-            return;
+            return true;
+        }
+
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var tokenWidth = ImGui.CalcTextSize(token).X;
+        if (canInline)
+        {
+            var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+            if (prevRightX + spacing + tokenWidth <= rightEdge)
+                ImGui.SameLine(0, spacing);
         }
 
         var fullWidth = rightEdge - ImGui.GetCursorPosX();
-        if (ImGui.CalcTextSize(token).X > fullWidth)
+        var needsWrap = tokenWidth > fullWidth;
+        if (needsWrap)
         {
             ImGui.PushTextWrapPos(rightEdge);
             ImGui.TextColored(LinkColor, token);
@@ -235,6 +254,8 @@ public static class ChatMessageRenderer
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
             Util.OpenLink(LinkDetector.NormalizeForBrowser(token));
+
+        return !needsWrap;
     }
 
     private static Vector4 GetColor(ChatTabConfig tab, XivChatType chatType)
