@@ -48,6 +48,7 @@ public sealed class ContextMenuService : IDisposable
         {
             Name = "Whisper (Custom Chat)",
             Priority = -1,
+            UseDefaultPrefix = true,
             OnClicked = _ =>
             {
                 log.Debug("CustomChat: Whisper (Custom Chat) clicked for {Name}@{World}", name, world);
