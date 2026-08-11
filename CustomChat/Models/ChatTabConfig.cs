@@ -47,7 +47,17 @@ public sealed class ChatTabConfig
     /// <summary>Per-channel colour overrides (ABGR uint as ImGui expects). Empty = use global defaults from <see cref="Configuration"/>.</summary>
     public Dictionary<XivChatType, uint> ColorOverrides { get; set; } = new();
 
+    /// <summary>Whether new messages make this tab blink and show a red unread count in the sidebar.
+    /// Whisper tabs always behave this way regardless of this flag (see
+    /// <see cref="ChatTabConfig.ShouldNotify"/>) - this only matters for regular tabs, where it's an
+    /// opt-in setting.</summary>
+    public bool NotifyOnNewMessage { get; set; }
+
     /// <summary>Session-only unread counter, shown in the sidebar - never persisted.</summary>
     [JsonIgnore]
     public int UnreadCount { get; set; }
+
+    /// <summary>Whisper tabs always notify; regular tabs only if the user opted in.</summary>
+    [JsonIgnore]
+    public bool ShouldNotify => IsPmTab || NotifyOnNewMessage;
 }

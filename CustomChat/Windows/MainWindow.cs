@@ -15,6 +15,9 @@ namespace CustomChat.Windows;
 /// tab out, jump to its settings, or (whisper tabs only) close the conversation.</summary>
 public sealed class MainWindow : Window, IDisposable
 {
+    private static readonly Vector4 UnreadRed = new(1f, 0.35f, 0.35f, 1f);
+    private static readonly Vector4 BlinkBase = new(1f, 1f, 1f, 1f);
+
     private readonly Plugin plugin;
     private Guid? selectedTabId;
     private string inputText = string.Empty;
@@ -84,13 +87,7 @@ public sealed class MainWindow : Window, IDisposable
                     if (tab.IsDetached)
                         continue;
 
-                    var label = tab.UnreadCount > 0 ? $"{tab.Name} ({tab.UnreadCount})" : tab.Name;
-                    var selected = tab.Id == selectedTabId;
-                    if (ImGui.Selectable($"{label}##tab_{tab.Id}", selected))
-                    {
-                        selectedTabId = tab.Id;
-                        tab.UnreadCount = 0;
-                    }
+                    DrawTabRow(tab);
 
                     if (ImGui.BeginPopupContextItem($"ctx_{tab.Id}"))
                     {
@@ -113,8 +110,56 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
+    /// <summary>
+    /// One sidebar row: a full-width Selectable for the click/hover area, with the name and unread
+    /// count drawn on top of it separately (rather than as one combined label) so the count can be
+    /// coloured red and the name can pulse - a single Selectable label can't have mixed colours.
+    /// Overlay text is positioned/reset via screen-space item rects rather than relative cursor math,
+    /// so it can't drift the row height of whatever comes after it.
+    /// </summary>
+    private void DrawTabRow(ChatTabConfig tab)
+    {
+        var selected = tab.Id == selectedTabId;
+        if (ImGui.Selectable($"##tab_{tab.Id}", selected))
+        {
+            selectedTabId = tab.Id;
+            tab.UnreadCount = 0;
+        }
+
+        var itemMin = ImGui.GetItemRectMin();
+        var itemMax = ImGui.GetItemRectMax();
+        ImGui.SetCursorScreenPos(itemMin + new Vector2(4, 0));
+
+        var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
+        if (isBlinking)
+        {
+            var pulse = (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f;
+            ImGui.TextColored(Vector4.Lerp(BlinkBase, UnreadRed, pulse), tab.Name);
+        }
+        else
+        {
+            ImGui.TextUnformatted(tab.Name);
+        }
+
+        if (tab.UnreadCount > 0)
+        {
+            ImGui.SameLine(0, 4);
+            ImGui.TextColored(UnreadRed, $"({tab.UnreadCount})");
+        }
+
+        ImGui.SetCursorScreenPos(new Vector2(itemMin.X, itemMax.Y));
+    }
+
     private void DrawTabContextMenu(ChatTabConfig tab)
     {
+        using (ImRaii.Disabled(tab.UnreadCount == 0))
+        {
+            if (ImGui.MenuItem("Mark all as read"))
+                tab.UnreadCount = 0;
+        }
+
+        ImGui.Separator();
+
         if (ImGui.MenuItem("Pop out to floating window"))
             plugin.SetTabDetached(tab, true);
 

@@ -212,6 +212,17 @@ public sealed class ConfigWindow : Window, IDisposable
                 plugin.TabManager.Save();
             }
             ImGui.TextDisabled("e.g. /p, /fc, /s - what messages typed in this tab are sent as. Empty = plain text (uses the game's current default channel).");
+
+            var notify = tab.NotifyOnNewMessage;
+            if (ImGui.Checkbox($"Blink + red unread count on new messages##notify_{tab.Id}", ref notify))
+            {
+                tab.NotifyOnNewMessage = notify;
+                plugin.TabManager.Save();
+            }
+        }
+        else
+        {
+            ImGui.TextDisabled("Whisper tabs always blink and show a red unread count - not optional here.");
         }
 
         if (tab.IsDetached)

@@ -71,9 +71,14 @@ public static class ChatMessageRenderer
 
         // Outgoing tells are authored by the local player but their Sender field carries the *target's*
         // payload (e.g. "To Name"), not the player's own - so TellOutgoing is its own reliable "this is
-        // me" signal; every other channel type just compares the resolved sender key directly.
+        // me" signal. For every other channel, the game apparently doesn't embed a clickable
+        // PlayerPayload for the *local* player's own name the way it does for other players (there's
+        // nothing to click on yourself), so SenderKey often comes back empty for your own messages -
+        // falling back to a plain-name comparison against the raw sender text catches those too.
+        var localPlayerName = localPlayerKey?.Split('@')[0];
         var isOwn = msg.ChatType == XivChatType.TellOutgoing ||
-                    (!string.IsNullOrEmpty(localPlayerKey) && msg.SenderKey == localPlayerKey);
+                    (!string.IsNullOrEmpty(localPlayerKey) && msg.SenderKey == localPlayerKey) ||
+                    (!string.IsNullOrEmpty(localPlayerName) && msg.SenderName == localPlayerName);
 
         var sender = isOwn
             ? "You"
