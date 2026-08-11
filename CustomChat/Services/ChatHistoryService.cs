@@ -50,6 +50,23 @@ public sealed class ChatHistoryService : IDisposable
 
     public void SetMaxBytes(long bytes) => maxBytes = bytes;
 
+    /// <summary>Wipes every stored message and reclaims the disk space - the plugin settings' "Clear
+    /// history" button. Irreversible; callers are expected to confirm with the user first.</summary>
+    public void ClearAll()
+    {
+        try
+        {
+            using var cmd = writerConnection.CreateCommand();
+            cmd.CommandText = "DELETE FROM messages; PRAGMA wal_checkpoint(TRUNCATE); PRAGMA incremental_vacuum;";
+            cmd.ExecuteNonQuery();
+            log.Information("CustomChat: cleared all chat history");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "CustomChat: failed to clear chat history");
+        }
+    }
+
     private SqliteConnection OpenConnection()
     {
         var connection = new SqliteConnection($"Data Source={dbPath}");

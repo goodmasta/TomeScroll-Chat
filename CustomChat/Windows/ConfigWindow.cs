@@ -109,6 +109,36 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.ChatHistoryService.SetMaxBytes(configuration.MaxHistoryBytes);
         }
         ImGui.TextDisabled("Oldest messages are deleted first once this limit is exceeded (emote image cache is separate and not counted here).");
+
+        ImGui.Spacing();
+        if (ImGui.Button("Clear history..."))
+            ImGui.OpenPopup("CustomChatClearHistoryConfirm");
+        ImGui.TextDisabled("Permanently deletes all stored chat history for every tab and whisper. Cannot be undone.");
+
+        DrawClearHistoryConfirmPopup();
+    }
+
+    private void DrawClearHistoryConfirmPopup()
+    {
+        var open = true;
+        if (!ImGui.BeginPopupModal("CustomChatClearHistoryConfirm", ref open, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+
+        ImGui.TextUnformatted("Delete all stored chat history?");
+        ImGui.TextDisabled("This removes every saved message for every tab and whisper conversation.\nThis cannot be undone.");
+        ImGui.Spacing();
+
+        if (ImGui.Button("Yes, delete everything"))
+        {
+            plugin.ClearAllHistory();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
     }
 
     private void DrawTabsEditor()

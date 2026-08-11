@@ -42,4 +42,12 @@ public sealed class TabMessageBuffer
     }
 
     public static string RoutingKey(ChatTabConfig tab) => tab.IsPmTab ? tab.PmPartnerKey ?? tab.Id.ToString() : tab.Id.ToString();
+
+    /// <summary>Drops every in-memory scrollback so cleared/purged disk history isn't still shown
+    /// from cache until the next reload.</summary>
+    public void ClearAll()
+    {
+        lock (gate)
+            buffers.Clear();
+    }
 }

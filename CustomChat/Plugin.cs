@@ -206,6 +206,14 @@ public sealed class Plugin : IDalamudPlugin
 
     public void ApplyNativeChatHidden() => nativeChatHider.Active = Configuration.HideNativeChat;
 
+    /// <summary>Wipes all stored chat history from disk and clears the in-memory scrollback that
+    /// every open tab/window is currently showing, so the UI reflects it immediately.</summary>
+    public void ClearAllHistory()
+    {
+        ChatHistoryService.ClearAll();
+        TabMessageBuffer.ClearAll();
+    }
+
     public void RefreshEmotes()
     {
         _ = RefreshEmotesAsync();
