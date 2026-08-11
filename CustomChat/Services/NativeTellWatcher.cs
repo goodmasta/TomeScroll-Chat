@@ -16,13 +16,16 @@ namespace CustomChat.Services;
 public sealed unsafe class NativeTellWatcher : IDisposable
 {
     private readonly IFramework framework;
+    private readonly IPluginLog log;
+    private readonly Func<string?> getLocalHomeWorld;
     private readonly Action<string, string> onTellTargetChanged;
-    private string lastName = string.Empty;
-    private string lastWorld = string.Empty;
+    private ulong lastContentId;
 
-    public NativeTellWatcher(IFramework framework, Action<string, string> onTellTargetChanged)
+    public NativeTellWatcher(IFramework framework, IPluginLog log, Func<string?> getLocalHomeWorld, Action<string, string> onTellTargetChanged)
     {
         this.framework = framework;
+        this.log = log;
+        this.getLocalHomeWorld = getLocalHomeWorld;
         this.onTellTargetChanged = onTellTargetChanged;
         framework.Update += OnFrameworkUpdate;
     }
@@ -33,23 +36,34 @@ public sealed unsafe class NativeTellWatcher : IDisposable
         if (shell == null)
             return;
 
-        var name = shell->TellName.ToString();
-        var world = shell->TellWorld.ToString();
-
-        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
+        // ContentId is a reliable non-string signal (0 = no pending tell target); TellWorld can be
+        // genuinely empty for a same-world target (no "@World" needed for those), so it can't be
+        // used to gate detection the way an earlier version of this did.
+        var contentId = shell->ContentId;
+        if (contentId == 0)
         {
-            // Cleared (e.g. tell sent, or the player cancelled) - the next non-empty value is a
-            // fresh target even if it happens to match what we saw before this reset.
-            lastName = string.Empty;
-            lastWorld = string.Empty;
+            lastContentId = 0;
             return;
         }
 
-        if (name == lastName && world == lastWorld)
+        if (contentId == lastContentId)
             return;
 
-        lastName = name;
-        lastWorld = world;
+        lastContentId = contentId;
+
+        var name = shell->TellName.ToString();
+        var world = shell->TellWorld.ToString();
+        if (string.IsNullOrEmpty(world))
+            world = getLocalHomeWorld() ?? string.Empty;
+
+        log.Info("CustomChat: native tell target detected - name='{Name}' world='{World}' contentId={ContentId}", name, world, contentId);
+
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
+        {
+            log.Warning("CustomChat: native tell target had no usable name/world (name='{Name}' world='{World}'), ignoring", name, world);
+            return;
+        }
+
         onTellTargetChanged(name, world);
     }
 

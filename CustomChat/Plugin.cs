@@ -20,6 +20,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -54,7 +55,7 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
         contextMenuService = new ContextMenuService(this, ContextMenu, Log);
-        nativeTellWatcher = new NativeTellWatcher(Framework, OpenTellTo);
+        nativeTellWatcher = new NativeTellWatcher(Framework, Log, GetLocalHomeWorldName, OpenTellTo);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 
@@ -105,6 +106,11 @@ public sealed class Plugin : IDalamudPlugin
 
         ChatSendService.Send(tab.OutgoingChannelCommand, text);
     }
+
+    /// <summary>The local character's own home world name, used as a fallback when the game's native
+    /// tell-target state leaves the world blank (it does that for same-world targets, since "/tell"
+    /// doesn't need an "@World" suffix for those).</summary>
+    private static string? GetLocalHomeWorldName() => PlayerState.IsLoaded ? PlayerState.HomeWorld.ValueNullable?.Name.ToString() : null;
 
     /// <summary>Opens (creating if necessary) the whisper tab for this player and brings it to front -
     /// the right-click menu's "Whisper (Custom Chat)" handler.</summary>
