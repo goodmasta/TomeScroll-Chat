@@ -221,7 +221,11 @@ public sealed class MainWindow : Window, IDisposable
             pendingScrollToDivider = dividerIndex >= 0;
         }
 
-        using (var child = ImRaii.Child("Messages", new Vector2(0, -28), false))
+        // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box) -
+        // this used to be a flat -28 for just the input row, and grew the window's own scroll region
+        // when the buttons row was added without updating it.
+        var bottomReserve = ImGui.GetFrameHeightWithSpacing() * 2f;
+        using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), false))
         {
             if (child.Success)
             {
