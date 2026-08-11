@@ -53,6 +53,16 @@ public static class ChatMessageRenderer
     private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell)
     {
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
+
+        // Right-click the timestamp to copy the whole message ("[HH:mm] Sender: body") - always
+        // available, even for system/echo lines that have no sender to right-click.
+        if (ImGui.BeginPopupContextItem($"msgctx_{index}"))
+        {
+            if (ImGui.MenuItem("Copy message"))
+                ImGui.SetClipboardText(BuildCopyText(msg));
+            ImGui.EndPopup();
+        }
+
         ImGui.SameLine(0, 4);
 
         var channelColor = GetColor(tab, msg.ChatType);
@@ -74,6 +84,9 @@ public static class ChatMessageRenderer
             {
                 if (ImGui.MenuItem("Send Tell"))
                     onSendTell(msg.SenderKey);
+                ImGui.Separator();
+                if (ImGui.MenuItem("Copy message"))
+                    ImGui.SetClipboardText(BuildCopyText(msg));
                 ImGui.EndPopup();
             }
 
@@ -83,6 +96,14 @@ public static class ChatMessageRenderer
         ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
         DrawBody(msg.Body, config, emotes);
         ImGui.PopStyleColor();
+    }
+
+    private static string BuildCopyText(ChatMessageRecord msg)
+    {
+        var time = msg.TimestampUtc.ToLocalTime().ToString("HH:mm");
+        return string.IsNullOrEmpty(msg.SenderName)
+            ? $"[{time}] {msg.Body}"
+            : $"[{time}] {msg.SenderName}: {msg.Body}";
     }
 
     /// <summary>
