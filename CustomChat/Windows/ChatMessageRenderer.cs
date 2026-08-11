@@ -170,7 +170,12 @@ public static class ChatMessageRenderer
         }
         else if (isLink && config.OpenLinksOnClick)
         {
+            // A long URL is a single unbroken token with no internal spaces to wrap at, so unlike the
+            // plain-text runs it can still be wider than the whole window on its own line; wrap it
+            // too (ImGui falls back to a mid-word break when a "word" can't fit a full line by itself).
+            ImGui.PushTextWrapPos(0f);
             ImGui.TextColored(LinkColor, token);
+            ImGui.PopTextWrapPos();
             if (ImGui.IsItemHovered())
                 ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
@@ -178,7 +183,9 @@ public static class ChatMessageRenderer
         }
         else
         {
+            ImGui.PushTextWrapPos(0f);
             ImGui.TextUnformatted(token);
+            ImGui.PopTextWrapPos();
         }
     }
 

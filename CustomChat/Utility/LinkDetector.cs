@@ -8,11 +8,18 @@ public readonly record struct TextSpan(int Start, int Length, bool IsLink)
     public string Slice(string text) => text.Substring(Start, Length);
 }
 
-/// <summary>Finds http(s)/www URLs in chat text so they can be rendered as separate clickable ImGui elements.</summary>
+/// <summary>Finds URLs in chat text so they can be rendered as separate clickable ImGui elements.</summary>
 public static class LinkDetector
 {
+    // Common TLDs seen in chat (invite links like "discord.gg/xxxx" have no "http://"/"www." prefix
+    // at all, so they need their own alternative rather than relying on a scheme/www prefix).
+    private const string BareDomainTlds =
+        "gg|com|net|org|io|co|me|tv|app|dev|xyz|info|link|shop|store|online|site|club|live|chat|" +
+        "ru|su|us|uk|de|fr|jp|edu|gov|ly|to|gl|pro|biz|cc|wtf|fun|city";
+
     private static readonly Regex UrlRegex = new(
-        @"(?<url>(https?://|www\.)[^\s<>""']+[^\s<>""'.,;:!?)\]])",
+        $@"(?<url>(?:https?://|www\.)[^\s<>""']+[^\s<>""'.,;:!?)\]]|" +
+        $@"\b[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{{0,61}}[a-z0-9])?)*\.(?:{BareDomainTlds})\b(?:/[^\s<>""']*[^\s<>""'.,;:!?)\]])?)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     /// <summary>Splits <paramref name="text"/> into alternating plain-text and link spans, in order.</summary>
