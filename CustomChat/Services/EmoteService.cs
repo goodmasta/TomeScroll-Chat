@@ -71,6 +71,10 @@ public sealed class EmoteService : IDisposable
     {
         var definitions = new List<EmoteDefinition>();
 
+        // Always included, first - a static list with no manifest fetch of its own (only the images
+        // are downloaded on demand, same as every other emote).
+        definitions.AddRange(BuildStandardEmojiList());
+
         if (bttvEnabled)
         {
             try
@@ -128,6 +132,17 @@ public sealed class EmoteService : IDisposable
             .ToList();
     }
 
+    private static List<EmoteDefinition> BuildStandardEmojiList() =>
+        StandardEmojiCatalog.Entries
+            .Select(e => new EmoteDefinition
+            {
+                Code = e.Code,
+                Id = e.Codepoint,
+                ImageUrl = $"https://cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/72x72/{e.Codepoint}.png",
+                Provider = EmoteProvider.Standard,
+            })
+            .ToList();
+
     private async Task<List<EmoteDefinition>> FetchSevenTvGlobalAsync()
     {
         var json = await http.GetStringAsync(SevenTvGlobalUrl, cts.Token).ConfigureAwait(false);
@@ -178,9 +193,13 @@ public sealed class EmoteService : IDisposable
 
     public bool IsKnownEmote(string code) => byCode.ContainsKey(code);
 
-    /// <summary>Every currently-loaded emote, for the settings window's "loaded emotes" list.</summary>
+    /// <summary>Every currently-loaded emote, standard/Windows-style emoji first, then alphabetical
+    /// within each provider - used by both the settings "loaded emotes" list and the emote pickers.</summary>
     public IReadOnlyList<EmoteDefinition> GetLoadedEmotes() =>
-        byCode.Values.OrderBy(e => e.Code, StringComparer.OrdinalIgnoreCase).ToList();
+        byCode.Values
+            .OrderBy(e => e.Provider == EmoteProvider.Standard ? 0 : 1)
+            .ThenBy(e => e.Code, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
     private async Task LoadTextureAsync(EmoteDefinition def)
     {
