@@ -58,8 +58,10 @@ public class Configuration : IPluginConfiguration
     public bool FriendMarkerEnabled { get; set; } = true;
 
     /// <summary>Prefix shown before the name of any sender who is on the local player's friends list -
-    /// picked from a fixed list in Settings (see <see cref="Windows.ConfigWindow"/>), not freely typed.</summary>
-    public string FriendMarkerEmoji { get; set; } = "⭐";
+    /// picked from a fixed list in Settings (see <see cref="Windows.ConfigWindow"/>), not freely typed.
+    /// Plain dingbat-style symbols rather than colour emoji - Dalamud's UI font doesn't have glyphs
+    /// for most Unicode pictographs (confirmed: they rendered as a fallback "=" glyph in testing).</summary>
+    public string FriendMarkerEmoji { get; set; } = "★";
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

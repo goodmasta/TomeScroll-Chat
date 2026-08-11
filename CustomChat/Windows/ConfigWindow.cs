@@ -11,12 +11,12 @@ namespace CustomChat.Windows;
 
 public sealed class ConfigWindow : Window, IDisposable
 {
-    // A picker menu, not free text input - some are plain symbols rather than full-colour emoji since
-    // Dalamud's UI font may not have glyphs for every pictograph; the picker itself doubles as a
-    // preview, so a glyph that renders as a blank box is obvious immediately and another can be picked.
+    // A picker menu, not free text input. Deliberately plain dingbat-style symbols rather than
+    // colour emoji: confirmed by testing that Dalamud's UI font doesn't have glyphs for pictographs
+    // like ⭐/❤️/👑 (they rendered as a fallback "=" glyph), while these basic symbols do render.
     private static readonly string[] FriendMarkerOptions =
     {
-        "⭐", "🌟", "✨", "❤️", "👑", "🔥", "✅", "★", "✦", "♦", "✓", "➤",
+        "★", "☆", "♦", "♥", "♣", "♠", "✓", "✗", "➤", "●", "▲", "✦",
     };
 
     private readonly Plugin plugin;
