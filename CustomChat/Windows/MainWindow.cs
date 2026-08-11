@@ -73,7 +73,7 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawSidebar()
     {
-        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -4), true))
+        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -28), true))
         {
             if (child.Success)
             {
@@ -98,6 +98,17 @@ public sealed class MainWindow : Window, IDisposable
                         ImGui.EndPopup();
                     }
                 }
+            }
+        }
+
+        var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
+        using (ImRaii.Disabled(!hasPmTabs))
+        {
+            if (ImGui.Button("Close All PM", new Vector2(-1, 0)))
+            {
+                plugin.CloseAllWhisperTabs();
+                if (selectedTabId != null && !plugin.TabManager.Tabs.Any(t => t.Id == selectedTabId))
+                    selectedTabId = null;
             }
         }
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
@@ -149,6 +150,23 @@ public sealed class Plugin : IDalamudPlugin
         {
             WindowSystem.RemoveWindow(window);
             window.Dispose();
+        }
+    }
+
+    /// <summary>Closes every whisper tab/window at once (attached and popped-out alike). Like closing
+    /// one individually, this never deletes message history - only the tabs, which reopen with their
+    /// full history the next time a message (or a detected native "Send Tell") needs them.</summary>
+    public void CloseAllWhisperTabs()
+    {
+        foreach (var tab in TabManager.Tabs.Where(t => t.IsPmTab).ToList())
+        {
+            if (tab.IsDetached && detachedWindows.Remove(tab.Id, out var window))
+            {
+                WindowSystem.RemoveWindow(window);
+                window.Dispose();
+            }
+
+            TabManager.RemoveTab(tab);
         }
     }
 
