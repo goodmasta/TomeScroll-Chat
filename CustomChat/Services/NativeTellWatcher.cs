@@ -56,6 +56,16 @@ public sealed unsafe class NativeTellWatcher : IDisposable
         if (!match.Success)
             return;
 
+        // Wipe the native box (and cancel the native tell composition) the instant any "/tell " shows
+        // up in it - unconditionally, every single frame it happens, regardless of whether the target
+        // below ends up being suppressed. Previously this only ran outside the cooldown window, so
+        // leftover text just sat there until the cooldown expired and then re-triggered a reopen with
+        // that same stale text - clearing it every time removes that stale-text source entirely.
+        addon->TextInput->SetText(string.Empty);
+        var agent = AgentChatLog.Instance();
+        if (agent != null)
+            agent->HideLogWindow();
+
         var name = match.Groups["name"].Value.Trim();
         var world = match.Groups["world"].Success ? match.Groups["world"].Value : (getLocalHomeWorld() ?? string.Empty);
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
@@ -72,14 +82,6 @@ public sealed unsafe class NativeTellWatcher : IDisposable
         lastHandledKey = key;
         suppressSameKeyUntil = DateTime.UtcNow + SameTargetCooldown;
         log.Info("CustomChat: native tell input detected - '{Raw}' -> {Key}", raw, key);
-
-        addon->TextInput->SetText(string.Empty);
-
-        // Actually close the native tell composition (not just clear the visible text) so the game
-        // stops treating a tell as still being written and re-filling the box on its own.
-        var agent = AgentChatLog.Instance();
-        if (agent != null)
-            agent->HideLogWindow();
 
         onTellTargetChanged(name, world);
     }
