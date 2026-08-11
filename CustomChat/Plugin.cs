@@ -77,6 +77,12 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
 
+        // Dalamud's own "Toggle UI" hotkey (Ctrl+Shift+U by default) hides every plugin window at
+        // once, which would otherwise still be able to hide the chat window despite everything
+        // MainWindow itself does to stay open - this is the one place that has to be disabled at
+        // the UiBuilder level rather than per-window.
+        PluginInterface.UiBuilder.DisableUserUiHide = true;
+
         RefreshEmotes();
     }
 
