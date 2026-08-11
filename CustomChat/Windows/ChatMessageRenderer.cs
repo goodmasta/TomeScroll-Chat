@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Text;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Text;
 using Dalamud.Utility;
@@ -84,25 +85,71 @@ public static class ChatMessageRenderer
         ImGui.PopStyleColor();
     }
 
+    /// <summary>
+    /// Plain runs of text (no link, no known emote code) are batched and drawn with a single
+    /// <see cref="ImGui.TextUnformatted"/> call under <see cref="ImGui.PushTextWrapPos"/> - i.e. real
+    /// word-wrap, delegated to ImGui's own tested implementation instead of reimplemented by hand.
+    /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
+    /// single-token placement, so wrapping the rest of a long message can't be thrown off by that.
+    /// </summary>
     private static void DrawBody(string body, Configuration config, EmoteService emotes)
     {
+        var plain = new StringBuilder();
+
+        void FlushPlain()
+        {
+            if (plain.Length == 0)
+                return;
+
+            var text = plain.ToString();
+            plain.Clear();
+
+            // Continue on the current line if the run's first word still fits what's left of it;
+            // PushTextWrapPos then lets ImGui wrap everything past that within the run on its own.
+            var firstWordEnd = text.IndexOf(' ');
+            var firstWord = firstWordEnd < 0 ? text : text[..firstWordEnd];
+            var spacing = ImGui.GetStyle().ItemSpacing.X;
+            if (ImGui.CalcTextSize(firstWord).X + spacing <= ImGui.GetContentRegionAvail().X)
+                ImGui.SameLine(0, spacing);
+
+            ImGui.PushTextWrapPos(0f);
+            ImGui.TextUnformatted(text);
+            ImGui.PopTextWrapPos();
+        }
+
         foreach (var span in LinkDetector.Split(body))
         {
             var text = span.Slice(body);
             if (span.IsLink)
             {
+                FlushPlain();
                 DrawToken(text, isLink: true, config, emotes);
                 continue;
             }
 
             foreach (var word in text.Split(' '))
             {
-                if (word.Length > 0)
+                if (word.Length == 0)
+                    continue;
+
+                if (emotes.IsKnownEmote(word))
+                {
+                    FlushPlain();
                     DrawToken(word, isLink: false, config, emotes);
+                }
+                else
+                {
+                    if (plain.Length > 0)
+                        plain.Append(' ');
+                    plain.Append(word);
+                }
             }
         }
+
+        FlushPlain();
     }
 
+    /// <summary>Draws one link or emote token - the only cases still placed manually via SameLine.</summary>
     private static void DrawToken(string token, bool isLink, Configuration config, EmoteService emotes)
     {
         var isEmote = !isLink && emotes.IsKnownEmote(token);
@@ -110,10 +157,6 @@ public static class ChatMessageRenderer
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
         var size = isEmote ? new Vector2(lineHeight, lineHeight) : ImGui.CalcTextSize(token);
 
-        // Continue the current line if this token (plus the gap SameLine() itself inserts) still
-        // fits in what's left of the chat window's width; otherwise let it fall to a new line
-        // naturally (ImGui starts a fresh line for any widget that doesn't follow a SameLine() call).
-        // This is re-evaluated every frame, so resizing the window re-wraps immediately.
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         if (size.X + spacing <= ImGui.GetContentRegionAvail().X)
             ImGui.SameLine(0, spacing);
