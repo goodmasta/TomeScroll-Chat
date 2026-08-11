@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
@@ -15,6 +16,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
     public ChatTabConfig Tab { get; }
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
+    private bool refocusInput;
 
     // Same Discord-style "last read position" tracking as MainWindow - see its DrawContent for the
     // reasoning. This window only ever shows one fixed tab, so it's frozen once at construction
@@ -88,8 +90,25 @@ public sealed class DetachedTabWindow : Window, IDisposable
         if (ImGui.Button("Jump to bottom"))
             pendingScrollToBottom = true;
 
-        ImGui.SameLine();
-        if (ImGui.Button("Emotes"))
+        var iconSize = ImGui.GetFrameHeight();
+        ImGui.SetNextItemWidth(-(iconSize + ImGui.GetStyle().ItemSpacing.X));
+
+        // Re-focus has to happen right before InputText (offset 0 = "the very next widget") rather
+        // than after, since after now runs through the icon button/popup - an unpredictable number of
+        // widgets depending on whether the emote popup happens to be open that frame.
+        if (refocusInput)
+        {
+            ImGui.SetKeyboardFocusHere();
+            refocusInput = false;
+        }
+
+        var send = ImGui.InputText($"##input_{Tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine(0, 0);
+        bool emoteClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (emoteClicked)
         {
             emoteSearch = string.Empty;
             ImGui.OpenPopup($"EmotePicker_{Tab.Id}");
@@ -100,13 +119,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
             inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
         });
 
-        ImGui.SetNextItemWidth(-1);
-        var send = ImGui.InputText($"##input_{Tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
         if (send && !string.IsNullOrWhiteSpace(inputText))
         {
             plugin.SendFromTab(Tab, inputText);
             inputText = string.Empty;
-            ImGui.SetKeyboardFocusHere(-1);
+            refocusInput = true;
         }
     }
 

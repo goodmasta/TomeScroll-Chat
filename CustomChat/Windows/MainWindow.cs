@@ -21,6 +21,7 @@ public sealed class MainWindow : Window, IDisposable
     private Guid? selectedTabId;
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
+    private bool refocusInput;
 
     // Discord-style "last read position": which tab the content area is currently showing, a frozen
     // divider index into that tab's message list (set once when switching in, not updated as the
@@ -256,25 +257,49 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.Button("Jump to bottom"))
             pendingScrollToBottom = true;
 
-        ImGui.SameLine();
-        if (ImGui.Button("Emotes"))
+        DrawInputRow(tab);
+    }
+
+    /// <summary>The message input box with a Telegram/Discord-style emote-picker smiley button
+    /// attached flush to its right edge (zero spacing between them, same height) instead of a
+    /// separate button on its own row.</summary>
+    private void DrawInputRow(ChatTabConfig tab)
+    {
+        var iconSize = ImGui.GetFrameHeight();
+        ImGui.SetNextItemWidth(-(iconSize + ImGui.GetStyle().ItemSpacing.X));
+
+        // Re-focusing after a send has to happen right before InputText is submitted (offset 0 = "the
+        // very next widget") - doing it *after*, like before the icon button was added here, would now
+        // count back through the button/popup instead of the input box, which is an unpredictable
+        // number of widgets depending on whether the emote popup happens to be open that frame.
+        if (refocusInput)
         {
-            emoteSearch = string.Empty;
-            ImGui.OpenPopup("EmotePicker_Main");
+            ImGui.SetKeyboardFocusHere();
+            refocusInput = false;
         }
 
-        EmotePicker.Draw("EmotePicker_Main", plugin.EmoteService, ref emoteSearch, code =>
+        var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine(0, 0);
+        bool emoteClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{tab.Id}", new Vector2(iconSize, iconSize));
+        if (emoteClicked)
+        {
+            emoteSearch = string.Empty;
+            ImGui.OpenPopup($"EmotePicker_{tab.Id}");
+        }
+
+        EmotePicker.Draw($"EmotePicker_{tab.Id}", plugin.EmoteService, ref emoteSearch, code =>
         {
             inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
         });
 
-        ImGui.SetNextItemWidth(-1);
-        var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
         if (send && !string.IsNullOrWhiteSpace(inputText))
         {
             plugin.SendFromTab(tab, inputText);
             inputText = string.Empty;
-            ImGui.SetKeyboardFocusHere(-1);
+            refocusInput = true;
         }
     }
 

@@ -72,14 +72,23 @@ public static class ChatMessageRenderer
         return lastVisible;
     }
 
+    private const string DividerLabel = "New messages";
+
     private static void DrawDivider()
     {
         ImGui.Spacing();
+        ImGui.Separator();
+
+        var textWidth = ImGui.CalcTextSize(DividerLabel).X;
+        var avail = ImGui.GetContentRegionAvail().X;
+        if (avail > textWidth)
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - textWidth) / 2f);
+
         ImGui.PushStyleColor(ImGuiCol.Text, DividerColor);
-        ImGui.Separator();
-        ImGui.TextUnformatted("New messages");
-        ImGui.Separator();
+        ImGui.TextUnformatted(DividerLabel);
         ImGui.PopStyleColor();
+
+        ImGui.Separator();
         ImGui.Spacing();
     }
 
