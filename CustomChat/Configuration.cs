@@ -57,11 +57,14 @@ public class Configuration : IPluginConfiguration
     /// <summary>Whether friends get the emoji marker prefix in chat at all.</summary>
     public bool FriendMarkerEnabled { get; set; } = true;
 
-    /// <summary>Prefix shown before the name of any sender who is on the local player's friends list -
-    /// picked from a fixed list in Settings (see <see cref="Windows.ConfigWindow"/>), not freely typed.
-    /// Plain dingbat-style symbols rather than colour emoji - Dalamud's UI font doesn't have glyphs
-    /// for most Unicode pictographs (confirmed: they rendered as a fallback "=" glyph in testing).</summary>
-    public string FriendMarkerEmoji { get; set; } = "★";
+    /// <summary>A loaded BTTV/7TV emote *code* (not a literal character) drawn as an actual image
+    /// before the name of any sender who's on the friends list - picked from the same emote picker
+    /// used for the chat input (see <see cref="Windows.ConfigWindow"/>). Rendered as a real image via
+    /// <see cref="Services.EmoteService"/> rather than a Unicode glyph: Dalamud's UI font doesn't have
+    /// glyphs for most emoji pictographs (confirmed - they rendered as a fallback "=" glyph in
+    /// testing), and even a font that did wouldn't render multi-colour emoji correctly since ImGui's
+    /// text rendering is single-colour per glyph. Empty = no emote picked yet / marker not shown.</summary>
+    public string FriendMarkerEmoji { get; set; } = string.Empty;
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

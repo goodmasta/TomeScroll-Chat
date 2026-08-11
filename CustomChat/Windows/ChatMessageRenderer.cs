@@ -128,10 +128,20 @@ public static class ChatMessageRenderer
 
         if (!string.IsNullOrEmpty(sender))
         {
-            var marker = !isOwn && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
-                         !string.IsNullOrEmpty(msg.SenderKey) && isFriend(msg.SenderKey)
-                ? config.FriendMarkerEmoji + " "
-                : string.Empty;
+            var showMarker = !isOwn && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
+                              !string.IsNullOrEmpty(msg.SenderKey) && isFriend(msg.SenderKey);
+            if (showMarker)
+            {
+                // A real emote image, not a Unicode glyph - see Configuration.FriendMarkerEmoji for why.
+                var markerSize = ImGui.GetTextLineHeight();
+                var markerTexture = emotes.TryGetTexture(config.FriendMarkerEmoji);
+                if (markerTexture != null)
+                    ImGui.Image(markerTexture.Handle, new Vector2(markerSize, markerSize));
+                else
+                    ImGui.Dummy(new Vector2(markerSize, markerSize)); // still loading - keep the slot reserved rather than jitter
+
+                ImGui.SameLine(0, 3);
+            }
 
             // Only the nickname gets the per-player colour - the message body below still uses the
             // normal per-channel colour, same as before. Own messages use the local player's own key so
@@ -139,7 +149,7 @@ public static class ChatMessageRenderer
             var colorKey = isOwn ? localPlayerKey : msg.SenderKey;
             var senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
             ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
-            ImGui.TextUnformatted($"{marker}{sender}:");
+            ImGui.TextUnformatted($"{sender}:");
             ImGui.PopStyleColor();
 
             // Right-click a sender name to whisper them - the game's own "Send Tell" menu item only

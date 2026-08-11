@@ -11,18 +11,11 @@ namespace CustomChat.Windows;
 
 public sealed class ConfigWindow : Window, IDisposable
 {
-    // A picker menu, not free text input. Deliberately plain dingbat-style symbols rather than
-    // colour emoji: confirmed by testing that Dalamud's UI font doesn't have glyphs for pictographs
-    // like ⭐/❤️/👑 (they rendered as a fallback "=" glyph), while these basic symbols do render.
-    private static readonly string[] FriendMarkerOptions =
-    {
-        "★", "☆", "♦", "♥", "♣", "♠", "✓", "✗", "➤", "●", "▲", "✦",
-    };
-
     private readonly Plugin plugin;
     private readonly Configuration configuration;
     private Guid? focusedTabId;
     private string newTabName = string.Empty;
+    private string friendMarkerSearch = string.Empty;
 
     public ConfigWindow(Plugin plugin)
         : base("Custom Chat Settings###CustomChatConfigWindow")
@@ -125,7 +118,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.Separator();
 
         var friendMarkerEnabled = configuration.FriendMarkerEnabled;
-        if (ImGui.Checkbox("Highlight friends with an emoji marker", ref friendMarkerEnabled))
+        if (ImGui.Checkbox("Highlight friends with an emote marker", ref friendMarkerEnabled))
         {
             configuration.FriendMarkerEnabled = friendMarkerEnabled;
             configuration.Save();
@@ -133,26 +126,32 @@ public sealed class ConfigWindow : Window, IDisposable
 
         using (ImRaii.Disabled(!configuration.FriendMarkerEnabled))
         {
-            if (ImGui.Button($"Marker: {configuration.FriendMarkerEmoji}##friendMarkerPicker"))
-                ImGui.OpenPopup("FriendMarkerPicker");
-        }
-
-        if (ImGui.BeginPopup("FriendMarkerPicker"))
-        {
-            foreach (var option in FriendMarkerOptions)
+            var markerTexture = string.IsNullOrEmpty(configuration.FriendMarkerEmoji)
+                ? null
+                : plugin.EmoteService.TryGetTexture(configuration.FriendMarkerEmoji);
+            if (markerTexture != null)
             {
-                if (ImGui.Selectable($"{option}##friendMarkerOpt_{option}"))
-                {
-                    configuration.FriendMarkerEmoji = option;
-                    configuration.Save();
-                    ImGui.CloseCurrentPopup();
-                }
+                ImGui.Image(markerTexture.Handle, new Vector2(20, 20));
+                ImGui.SameLine();
             }
 
-            ImGui.EndPopup();
+            var label = string.IsNullOrEmpty(configuration.FriendMarkerEmoji)
+                ? "Choose marker emote..."
+                : $"Marker: {configuration.FriendMarkerEmoji}";
+            if (ImGui.Button($"{label}##friendMarkerPicker"))
+            {
+                friendMarkerSearch = string.Empty;
+                ImGui.OpenPopup("FriendMarkerPicker");
+            }
         }
 
-        ImGui.TextDisabled("Shown before the name of any sender who's on your friends list.");
+        EmotePicker.Draw("FriendMarkerPicker", plugin.EmoteService, ref friendMarkerSearch, code =>
+        {
+            configuration.FriendMarkerEmoji = code;
+            configuration.Save();
+        });
+
+        ImGui.TextDisabled("A real emote image (not a text symbol) shown before the name of any sender who's on your friends list.");
 
         ImGui.Separator();
 
