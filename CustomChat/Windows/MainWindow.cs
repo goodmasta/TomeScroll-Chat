@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
@@ -8,13 +9,14 @@ using CustomChat.Models;
 namespace CustomChat.Windows;
 
 /// <summary>The main chat window: a sidebar of every non-detached tab plus the selected tab's
-/// messages and input box. Detached tabs render in their own <see cref="DetachedTabWindow"/> instead.</summary>
+/// messages and input box. Detached tabs render in their own <see cref="DetachedTabWindow"/> instead.
+/// Tabs are created/deleted from <see cref="ConfigWindow"/>, not here - this window only lets you pop a
+/// tab out, jump to its settings, or (whisper tabs only) close the conversation.</summary>
 public sealed class MainWindow : Window, IDisposable
 {
     private readonly Plugin plugin;
     private Guid? selectedTabId;
     private string inputText = string.Empty;
-    private string newTabName = string.Empty;
 
     public MainWindow(Plugin plugin)
         : base("Custom Chat###CustomChatMainWindow")
@@ -60,11 +62,13 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawSidebar()
     {
-        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -28), true))
+        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -4), true))
         {
             if (child.Success)
             {
-                foreach (var tab in plugin.TabManager.Tabs)
+                // Snapshot the list: closing a whisper tab from the context menu below mutates
+                // TabManager.Tabs mid-draw, which would otherwise throw iterating the live list.
+                foreach (var tab in plugin.TabManager.Tabs.ToList())
                 {
                     if (tab.IsDetached)
                         continue;
@@ -85,15 +89,6 @@ public sealed class MainWindow : Window, IDisposable
                 }
             }
         }
-
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextWithHint("##newTab", "New tab...", ref newTabName, 64);
-        if (ImGui.IsItemDeactivatedAfterEdit() && !string.IsNullOrWhiteSpace(newTabName))
-        {
-            var tab = plugin.TabManager.CreateTab(newTabName.Trim());
-            selectedTabId = tab.Id;
-            newTabName = string.Empty;
-        }
     }
 
     private void DrawTabContextMenu(ChatTabConfig tab)
@@ -101,15 +96,23 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.MenuItem("Pop out to floating window"))
             plugin.SetTabDetached(tab, true);
 
-        if (ImGui.MenuItem("Edit channels/filter..."))
-            plugin.OpenTabEditor(tab.Id);
-
-        ImGui.Separator();
-        if (ImGui.MenuItem("Delete tab"))
+        if (tab.IsPmTab)
         {
-            plugin.TabManager.RemoveTab(tab);
-            if (selectedTabId == tab.Id)
-                selectedTabId = null;
+            // Whisper history is keyed by conversation partner, not by this tab's id, so closing it
+            // here never deletes any messages - it just hides the tab until the next message (or the
+            // native/in-chat "Send Tell") reopens it. Regular tabs are only managed from settings.
+            ImGui.Separator();
+            if (ImGui.MenuItem("Close chat"))
+            {
+                plugin.TabManager.RemoveTab(tab);
+                if (selectedTabId == tab.Id)
+                    selectedTabId = null;
+            }
+        }
+        else
+        {
+            if (ImGui.MenuItem("Edit channels/filter..."))
+                plugin.OpenTabEditor(tab.Id);
         }
     }
 

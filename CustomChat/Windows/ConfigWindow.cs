@@ -14,6 +14,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private readonly Plugin plugin;
     private readonly Configuration configuration;
     private Guid? focusedTabId;
+    private string newTabName = string.Empty;
 
     public ConfigWindow(Plugin plugin)
         : base("Custom Chat Settings###CustomChatConfigWindow")
@@ -112,7 +113,22 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void DrawTabsEditor()
     {
-        ImGui.TextDisabled("Right-click a tab in the main window for quick actions, or edit its channels here.");
+        ImGui.TextDisabled("Right-click a tab in the main window to pop it out or jump here; create/delete tabs below.");
+
+        ImGui.SetNextItemWidth(250);
+        ImGui.InputTextWithHint("##newTab", "New tab name...", ref newTabName, 64);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(string.IsNullOrWhiteSpace(newTabName)))
+        {
+            if (ImGui.Button("Add tab"))
+            {
+                var tab = plugin.TabManager.CreateTab(newTabName.Trim());
+                newTabName = string.Empty;
+                focusedTabId = tab.Id;
+            }
+        }
+
+        ImGui.Separator();
 
         foreach (var tab in plugin.TabManager.Tabs.ToList())
         {
@@ -210,8 +226,18 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGui.Button($"Delete##delete_{tab.Id}"))
-            plugin.TabManager.RemoveTab(tab);
+        if (tab.IsPmTab)
+        {
+            // Whisper history is keyed by conversation partner, not this tab's id, so this never
+            // deletes any messages - it just hides the tab until the next message reopens it.
+            if (ImGui.Button($"Close chat##close_{tab.Id}"))
+                plugin.TabManager.RemoveTab(tab);
+        }
+        else
+        {
+            if (ImGui.Button($"Delete##delete_{tab.Id}"))
+                plugin.TabManager.RemoveTab(tab);
+        }
     }
 
     private void DrawEmotes()
