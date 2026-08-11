@@ -152,7 +152,7 @@ public sealed class MainWindow : Window, IDisposable
             if (child.Success)
             {
                 var messages = plugin.TabMessageBuffer.GetMessages(tab);
-                ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey);
+                ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey());
 
                 if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                     ImGui.SetScrollHereY(1f);

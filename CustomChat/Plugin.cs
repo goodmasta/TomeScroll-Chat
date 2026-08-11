@@ -113,6 +113,17 @@ public sealed class Plugin : IDalamudPlugin
     /// doesn't need an "@World" suffix for those).</summary>
     private static string? GetLocalHomeWorldName() => PlayerState.IsLoaded ? PlayerState.HomeWorld.ValueNullable?.Name.ToString() : null;
 
+    /// <summary>The local character's own "Name@World" key, used by <see cref="Windows.ChatMessageRenderer"/>
+    /// to show "You" instead of the player's own name in every tab, including whispers.</summary>
+    public static string? GetLocalPlayerKey()
+    {
+        if (!PlayerState.IsLoaded)
+            return null;
+
+        var world = PlayerState.HomeWorld.ValueNullable?.Name.ToString();
+        return string.IsNullOrEmpty(world) ? null : $"{PlayerState.CharacterName}@{world}";
+    }
+
     /// <summary>Opens (creating if necessary) the whisper tab for this player and brings it to front -
     /// the right-click menu's "Whisper (Custom Chat)" handler.</summary>
     public void OpenTellTo(string name, string world) => OpenTellToKey($"{name}@{world}");

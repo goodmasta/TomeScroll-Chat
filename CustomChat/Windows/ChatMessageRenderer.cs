@@ -44,13 +44,15 @@ public static class ChatMessageRenderer
 
     /// <param name="onSendTell">Called with a "Name@World" key when the user picks "Send Tell" from a
     /// sender name's right-click menu. Only offered for messages with a resolvable player sender.</param>
-    public static void DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell)
+    /// <param name="localPlayerKey">The local character's own "Name@World" (see
+    /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
+    public static void DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey)
     {
         for (var i = 0; i < messages.Count; i++)
-            DrawMessage(tab, messages[i], i, config, emotes, onSendTell);
+            DrawMessage(tab, messages[i], i, config, emotes, onSendTell, localPlayerKey);
     }
 
-    private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell)
+    private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey)
     {
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
 
@@ -67,12 +69,23 @@ public static class ChatMessageRenderer
 
         var channelColor = GetColor(tab, msg.ChatType);
 
-        var sender = config.ScreenshotMode && !string.IsNullOrEmpty(msg.SenderName) ? RedactedName : msg.SenderName;
+        // Outgoing tells are authored by the local player but their Sender field carries the *target's*
+        // payload (e.g. "To Name"), not the player's own - so TellOutgoing is its own reliable "this is
+        // me" signal; every other channel type just compares the resolved sender key directly.
+        var isOwn = msg.ChatType == XivChatType.TellOutgoing ||
+                    (!string.IsNullOrEmpty(localPlayerKey) && msg.SenderKey == localPlayerKey);
+
+        var sender = isOwn
+            ? "You"
+            : config.ScreenshotMode && !string.IsNullOrEmpty(msg.SenderName) ? RedactedName : msg.SenderName;
+
         if (!string.IsNullOrEmpty(sender))
         {
             // Only the nickname gets the per-player colour - the message body below still uses the
-            // normal per-channel colour, same as before.
-            var senderColor = !string.IsNullOrEmpty(msg.SenderKey) ? PlayerColorPalette.GetColor(msg.SenderKey) : channelColor;
+            // normal per-channel colour, same as before. Own messages use the local player's own key so
+            // "You" gets one consistent colour everywhere, rather than an outgoing tell's target's colour.
+            var colorKey = isOwn ? localPlayerKey : msg.SenderKey;
+            var senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
             ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
             ImGui.TextUnformatted($"{sender}:");
             ImGui.PopStyleColor();
