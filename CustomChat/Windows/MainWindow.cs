@@ -111,11 +111,13 @@ public sealed class MainWindow : Window, IDisposable
     }
 
     /// <summary>
-    /// One sidebar row: a full-width Selectable for the click/hover area, with the name and unread
-    /// count drawn on top of it separately (rather than as one combined label) so the count can be
-    /// coloured red and the name can pulse - a single Selectable label can't have mixed colours.
-    /// Overlay text is positioned/reset via screen-space item rects rather than relative cursor math,
-    /// so it can't drift the row height of whatever comes after it.
+    /// One sidebar row: a full-width Selectable with an empty label for the click/hover area, with
+    /// the name and unread count painted on top via <see cref="ImDrawList.AddText"/> so the count can
+    /// be coloured red and the name can pulse - a single Selectable label can't have mixed colours.
+    /// Deliberately uses the draw list directly instead of more ImGui widgets positioned via
+    /// SetCursorScreenPos: that approach (tried first) fed back into ImGui's own cursor/layout state
+    /// and threw off every following row's horizontal position, drifting further left row by row.
+    /// Painting onto the draw list doesn't touch layout state at all, so it can't do that.
     /// </summary>
     private void DrawTabRow(ChatTabConfig tab)
     {
@@ -128,26 +130,22 @@ public sealed class MainWindow : Window, IDisposable
 
         var itemMin = ImGui.GetItemRectMin();
         var itemMax = ImGui.GetItemRectMax();
-        ImGui.SetCursorScreenPos(itemMin + new Vector2(4, 0));
+        var textY = itemMin.Y + (itemMax.Y - itemMin.Y - ImGui.GetTextLineHeight()) / 2f;
+        var drawList = ImGui.GetWindowDrawList();
 
         var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
-        if (isBlinking)
-        {
-            var pulse = (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f;
-            ImGui.TextColored(Vector4.Lerp(BlinkBase, UnreadRed, pulse), tab.Name);
-        }
-        else
-        {
-            ImGui.TextUnformatted(tab.Name);
-        }
+        var nameColor = isBlinking
+            ? Vector4.Lerp(BlinkBase, UnreadRed, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
+            : BlinkBase;
+
+        var namePos = new Vector2(itemMin.X + 4, textY);
+        drawList.AddText(namePos, ImGui.ColorConvertFloat4ToU32(nameColor), tab.Name);
 
         if (tab.UnreadCount > 0)
         {
-            ImGui.SameLine(0, 4);
-            ImGui.TextColored(UnreadRed, $"({tab.UnreadCount})");
+            var countPos = new Vector2(namePos.X + ImGui.CalcTextSize(tab.Name).X + 4, textY);
+            drawList.AddText(countPos, ImGui.ColorConvertFloat4ToU32(UnreadRed), $"({tab.UnreadCount})");
         }
-
-        ImGui.SetCursorScreenPos(new Vector2(itemMin.X, itemMax.Y));
     }
 
     private void DrawTabContextMenu(ChatTabConfig tab)
