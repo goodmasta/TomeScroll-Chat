@@ -128,7 +128,7 @@ public static class ChatMessageRenderer
 
         if (!string.IsNullOrEmpty(sender))
         {
-            var marker = !isOwn && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
+            var marker = !isOwn && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
                          !string.IsNullOrEmpty(msg.SenderKey) && isFriend(msg.SenderKey)
                 ? config.FriendMarkerEmoji + " "
                 : string.Empty;

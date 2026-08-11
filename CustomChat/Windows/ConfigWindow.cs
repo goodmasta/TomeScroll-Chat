@@ -11,6 +11,14 @@ namespace CustomChat.Windows;
 
 public sealed class ConfigWindow : Window, IDisposable
 {
+    // A picker menu, not free text input - some are plain symbols rather than full-colour emoji since
+    // Dalamud's UI font may not have glyphs for every pictograph; the picker itself doubles as a
+    // preview, so a glyph that renders as a blank box is obvious immediately and another can be picked.
+    private static readonly string[] FriendMarkerOptions =
+    {
+        "⭐", "🌟", "✨", "❤️", "👑", "🔥", "✅", "★", "✦", "♦", "✓", "➤",
+    };
+
     private readonly Plugin plugin;
     private readonly Configuration configuration;
     private Guid? focusedTabId;
@@ -116,14 +124,35 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.Separator();
 
-        var friendMarker = configuration.FriendMarkerEmoji;
-        ImGui.SetNextItemWidth(100);
-        if (ImGui.InputText("Friend marker", ref friendMarker, 8))
+        var friendMarkerEnabled = configuration.FriendMarkerEnabled;
+        if (ImGui.Checkbox("Highlight friends with an emoji marker", ref friendMarkerEnabled))
         {
-            configuration.FriendMarkerEmoji = friendMarker;
+            configuration.FriendMarkerEnabled = friendMarkerEnabled;
             configuration.Save();
         }
-        ImGui.TextDisabled("Shown before the name of any sender who's on your friends list. Empty disables it.");
+
+        using (ImRaii.Disabled(!configuration.FriendMarkerEnabled))
+        {
+            if (ImGui.Button($"Marker: {configuration.FriendMarkerEmoji}##friendMarkerPicker"))
+                ImGui.OpenPopup("FriendMarkerPicker");
+        }
+
+        if (ImGui.BeginPopup("FriendMarkerPicker"))
+        {
+            foreach (var option in FriendMarkerOptions)
+            {
+                if (ImGui.Selectable($"{option}##friendMarkerOpt_{option}"))
+                {
+                    configuration.FriendMarkerEmoji = option;
+                    configuration.Save();
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+
+            ImGui.EndPopup();
+        }
+
+        ImGui.TextDisabled("Shown before the name of any sender who's on your friends list.");
 
         ImGui.Separator();
 
