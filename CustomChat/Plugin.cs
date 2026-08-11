@@ -22,6 +22,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -34,6 +35,7 @@ public sealed class Plugin : IDalamudPlugin
     public ChatSendService ChatSendService { get; }
     public EmoteService EmoteService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
+    public FriendListService FriendListService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly ContextMenuService contextMenuService;
     private readonly NativeTellWatcher nativeTellWatcher;
@@ -54,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
+        FriendListService = new FriendListService(DataManager, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
         contextMenuService = new ContextMenuService(this, ContextMenu, Log);
         nativeTellWatcher = new NativeTellWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo);

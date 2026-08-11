@@ -178,6 +178,10 @@ public sealed class EmoteService : IDisposable
 
     public bool IsKnownEmote(string code) => byCode.ContainsKey(code);
 
+    /// <summary>Every currently-loaded emote, for the settings window's "loaded emotes" list.</summary>
+    public IReadOnlyList<EmoteDefinition> GetLoadedEmotes() =>
+        byCode.Values.OrderBy(e => e.Code, StringComparer.OrdinalIgnoreCase).ToList();
+
     private async Task LoadTextureAsync(EmoteDefinition def)
     {
         try

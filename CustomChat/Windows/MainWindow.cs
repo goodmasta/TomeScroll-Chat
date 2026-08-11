@@ -20,6 +20,15 @@ public sealed class MainWindow : Window, IDisposable
     private readonly Plugin plugin;
     private Guid? selectedTabId;
     private string inputText = string.Empty;
+    private string emoteSearch = string.Empty;
+
+    // Discord-style "last read position": which tab the content area is currently showing, a frozen
+    // divider index into that tab's message list (set once when switching in, not updated as the
+    // player reads further down - see DrawContent), and one-shot scroll requests.
+    private Guid? contentTabId;
+    private int dividerIndex = -1;
+    private bool pendingScrollToDivider;
+    private bool pendingScrollToBottom;
 
     public MainWindow(Plugin plugin)
         : base("Custom Chat###CustomChatMainWindow")
@@ -122,14 +131,7 @@ public sealed class MainWindow : Window, IDisposable
     {
         var selected = tab.Id == selectedTabId;
         if (ImGui.Selectable($"##tab_{tab.Id}", selected))
-        {
             selectedTabId = tab.Id;
-            if (tab.UnreadCount != 0)
-            {
-                tab.UnreadCount = 0;
-                plugin.TabManager.Save();
-            }
-        }
 
         var itemMin = ImGui.GetItemRectMin();
         var itemMax = ImGui.GetItemRectMax();
@@ -164,6 +166,8 @@ public sealed class MainWindow : Window, IDisposable
             if (ImGui.MenuItem("Mark all as read"))
             {
                 tab.UnreadCount = 0;
+                if (tab.Id == contentTabId)
+                    dividerIndex = -1;
                 plugin.TabManager.Save();
             }
         }
@@ -202,17 +206,63 @@ public sealed class MainWindow : Window, IDisposable
             return;
         }
 
+        if (contentTabId != tab.Id)
+        {
+            // Persist wherever the previously-viewed tab's unread count ended up (see the visibility
+            // tracking below) before switching what the divider index refers to.
+            if (contentTabId != null)
+                plugin.TabManager.Save();
+
+            contentTabId = tab.Id;
+            var messagesNow = plugin.TabMessageBuffer.GetMessages(tab);
+            // Frozen at the tab's unread count *as of opening it* - deliberately not recomputed as
+            // reading progresses, so the divider stays put where "new" started, Discord-style.
+            dividerIndex = tab.UnreadCount > 0 ? Math.Max(0, messagesNow.Count - tab.UnreadCount) : -1;
+            pendingScrollToDivider = dividerIndex >= 0;
+        }
+
         using (var child = ImRaii.Child("Messages", new Vector2(0, -28), false))
         {
             if (child.Success)
             {
+                if (pendingScrollToBottom)
+                {
+                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                    pendingScrollToBottom = false;
+                    dividerIndex = -1;
+                }
+
                 var messages = plugin.TabMessageBuffer.GetMessages(tab);
-                ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey());
+                var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
+                pendingScrollToDivider = false;
+
+                // Unread count shrinks as messages actually scroll into view, not all at once on open.
+                if (lastVisible >= 0)
+                {
+                    var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
+                    if (newUnread < tab.UnreadCount)
+                        tab.UnreadCount = newUnread;
+                }
 
                 if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                     ImGui.SetScrollHereY(1f);
             }
         }
+
+        if (ImGui.Button("Jump to bottom"))
+            pendingScrollToBottom = true;
+
+        ImGui.SameLine();
+        if (ImGui.Button("Emotes"))
+        {
+            emoteSearch = string.Empty;
+            ImGui.OpenPopup("EmotePicker_Main");
+        }
+
+        EmotePicker.Draw("EmotePicker_Main", plugin.EmoteService, ref emoteSearch, code =>
+        {
+            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
+        });
 
         ImGui.SetNextItemWidth(-1);
         var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
@@ -224,33 +274,15 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
-    /// <summary>Marks a tab's unread counter without switching to it - called by <see cref="Plugin"/> when a
-    /// message lands in a tab that isn't currently selected/visible.</summary>
-    public void NotifyUnread(ChatTabConfig tab)
-    {
-        if (tab.Id != selectedTabId || !IsOpen)
-            tab.UnreadCount++;
-    }
+    /// <summary>Marks a tab's unread counter - called by <see cref="Plugin"/> for every incoming
+    /// message regardless of selection, since even the open tab may be scrolled away from the
+    /// bottom; the granular visibility tracking in <see cref="DrawContent"/> brings it back down as
+    /// messages actually scroll into view.</summary>
+    public void NotifyUnread(ChatTabConfig tab) => tab.UnreadCount++;
 
-    /// <summary>Switches the sidebar selection to this tab (clearing its unread count) - e.g. when the
-    /// right-click "Send Tell" menu item opens a whisper conversation.</summary>
-    public void SelectTab(Guid tabId)
-    {
-        selectedTabId = tabId;
-        foreach (var tab in plugin.TabManager.Tabs)
-        {
-            if (tab.Id == tabId)
-            {
-                if (tab.UnreadCount != 0)
-                {
-                    tab.UnreadCount = 0;
-                    plugin.TabManager.Save();
-                }
-
-                break;
-            }
-        }
-    }
+    /// <summary>Switches the sidebar selection to this tab - e.g. when the right-click "Send Tell"
+    /// menu item opens a whisper conversation.</summary>
+    public void SelectTab(Guid tabId) => selectedTabId = tabId;
 
     private ChatTabConfig? ResolveSelectedTab()
     {

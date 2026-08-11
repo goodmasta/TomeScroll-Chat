@@ -54,5 +54,9 @@ public class Configuration : IPluginConfiguration
     /// always notify) - one shared setting rather than split blink/count like regular tabs.</summary>
     public Vector4 WhisperNotifyColor { get; set; } = DefaultNotifyRed;
 
+    /// <summary>Prefix shown before the name of any sender who is on the local player's friends list.
+    /// Empty disables the marker entirely.</summary>
+    public string FriendMarkerEmoji { get; set; } = "*";
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

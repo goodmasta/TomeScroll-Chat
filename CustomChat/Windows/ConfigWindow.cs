@@ -116,6 +116,17 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.Separator();
 
+        var friendMarker = configuration.FriendMarkerEmoji;
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.InputText("Friend marker", ref friendMarker, 8))
+        {
+            configuration.FriendMarkerEmoji = friendMarker;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Shown before the name of any sender who's on your friends list. Empty disables it.");
+
+        ImGui.Separator();
+
         var fontSize = configuration.FontSize;
         ImGui.SetNextItemWidth(200);
         if (ImGui.SliderFloat("Font size", ref fontSize, 10f, 24f, "%.0f"))
@@ -343,6 +354,19 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.RefreshEmotes();
 
         ImGui.TextDisabled("Only global emote sets are loaded in this version - per-channel Twitch emotes are not yet supported.");
+
+        ImGui.Separator();
+
+        var loaded = plugin.EmoteService.GetLoadedEmotes();
+        ImGui.TextUnformatted($"Loaded emotes ({loaded.Count})");
+        using (var child = ImRaii.Child("LoadedEmotesList", new Vector2(0, 200), true))
+        {
+            if (child.Success)
+            {
+                foreach (var emote in loaded)
+                    ImGui.TextUnformatted($"{emote.Code}  [{emote.Provider}]");
+            }
+        }
     }
 
     public void Dispose()

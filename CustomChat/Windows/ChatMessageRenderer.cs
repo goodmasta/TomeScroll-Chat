@@ -42,19 +42,52 @@ public static class ChatMessageRenderer
         [XivChatType.SystemMessage] = new Vector4(0.75f, 0.75f, 0.75f, 1f),
     };
 
+    private static readonly Vector4 DividerColor = new(1f, 0.35f, 0.35f, 1f);
+
     /// <param name="onSendTell">Called with a "Name@World" key when the user picks "Send Tell" from a
     /// sender name's right-click menu. Only offered for messages with a resolvable player sender.</param>
     /// <param name="localPlayerKey">The local character's own "Name@World" (see
     /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
-    public static void DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey)
+    /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
+    /// <param name="dividerIndex">Index to draw a Discord-style "New messages" divider before, or -1 for none.</param>
+    /// <param name="scrollToDivider">Scrolls the divider into view once, the frame it's drawn (tab just opened).</param>
+    /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
+    /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
     {
+        var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
-            DrawMessage(tab, messages[i], i, config, emotes, onSendTell, localPlayerKey);
+        {
+            if (i == dividerIndex && dividerIndex > 0)
+            {
+                DrawDivider();
+                if (scrollToDivider)
+                    ImGui.SetScrollHereY(0.1f);
+            }
+
+            if (DrawMessage(tab, messages[i], i, config, emotes, onSendTell, localPlayerKey, isFriend))
+                lastVisible = i;
+        }
+
+        return lastVisible;
     }
 
-    private static void DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey)
+    private static void DrawDivider()
+    {
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, DividerColor);
+        ImGui.Separator();
+        ImGui.TextUnformatted("New messages");
+        ImGui.Separator();
+        ImGui.PopStyleColor();
+        ImGui.Spacing();
+    }
+
+    /// <summary>Draws one message row. Returns whether it was scrolled into view this frame.</summary>
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend)
     {
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
+        var isVisible = ImGui.IsItemVisible();
 
         // Right-click the timestamp to copy the whole message ("[HH:mm] Sender: body") - always
         // available, even for system/echo lines that have no sender to right-click.
@@ -86,13 +119,18 @@ public static class ChatMessageRenderer
 
         if (!string.IsNullOrEmpty(sender))
         {
+            var marker = !isOwn && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
+                         !string.IsNullOrEmpty(msg.SenderKey) && isFriend(msg.SenderKey)
+                ? config.FriendMarkerEmoji + " "
+                : string.Empty;
+
             // Only the nickname gets the per-player colour - the message body below still uses the
             // normal per-channel colour, same as before. Own messages use the local player's own key so
             // "You" gets one consistent colour everywhere, rather than an outgoing tell's target's colour.
             var colorKey = isOwn ? localPlayerKey : msg.SenderKey;
             var senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
             ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
-            ImGui.TextUnformatted($"{sender}:");
+            ImGui.TextUnformatted($"{marker}{sender}:");
             ImGui.PopStyleColor();
 
             // Right-click a sender name to whisper them - the game's own "Send Tell" menu item only
@@ -122,6 +160,8 @@ public static class ChatMessageRenderer
         ImGui.PopStyleColor();
 
         ImGui.Unindent(indentWidth);
+
+        return isVisible;
     }
 
     private static string BuildCopyText(ChatMessageRecord msg)
@@ -171,12 +211,18 @@ public static class ChatMessageRenderer
                     ImGui.SameLine(0, spacing);
             }
 
-            var wrapWidth = rightEdge - ImGui.GetCursorPosX();
             ImGui.PushTextWrapPos(0f);
             ImGui.TextUnformatted(text);
             ImGui.PopTextWrapPos();
 
-            canInline = ImGui.CalcTextSize(text, false, wrapWidth).Y <= ImGui.GetTextLineHeight() * 1.5f;
+            // Use the *actual* rendered height of the widget we just drew rather than a separately
+            // predicted one (previously via CalcTextSize with a manually-computed wrap width) - that
+            // prediction could disagree with the real wrap boundary PushTextWrapPos(0f) used
+            // internally, which meant canInline could come out wrong (multi-line text misreported as
+            // single-line), letting the next token inline off the trailing edge of the widest wrapped
+            // line instead of the true last line. Real geometry can't disagree with itself.
+            var renderedHeight = ImGui.GetItemRectMax().Y - ImGui.GetItemRectMin().Y;
+            canInline = renderedHeight <= ImGui.GetTextLineHeight() * 1.5f;
         }
 
         foreach (var span in LinkDetector.Split(body))
