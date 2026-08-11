@@ -94,6 +94,13 @@ public static class ChatMessageRenderer
     /// </summary>
     private static void DrawBody(string body, Configuration config, EmoteService emotes)
     {
+        // A fixed boundary computed once, instead of repeatedly asking ImGui for "available" width -
+        // GetContentRegionAvail() measured right after a wrapped multi-line TextUnformitted call turned
+        // out not to reliably reflect the cursor's true position on that widget's last line, which threw
+        // off the fit-check for whatever token came right after it (typically a link, since a link
+        // always follows a flushed plain-text run in the loop below). Comparing GetCursorPosX() (which
+        // stays accurate) against this fixed right edge sidesteps that entirely.
+        var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
 
         void FlushPlain()
@@ -109,7 +116,7 @@ public static class ChatMessageRenderer
             var firstWordEnd = text.IndexOf(' ');
             var firstWord = firstWordEnd < 0 ? text : text[..firstWordEnd];
             var spacing = ImGui.GetStyle().ItemSpacing.X;
-            if (ImGui.CalcTextSize(firstWord).X + spacing <= ImGui.GetContentRegionAvail().X)
+            if (ImGui.GetCursorPosX() + spacing + ImGui.CalcTextSize(firstWord).X <= rightEdge)
                 ImGui.SameLine(0, spacing);
 
             ImGui.PushTextWrapPos(0f);
@@ -123,7 +130,7 @@ public static class ChatMessageRenderer
             if (span.IsLink)
             {
                 FlushPlain();
-                DrawToken(text, isLink: true, config, emotes);
+                DrawToken(text, isLink: true, config, emotes, rightEdge);
                 continue;
             }
 
@@ -135,7 +142,7 @@ public static class ChatMessageRenderer
                 if (emotes.IsKnownEmote(word))
                 {
                     FlushPlain();
-                    DrawToken(word, isLink: false, config, emotes);
+                    DrawToken(word, isLink: false, config, emotes, rightEdge);
                 }
                 else
                 {
@@ -150,7 +157,7 @@ public static class ChatMessageRenderer
     }
 
     /// <summary>Draws one link or emote token - the only cases still placed manually via SameLine.</summary>
-    private static void DrawToken(string token, bool isLink, Configuration config, EmoteService emotes)
+    private static void DrawToken(string token, bool isLink, Configuration config, EmoteService emotes, float rightEdge)
     {
         var isEmote = !isLink && emotes.IsKnownEmote(token);
         var texture = isEmote ? emotes.TryGetTexture(token) : null;
@@ -158,8 +165,12 @@ public static class ChatMessageRenderer
         var size = isEmote ? new Vector2(lineHeight, lineHeight) : ImGui.CalcTextSize(token);
 
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        if (size.X + spacing <= ImGui.GetContentRegionAvail().X)
+        var startX = ImGui.GetCursorPosX();
+        if (startX + spacing + size.X <= rightEdge)
+        {
             ImGui.SameLine(0, spacing);
+            startX = ImGui.GetCursorPosX();
+        }
 
         if (isEmote)
         {
@@ -170,12 +181,22 @@ public static class ChatMessageRenderer
         }
         else if (isLink && config.OpenLinksOnClick)
         {
-            // Deliberately NOT wrapped: PushTextWrapPos(0f) here was wrapping against a boundary that
-            // didn't match the width used for the SameLine fit-check above, which for a long link
-            // could force a near-character-by-character wrap - dozens of forced line breaks, i.e. a
-            // wall of near-empty lines. A very long link on its own line may still slightly overflow
-            // the window edge instead, which is the smaller visual glitch of the two.
-            ImGui.TextColored(LinkColor, token);
+            // Only a link that's wider than the whole window (even alone on a fresh line) needs
+            // wrapping at all; bounding PushTextWrapPos at this exact same rightEdge used for the
+            // fit-check above (rather than the implicit "0f = window edge", which turned out to
+            // disagree with it) is what makes this actually wrap instead of producing a wall of blank
+            // lines the last time this was attempted.
+            if (startX + size.X > rightEdge)
+            {
+                ImGui.PushTextWrapPos(rightEdge);
+                ImGui.TextColored(LinkColor, token);
+                ImGui.PopTextWrapPos();
+            }
+            else
+            {
+                ImGui.TextColored(LinkColor, token);
+            }
+
             if (ImGui.IsItemHovered())
                 ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
             if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
