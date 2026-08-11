@@ -151,7 +151,7 @@ public static class ChatMessageRenderer
             if (span.IsLink)
             {
                 FlushPlain();
-                DrawToken(text, isLink: true, config, emotes, rightEdge);
+                DrawLink(text, config, rightEdge);
                 continue;
             }
 
@@ -177,56 +177,55 @@ public static class ChatMessageRenderer
         FlushPlain();
     }
 
-    /// <summary>Draws one link or emote token - the only cases still placed manually via SameLine.</summary>
+    /// <summary>Draws one emote token, trying to keep it inline with whatever came right before it.</summary>
     private static void DrawToken(string token, bool isLink, Configuration config, EmoteService emotes, float rightEdge)
     {
-        var isEmote = !isLink && emotes.IsKnownEmote(token);
-        var texture = isEmote ? emotes.TryGetTexture(token) : null;
+        var texture = emotes.TryGetTexture(token);
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
-        var size = isEmote ? new Vector2(lineHeight, lineHeight) : ImGui.CalcTextSize(token);
+        var size = new Vector2(lineHeight, lineHeight);
 
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var startX = ImGui.GetCursorPosX();
-        if (startX + spacing + size.X <= rightEdge)
-        {
+        if (ImGui.GetCursorPosX() + spacing + size.X <= rightEdge)
             ImGui.SameLine(0, spacing);
-            startX = ImGui.GetCursorPosX();
+
+        if (texture != null)
+            ImGui.Image(texture.Handle, size);
+        else
+            ImGui.TextUnformatted(token);
+    }
+
+    /// <summary>
+    /// Draws one link. Deliberately never tries to continue the previous line via SameLine (unlike
+    /// plain text and emotes) - a link always immediately follows a flushed, possibly multi-line
+    /// wrapped plain-text run, and querying the cursor position right after one of those turned out
+    /// to be unreliable, which is what caused both the "links don't wrap" and the "wall of blank
+    /// lines" bugs seen earlier. Always starting fresh means the wrap decision below only ever needs
+    /// the message's fixed right edge and the window's fixed left margin - no cursor-state guessing.
+    /// </summary>
+    private static void DrawLink(string token, Configuration config, float rightEdge)
+    {
+        if (!config.OpenLinksOnClick)
+        {
+            ImGui.TextUnformatted(token);
+            return;
         }
 
-        if (isEmote)
+        var fullWidth = rightEdge - ImGui.GetWindowContentRegionMin().X;
+        if (ImGui.CalcTextSize(token).X > fullWidth)
         {
-            if (texture != null)
-                ImGui.Image(texture.Handle, size);
-            else
-                ImGui.TextUnformatted(token);
-        }
-        else if (isLink && config.OpenLinksOnClick)
-        {
-            // Only a link that's wider than the whole window (even alone on a fresh line) needs
-            // wrapping at all; bounding PushTextWrapPos at this exact same rightEdge used for the
-            // fit-check above (rather than the implicit "0f = window edge", which turned out to
-            // disagree with it) is what makes this actually wrap instead of producing a wall of blank
-            // lines the last time this was attempted.
-            if (startX + size.X > rightEdge)
-            {
-                ImGui.PushTextWrapPos(rightEdge);
-                ImGui.TextColored(LinkColor, token);
-                ImGui.PopTextWrapPos();
-            }
-            else
-            {
-                ImGui.TextColored(LinkColor, token);
-            }
-
-            if (ImGui.IsItemHovered())
-                ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-            if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
-                Util.OpenLink(LinkDetector.NormalizeForBrowser(token));
+            ImGui.PushTextWrapPos(rightEdge);
+            ImGui.TextColored(LinkColor, token);
+            ImGui.PopTextWrapPos();
         }
         else
         {
-            ImGui.TextUnformatted(token);
+            ImGui.TextColored(LinkColor, token);
         }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+            Util.OpenLink(LinkDetector.NormalizeForBrowser(token));
     }
 
     private static Vector4 GetColor(ChatTabConfig tab, XivChatType chatType)
