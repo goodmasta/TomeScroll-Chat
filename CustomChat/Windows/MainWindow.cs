@@ -237,6 +237,7 @@ public sealed class MainWindow : Window, IDisposable
                     dividerIndex = -1;
                 }
 
+                var wasScrollingToDivider = pendingScrollToDivider;
                 var messages = plugin.TabMessageBuffer.GetMessages(tab);
                 var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
                 pendingScrollToDivider = false;
@@ -249,7 +250,11 @@ public sealed class MainWindow : Window, IDisposable
                         tab.UnreadCount = newUnread;
                 }
 
-                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                // Never auto-follow to the bottom on the same frame we just scrolled to the "New
+                // messages" divider - leftover scroll state from whatever tab was previously shown in
+                // this same child can otherwise read as "already at the bottom" (e.g. clamped down to
+                // the new, shorter content's max) and immediately snap back past the divider.
+                if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                     ImGui.SetScrollHereY(1f);
             }
         }

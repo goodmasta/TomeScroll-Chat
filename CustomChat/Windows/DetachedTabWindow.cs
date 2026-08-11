@@ -68,6 +68,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     dividerIndex = -1;
                 }
 
+                var wasScrollingToDivider = pendingScrollToDivider;
                 var messages = plugin.TabMessageBuffer.GetMessages(Tab);
                 var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
                 pendingScrollToDivider = false;
@@ -82,7 +83,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     }
                 }
 
-                if (ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                // Never auto-follow to the bottom on the same frame we just scrolled to the "New
+                // messages" divider - see MainWindow's DrawContent for why.
+                if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                     ImGui.SetScrollHereY(1f);
             }
         }
