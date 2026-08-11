@@ -54,13 +54,17 @@ public static class ChatMessageRenderer
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
         ImGui.SameLine(0, 4);
 
-        var color = GetColor(tab, msg.ChatType);
-        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        var channelColor = GetColor(tab, msg.ChatType);
 
         var sender = config.ScreenshotMode && !string.IsNullOrEmpty(msg.SenderName) ? RedactedName : msg.SenderName;
         if (!string.IsNullOrEmpty(sender))
         {
+            // Only the nickname gets the per-player colour - the message body below still uses the
+            // normal per-channel colour, same as before.
+            var senderColor = !string.IsNullOrEmpty(msg.SenderKey) ? PlayerColorPalette.GetColor(msg.SenderKey) : channelColor;
+            ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
             ImGui.TextUnformatted($"{sender}:");
+            ImGui.PopStyleColor();
 
             // Right-click a sender name to whisper them - the game's own "Send Tell" menu item only
             // works from native UI (party list, target, etc.) and does nothing here since this window
@@ -75,6 +79,7 @@ public static class ChatMessageRenderer
             ImGui.SameLine(0, 4);
         }
 
+        ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
         DrawBody(msg.Body, config, emotes);
         ImGui.PopStyleColor();
     }
@@ -105,10 +110,13 @@ public static class ChatMessageRenderer
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
         var size = isEmote ? new Vector2(lineHeight, lineHeight) : ImGui.CalcTextSize(token);
 
-        // Continue the current line if this token fits; otherwise let it fall to a new one naturally
-        // (ImGui starts a fresh line for any widget that doesn't follow a SameLine() call).
-        if (size.X <= ImGui.GetContentRegionAvail().X)
-            ImGui.SameLine(0, ImGui.GetStyle().ItemSpacing.X);
+        // Continue the current line if this token (plus the gap SameLine() itself inserts) still
+        // fits in what's left of the chat window's width; otherwise let it fall to a new line
+        // naturally (ImGui starts a fresh line for any widget that doesn't follow a SameLine() call).
+        // This is re-evaluated every frame, so resizing the window re-wraps immediately.
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        if (size.X + spacing <= ImGui.GetContentRegionAvail().X)
+            ImGui.SameLine(0, spacing);
 
         if (isEmote)
         {

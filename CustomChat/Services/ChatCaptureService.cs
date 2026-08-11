@@ -60,7 +60,11 @@ public sealed class ChatCaptureService : IDisposable
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
         var body = message.Message.TextValue;
-        var timestamp = DateTimeOffset.FromUnixTimeSeconds(message.Timestamp).UtcDateTime;
+        // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
+        // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
+        // so this uses wall-clock time at the moment the message is actually handled instead - for
+        // a live chat capture that's effectively the same instant anyway.
+        var timestamp = DateTime.UtcNow;
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
