@@ -87,10 +87,21 @@ public sealed class DetachedTabWindow : Window, IDisposable
             }
         }
 
-        if (ImGui.Button("Jump to bottom"))
-            pendingScrollToBottom = true;
-
         var iconSize = ImGui.GetFrameHeight();
+        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
+        if (Tab.UnreadCount == 0)
+        {
+            ImGui.Dummy(new Vector2(iconSize, iconSize));
+        }
+        else
+        {
+            bool jumpClicked;
+            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+                jumpClicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{Tab.Id}", new Vector2(iconSize, iconSize));
+            if (jumpClicked)
+                pendingScrollToBottom = true;
+        }
+
         ImGui.SetNextItemWidth(-(iconSize + ImGui.GetStyle().ItemSpacing.X));
 
         // Re-focus has to happen right before InputText (offset 0 = "the very next widget") rather

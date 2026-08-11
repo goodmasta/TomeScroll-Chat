@@ -254,10 +254,29 @@ public sealed class MainWindow : Window, IDisposable
             }
         }
 
-        if (ImGui.Button("Jump to bottom"))
-            pendingScrollToBottom = true;
-
+        DrawJumpToBottomButton(tab);
         DrawInputRow(tab);
+    }
+
+    /// <summary>A small square button the same size as the emote icon below it, right above it, only
+    /// shown (not just enabled - not drawn at all) while there are unread messages. Still occupies
+    /// the row's height even when hidden (via Dummy) so the layout doesn't jump when it appears/disappears.</summary>
+    private void DrawJumpToBottomButton(ChatTabConfig tab)
+    {
+        var iconSize = ImGui.GetFrameHeight();
+        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
+
+        if (tab.UnreadCount == 0)
+        {
+            ImGui.Dummy(new Vector2(iconSize, iconSize));
+            return;
+        }
+
+        bool clicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            clicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{tab.Id}", new Vector2(iconSize, iconSize));
+        if (clicked)
+            pendingScrollToBottom = true;
     }
 
     /// <summary>The message input box with a Telegram/Discord-style emote-picker smiley button
