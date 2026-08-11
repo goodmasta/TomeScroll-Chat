@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Dalamud.Configuration;
 using CustomChat.Models;
 
@@ -39,6 +40,19 @@ public class Configuration : IPluginConfiguration
 
     /// <summary>Hard cap, in bytes, on total chat history stored on disk (default 1 GiB). Oldest messages are pruned first.</summary>
     public long MaxHistoryBytes { get; set; } = 1L * 1024 * 1024 * 1024;
+
+    private static readonly Vector4 DefaultNotifyRed = new(1f, 0.15f, 0.15f, 1f);
+
+    /// <summary>Sidebar name pulse colour for regular (non-whisper) tabs with new messages - only used
+    /// for tabs that opted in via <see cref="ChatTabConfig.NotifyOnNewMessage"/>.</summary>
+    public Vector4 ChannelBlinkColor { get; set; } = DefaultNotifyRed;
+
+    /// <summary>Sidebar unread-count colour for regular tabs - independent of the blink colour above.</summary>
+    public Vector4 ChannelUnreadCountColor { get; set; } = DefaultNotifyRed;
+
+    /// <summary>Single colour used for both the blink and the unread count on whisper tabs (which
+    /// always notify) - one shared setting rather than split blink/count like regular tabs.</summary>
+    public Vector4 WhisperNotifyColor { get; set; } = DefaultNotifyRed;
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

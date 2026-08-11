@@ -89,6 +89,32 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Separator();
+        ImGui.TextUnformatted("Unread notifications");
+
+        var channelBlink = configuration.ChannelBlinkColor;
+        if (ImGui.ColorEdit4("Channel blink colour", ref channelBlink))
+        {
+            configuration.ChannelBlinkColor = channelBlink;
+            configuration.Save();
+        }
+
+        var channelCount = configuration.ChannelUnreadCountColor;
+        if (ImGui.ColorEdit4("Channel unread count colour", ref channelCount))
+        {
+            configuration.ChannelUnreadCountColor = channelCount;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Only applies to tabs with \"Blink + red unread count on new messages\" enabled (see Tabs).");
+
+        var whisperColor = configuration.WhisperNotifyColor;
+        if (ImGui.ColorEdit4("Whisper blink + unread colour", ref whisperColor))
+        {
+            configuration.WhisperNotifyColor = whisperColor;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Whisper tabs always blink/show an unread count - one shared colour for both.");
+
+        ImGui.Separator();
 
         var fontSize = configuration.FontSize;
         ImGui.SetNextItemWidth(200);

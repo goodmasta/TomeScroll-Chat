@@ -15,7 +15,6 @@ namespace CustomChat.Windows;
 /// tab out, jump to its settings, or (whisper tabs only) close the conversation.</summary>
 public sealed class MainWindow : Window, IDisposable
 {
-    private static readonly Vector4 UnreadRed = new(1f, 0.35f, 0.35f, 1f);
     private static readonly Vector4 BlinkBase = new(1f, 1f, 1f, 1f);
 
     private readonly Plugin plugin;
@@ -133,9 +132,15 @@ public sealed class MainWindow : Window, IDisposable
         var textY = itemMin.Y + (itemMax.Y - itemMin.Y - ImGui.GetTextLineHeight()) / 2f;
         var drawList = ImGui.GetWindowDrawList();
 
+        // Whisper tabs share one colour for both blink and count; regular tabs have them configured
+        // separately (both settings in Settings > General, both default to red).
+        var config = Plugin.Configuration;
+        var blinkColor = tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelBlinkColor;
+        var countColor = tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor;
+
         var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
         var nameColor = isBlinking
-            ? Vector4.Lerp(BlinkBase, UnreadRed, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
+            ? Vector4.Lerp(BlinkBase, blinkColor, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
             : BlinkBase;
 
         var namePos = new Vector2(itemMin.X + 4, textY);
@@ -144,7 +149,7 @@ public sealed class MainWindow : Window, IDisposable
         if (tab.UnreadCount > 0)
         {
             var countPos = new Vector2(namePos.X + ImGui.CalcTextSize(tab.Name).X + 4, textY);
-            drawList.AddText(countPos, ImGui.ColorConvertFloat4ToU32(UnreadRed), $"({tab.UnreadCount})");
+            drawList.AddText(countPos, ImGui.ColorConvertFloat4ToU32(countColor), $"({tab.UnreadCount})");
         }
     }
 
