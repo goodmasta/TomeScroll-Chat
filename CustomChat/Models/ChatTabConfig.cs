@@ -53,8 +53,11 @@ public sealed class ChatTabConfig
     /// opt-in setting.</summary>
     public bool NotifyOnNewMessage { get; set; }
 
-    /// <summary>Session-only unread counter, shown in the sidebar - never persisted.</summary>
-    [JsonIgnore]
+    /// <summary>Unread counter shown in the sidebar. Persisted so it survives a plugin reload/game
+    /// restart - see <see cref="Plugin.Dispose"/> (saved on unload) and the places in
+    /// <c>Windows/MainWindow.cs</c> that clear it (saved immediately, since those are infrequent
+    /// user actions, unlike the increment on every incoming message, which deliberately does not
+    /// save every time to avoid a disk write per chat line).</summary>
     public int UnreadCount { get; set; }
 
     /// <summary>Whisper tabs always notify; regular tabs only if the user opted in.</summary>

@@ -236,6 +236,11 @@ public sealed class Plugin : IDalamudPlugin
 
     public void Dispose()
     {
+        // Persist final unread counts (see ChatTabConfig.UnreadCount) - they aren't saved on every
+        // increment to avoid a disk write per chat line, only here and on explicit "mark as read"
+        // actions, so a clean unload/reload doesn't lose them.
+        TabManager.Save();
+
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;

@@ -124,7 +124,11 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.Selectable($"##tab_{tab.Id}", selected))
         {
             selectedTabId = tab.Id;
-            tab.UnreadCount = 0;
+            if (tab.UnreadCount != 0)
+            {
+                tab.UnreadCount = 0;
+                plugin.TabManager.Save();
+            }
         }
 
         var itemMin = ImGui.GetItemRectMin();
@@ -158,7 +162,10 @@ public sealed class MainWindow : Window, IDisposable
         using (ImRaii.Disabled(tab.UnreadCount == 0))
         {
             if (ImGui.MenuItem("Mark all as read"))
+            {
                 tab.UnreadCount = 0;
+                plugin.TabManager.Save();
+            }
         }
 
         ImGui.Separator();
@@ -234,7 +241,12 @@ public sealed class MainWindow : Window, IDisposable
         {
             if (tab.Id == tabId)
             {
-                tab.UnreadCount = 0;
+                if (tab.UnreadCount != 0)
+                {
+                    tab.UnreadCount = 0;
+                    plugin.TabManager.Save();
+                }
+
                 break;
             }
         }
