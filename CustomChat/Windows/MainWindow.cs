@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
@@ -38,6 +39,16 @@ public sealed class MainWindow : Window, IDisposable
 
         // Always stays on top of other plugin windows instead of getting buried behind them.
         IsTopMost = true;
+
+        // No collapse triangle - a gear button that opens Settings takes its place instead.
+        Flags |= ImGuiWindowFlags.NoCollapse;
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.Cog,
+            IconOffset = new Vector2(2, 1),
+            ShowTooltip = () => ImGui.SetTooltip("Custom Chat settings"),
+            Click = _ => plugin.OpenSettings(),
+        });
     }
 
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>

@@ -168,6 +168,13 @@ public sealed class Plugin : IDalamudPlugin
         configWindow.FocusTab(tabId);
     }
 
+    /// <summary>Opens/focuses the settings window - the main chat window's title bar gear button.</summary>
+    public void OpenSettings()
+    {
+        configWindow.IsOpen = true;
+        configWindow.RequestFocus = true;
+    }
+
     public void ApplyNativeChatHidden() => nativeChatHider.Active = Configuration.HideNativeChat;
 
     public void RefreshEmotes()
