@@ -23,6 +23,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
+    [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -37,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     public TranslationService TranslationService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
+    public PartyInviteService PartyInviteService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly EnterToChatService enterToChatService;
@@ -58,7 +60,9 @@ public sealed class Plugin : IDalamudPlugin
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         TranslationService = new TranslationService(Log);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
-        FriendListService = new FriendListService(DataManager, Log);
+        var worldIdResolver = new WorldIdResolver(DataManager, Log);
+        FriendListService = new FriendListService(worldIdResolver, Log);
+        PartyInviteService = new PartyInviteService(worldIdResolver, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -153,6 +157,21 @@ public sealed class Plugin : IDalamudPlugin
             mainWindow.SelectTab(tab.Id);
             mainWindow.RequestFocus = true;
         }
+    }
+
+    /// <summary>Sends a party invite to a "Name@World" key - the message context menu's "Send Party
+    /// Invite" handler. There's no ImGui-side confirmation the invite actually reached anyone (unlike
+    /// opening a tab, which is visibly immediate), so this shows a toast either way.</summary>
+    public void SendPartyInvite(string partnerKey)
+    {
+        var at = partnerKey.IndexOf('@');
+        if (at <= 0)
+            return;
+
+        var name = partnerKey[..at];
+        var world = partnerKey[(at + 1)..];
+        var sent = PartyInviteService.Invite(name, world);
+        ToastGui.ShowNormal(sent ? $"Party invite sent to {name}." : $"Couldn't send a party invite to {name}.");
     }
 
     public void SetTabDetached(ChatTabConfig tab, bool detached)

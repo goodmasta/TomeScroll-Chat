@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
@@ -10,18 +9,16 @@ namespace CustomChat.Services;
 /// configurable emoji marker prefix. The game's <see cref="InfoProxyFriendList"/> entries don't
 /// carry the character's name directly (only content id / world), so rather than enumerating and
 /// resolving names ourselves, this uses the game's own <c>GetEntryByName</c> lookup - which needs a
-/// world *row id*, not a name, so a small Name-&gt;World-id index is built once from the World
-/// Excel sheet via <see cref="IDataManager"/>.
+/// world *row id*, resolved via the shared <see cref="WorldIdResolver"/>.
 /// </summary>
 public sealed unsafe class FriendListService
 {
-    private readonly IDataManager dataManager;
+    private readonly WorldIdResolver worldIdResolver;
     private readonly IPluginLog log;
-    private Dictionary<string, ushort>? worldIdsByName;
 
-    public FriendListService(IDataManager dataManager, IPluginLog log)
+    public FriendListService(WorldIdResolver worldIdResolver, IPluginLog log)
     {
-        this.dataManager = dataManager;
+        this.worldIdResolver = worldIdResolver;
         this.log = log;
 
         try
@@ -51,7 +48,7 @@ public sealed unsafe class FriendListService
 
         try
         {
-            var worldId = ResolveWorldId(world);
+            var worldId = worldIdResolver.Resolve(world);
             if (worldId == null)
                 return false;
 
@@ -67,35 +64,5 @@ public sealed unsafe class FriendListService
             log.Warning(ex, "CustomChat: friend list lookup failed for {Name}@{World}", name, world);
             return false;
         }
-    }
-
-    private ushort? ResolveWorldId(string worldName)
-    {
-        worldIdsByName ??= BuildWorldIndex();
-        return worldIdsByName.TryGetValue(worldName, out var id) ? id : null;
-    }
-
-    private Dictionary<string, ushort> BuildWorldIndex()
-    {
-        var dict = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            var sheet = dataManager.GetExcelSheet<Lumina.Excel.Sheets.World>();
-            if (sheet != null)
-            {
-                foreach (var world in sheet)
-                {
-                    var name = world.Name.ToString();
-                    if (!string.IsNullOrEmpty(name))
-                        dict[name] = (ushort)world.RowId;
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "CustomChat: failed to build world name index for friend list lookups");
-        }
-
-        return dict;
     }
 }
