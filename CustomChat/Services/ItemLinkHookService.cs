@@ -51,7 +51,11 @@ public sealed unsafe class ItemLinkHookService : IDisposable
             var address = AgentChatLog.Addresses.LinkItem.Value;
             hook = gameInteropProvider.HookFromAddress<LinkItemDelegate>(address, Detour);
             hook.Enable();
-            log.Info("CustomChat: hooked AgentChatLog.LinkItem at 0x{Address:X}", address);
+            // Temporarily Warning, not Info, purely for diagnosis - a prior test showed no CustomChat
+            // log lines at all around plugin load despite it loading successfully, suggesting this
+            // user's Dalamud log level filters out Info for this plugin. Warning is confirmed visible
+            // in their log (other plugins' Warnings show up fine). Revert to Info once confirmed working.
+            log.Warning("CustomChat: hooked AgentChatLog.LinkItem at 0x{Address:X}", address);
         }
         catch (Exception ex)
         {
@@ -61,7 +65,8 @@ public sealed unsafe class ItemLinkHookService : IDisposable
 
     private void Detour(AgentChatLog* agent, uint itemId)
     {
-        log.Info("CustomChat: native item link detected - raw item id {ItemId}", itemId);
+        // Also temporarily Warning - see the matching comment in the constructor.
+        log.Warning("CustomChat: native item link detected - raw item id {ItemId}", itemId);
         try
         {
             var isHq = itemId is >= HqOffset and < HqOffset * 2;
