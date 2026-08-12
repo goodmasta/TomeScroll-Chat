@@ -93,20 +93,24 @@ public static class ChatMessageRenderer
         ImGui.Spacing();
     }
 
-    /// <summary>Draws one message row. Returns whether it was scrolled into view this frame.</summary>
+    /// <summary>
+    /// Draws one message row. The whole row (timestamp through the last wrapped line of the body,
+    /// full window width) highlights on hover and owns a single unified right-click menu - drawn via
+    /// <see cref="ImDrawList.ChannelsSplit"/> so the highlight rectangle can be painted *behind* the
+    /// already-drawn text/images: the row's true height isn't known until after everything inside it
+    /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
+    /// Returns whether it was scrolled into view this frame.
+    /// </summary>
     private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend)
     {
+        var drawList = ImGui.GetWindowDrawList();
+        drawList.ChannelsSplit(2);
+        drawList.ChannelsSetCurrent(1); // foreground: the real content, drawn first so its rect is known
+
+        ImGui.BeginGroup();
+
         ImGui.TextDisabled(msg.TimestampUtc.ToLocalTime().ToString("HH:mm"));
         var isVisible = ImGui.IsItemVisible();
-
-        // Right-click the timestamp to copy the whole message ("[HH:mm] Sender: body") - always
-        // available, even for system/echo lines that have no sender to right-click.
-        if (ImGui.BeginPopupContextItem($"msgctx_{index}"))
-        {
-            if (ImGui.MenuItem("Copy message"))
-                ImGui.SetClipboardText(BuildCopyText(msg));
-            ImGui.EndPopup();
-        }
 
         ImGui.SameLine(0, 4);
 
@@ -153,19 +157,6 @@ public static class ChatMessageRenderer
             ImGui.TextUnformatted($"{sender}:");
             ImGui.PopStyleColor();
 
-            // Right-click a sender name to whisper them - the game's own "Send Tell" menu item only
-            // works from native UI (party list, target, etc.) and does nothing here since this window
-            // isn't a native addon, so this is the only way to whisper someone straight from chat.
-            if (!string.IsNullOrEmpty(msg.SenderKey) && ImGui.BeginPopupContextItem($"senderctx_{index}"))
-            {
-                if (ImGui.MenuItem("Send Tell"))
-                    onSendTell(msg.SenderKey);
-                ImGui.Separator();
-                if (ImGui.MenuItem("Copy message"))
-                    ImGui.SetClipboardText(BuildCopyText(msg));
-                ImGui.EndPopup();
-            }
-
             ImGui.SameLine(0, 4);
         }
 
@@ -180,6 +171,61 @@ public static class ChatMessageRenderer
         ImGui.PopStyleColor();
 
         ImGui.Unindent(indentWidth);
+
+        ImGui.EndGroup();
+
+        // Full window width, not just the content's own (often narrower) bounding box - a hover
+        // highlight that stopped at the last glyph would look like a text selection box, not a row.
+        var rowMin = ImGui.GetItemRectMin();
+        var rowMax = new Vector2(ImGui.GetWindowContentRegionMax().X + ImGui.GetWindowPos().X, ImGui.GetItemRectMax().Y);
+
+        var popupId = $"msgctx_{index}";
+        var rawHovered = ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(rowMin, rowMax);
+        // Keeps the row highlighted while its own menu is open, even after the mouse has moved onto
+        // the popup itself (which un-hovers the "Messages" child window underneath it).
+        var highlightActive = rawHovered || ImGui.IsPopupOpen(popupId);
+
+        drawList.ChannelsSetCurrent(0); // background: painted after the content, but rendered behind it
+        if (highlightActive)
+            drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(ImGuiCol.HeaderHovered, 0.4f));
+        drawList.ChannelsMerge();
+
+        if (rawHovered && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+            ImGui.OpenPopup(popupId);
+
+        if (ImGui.BeginPopup(popupId))
+        {
+            if (ImGui.MenuItem("Copy message"))
+                ImGui.SetClipboardText(BuildCopyText(msg));
+
+            if (!string.IsNullOrEmpty(msg.SenderName) && ImGui.MenuItem("Copy nickname"))
+                ImGui.SetClipboardText(msg.SenderName);
+
+            // Whispering yourself makes no sense, and the game's own "Send Tell" menu item only works
+            // from native UI (party list, target, etc.) and does nothing here since this window isn't
+            // a native addon - this is the only way to whisper someone straight from chat.
+            if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Tell"))
+                onSendTell(msg.SenderKey);
+
+            var links = LinkDetector.Split(msg.Body).Where(s => s.IsLink).Select(s => s.Slice(msg.Body)).Distinct().ToList();
+            if (links.Count == 1)
+            {
+                if (ImGui.MenuItem("Copy link"))
+                    ImGui.SetClipboardText(LinkDetector.NormalizeForBrowser(links[0]));
+            }
+            else if (links.Count > 1 && ImGui.BeginMenu("Copy link"))
+            {
+                foreach (var link in links)
+                {
+                    if (ImGui.MenuItem(link))
+                        ImGui.SetClipboardText(LinkDetector.NormalizeForBrowser(link));
+                }
+
+                ImGui.EndMenu();
+            }
+
+            ImGui.EndPopup();
+        }
 
         return isVisible;
     }
