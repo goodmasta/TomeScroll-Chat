@@ -86,12 +86,26 @@ public sealed class DetachedTabWindow : Window, IDisposable
             return;
 
         var lastSpaceIndex = line.LastIndexOf(' ');
-        if (lastSpaceIndex <= 0)
+        if (lastSpaceIndex > 0)
+        {
+            var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
+            data.DeleteChars(spaceByteOffset, 1);
+            data.InsertChars(spaceByteOffset, "\n");
             return;
+        }
 
-        var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
-        data.DeleteChars(spaceByteOffset, 1);
-        data.InsertChars(spaceByteOffset, "\n");
+        // No space anywhere in the line - see MainWindow's version for the full reasoning. Hard-break
+        // by scanning backward per .NET character index (never a raw byte count) for the longest
+        // prefix that still fits.
+        for (var i = line.Length - 1; i > 0; i--)
+        {
+            if (ImGui.CalcTextSize(line[..i]).X > wrapWidth)
+                continue;
+
+            var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
+            data.InsertChars(breakByteOffset, "\n");
+            return;
+        }
     }
 
     // Same Discord-style "last read position" tracking as MainWindow - see its DrawContent for the

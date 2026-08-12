@@ -563,12 +563,28 @@ public sealed class MainWindow : Window, IDisposable
             return;
 
         var lastSpaceIndex = line.LastIndexOf(' ');
-        if (lastSpaceIndex <= 0)
+        if (lastSpaceIndex > 0)
+        {
+            var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
+            data.DeleteChars(spaceByteOffset, 1);
+            data.InsertChars(spaceByteOffset, "\n");
             return;
+        }
 
-        var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
-        data.DeleteChars(spaceByteOffset, 1);
-        data.InsertChars(spaceByteOffset, "\n");
+        // No space anywhere in the line (one long unbroken word/URL/etc, or - as reported - random
+        // text with no spaces at all) - the earlier "leave it alone" behavior here just meant the line
+        // never wrapped at all in that case. Hard-break instead: scan backward by .NET *character*
+        // index (never a raw byte count, which could land mid-codepoint for multi-byte UTF-8 like
+        // Cyrillic) for the longest prefix that still fits, and break right after it.
+        for (var i = line.Length - 1; i > 0; i--)
+        {
+            if (ImGui.CalcTextSize(line[..i]).X > wrapWidth)
+                continue;
+
+            var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
+            data.InsertChars(breakByteOffset, "\n");
+            return;
+        }
     }
 
     /// <summary>The message input box - a multi-line box (see <see cref="GetComposeBoxHeight"/>) so
