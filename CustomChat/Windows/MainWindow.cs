@@ -240,13 +240,21 @@ public sealed class MainWindow : Window, IDisposable
         {
             if (child.Success)
             {
-                // Snapshot the list: closing a whisper tab from the context menu below mutates
-                // TabManager.Tabs mid-draw, which would otherwise throw iterating the live list.
-                foreach (var tab in plugin.TabManager.Tabs.ToList())
-                {
-                    if (tab.IsDetached)
-                        continue;
+                // Snapshot (and reorder) the list: closing a whisper tab from the context menu below
+                // mutates TabManager.Tabs mid-draw, which would otherwise throw iterating the live
+                // list. Regular tabs always keep their existing relative order and stay above every
+                // PM tab; within the PM tabs specifically, unread ones bubble to the top of that
+                // group (not above the regular tabs) so a new whisper is easy to spot without
+                // reshuffling the whole sidebar. OrderBy/ThenBy are stable, so ties (same PM-ness,
+                // same unread-ness) keep their original relative order.
+                var orderedTabs = plugin.TabManager.Tabs
+                    .Where(t => !t.IsDetached)
+                    .OrderBy(t => t.IsPmTab ? 1 : 0)
+                    .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 ? 0 : 1)
+                    .ToList();
 
+                foreach (var tab in orderedTabs)
+                {
                     DrawTabRow(tab);
 
                     if (ImGui.BeginPopupContextItem($"ctx_{tab.Id}"))
