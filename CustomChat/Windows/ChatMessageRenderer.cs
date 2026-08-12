@@ -346,6 +346,10 @@ public static class ChatMessageRenderer
         if (tab.ColorOverrides.TryGetValue(chatType, out var packed))
             return ImGui.ColorConvertU32ToFloat4(packed);
 
-        return DefaultColors.GetValueOrDefault(chatType, FallbackColor);
+        return GetDefaultColor(chatType);
     }
+
+    /// <summary>The colour a channel renders with when a tab has no <see cref="ChatTabConfig.ColorOverrides"/>
+    /// entry for it - used by <see cref="Windows.ConfigWindow"/> to pre-fill the per-tab colour pickers.</summary>
+    public static Vector4 GetDefaultColor(XivChatType chatType) => DefaultColors.GetValueOrDefault(chatType, FallbackColor);
 }

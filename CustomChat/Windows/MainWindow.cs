@@ -151,18 +151,34 @@ public sealed class MainWindow : Window, IDisposable
         var textY = itemMin.Y + (itemMax.Y - itemMin.Y - ImGui.GetTextLineHeight()) / 2f;
         var drawList = ImGui.GetWindowDrawList();
 
-        // Whisper tabs share one colour for both blink and count; regular tabs have them configured
-        // separately (both settings in Settings > General, both default to red).
+        // Per-tab override (see Settings > Tabs) if set, otherwise the global default from
+        // Settings > General - whisper tabs default to WhisperNotifyColor, regular tabs to the
+        // separate blink/count defaults.
         var config = Plugin.Configuration;
-        var blinkColor = tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelBlinkColor;
-        var countColor = tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor;
+        var blinkColor = tab.BlinkColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelBlinkColor);
+        var countColor = tab.UnreadCountColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor);
 
         var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
         var nameColor = isBlinking
             ? Vector4.Lerp(BlinkBase, blinkColor, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
             : BlinkBase;
 
-        var namePos = new Vector2(itemMin.X + 4, textY);
+        var textX = itemMin.X + 4;
+
+        if (!string.IsNullOrEmpty(tab.IconEmoji))
+        {
+            var iconSize = ImGui.GetTextLineHeight();
+            var iconTexture = plugin.EmoteService.TryGetTexture(tab.IconEmoji);
+            if (iconTexture != null)
+            {
+                var iconMin = new Vector2(textX, textY);
+                drawList.AddImage(iconTexture.Handle, iconMin, iconMin + new Vector2(iconSize, iconSize));
+            }
+
+            textX += iconSize + 4;
+        }
+
+        var namePos = new Vector2(textX, textY);
         drawList.AddText(namePos, ImGui.ColorConvertFloat4ToU32(nameColor), tab.Name);
 
         if (tab.UnreadCount > 0)

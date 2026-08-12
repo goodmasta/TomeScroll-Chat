@@ -16,6 +16,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private Guid? focusedTabId;
     private string newTabName = string.Empty;
     private string friendMarkerSearch = string.Empty;
+    private string tabIconSearch = string.Empty;
 
     public ConfigWindow(Plugin plugin)
         : base("Custom Chat Settings###CustomChatConfigWindow")
@@ -93,27 +94,27 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted("Unread notifications");
 
         var channelBlink = configuration.ChannelBlinkColor;
-        if (ImGui.ColorEdit4("Channel blink colour", ref channelBlink))
+        if (ImGui.ColorEdit4("Default channel blink colour", ref channelBlink))
         {
             configuration.ChannelBlinkColor = channelBlink;
             configuration.Save();
         }
 
         var channelCount = configuration.ChannelUnreadCountColor;
-        if (ImGui.ColorEdit4("Channel unread count colour", ref channelCount))
+        if (ImGui.ColorEdit4("Default channel unread count colour", ref channelCount))
         {
             configuration.ChannelUnreadCountColor = channelCount;
             configuration.Save();
         }
-        ImGui.TextDisabled("Only applies to tabs with \"Blink + red unread count on new messages\" enabled (see Tabs).");
+        ImGui.TextDisabled("Used by tabs with \"Blink + red unread count on new messages\" enabled that haven't set their own colour (see Tabs).");
 
         var whisperColor = configuration.WhisperNotifyColor;
-        if (ImGui.ColorEdit4("Whisper blink + unread colour", ref whisperColor))
+        if (ImGui.ColorEdit4("Default whisper blink + unread colour", ref whisperColor))
         {
             configuration.WhisperNotifyColor = whisperColor;
             configuration.Save();
         }
-        ImGui.TextDisabled("Whisper tabs always blink/show an unread count - one shared colour for both.");
+        ImGui.TextDisabled("Whisper tabs always blink/show an unread count, and share one colour for both, unless overridden per-tab (see Tabs).");
 
         ImGui.Separator();
 
@@ -252,6 +253,78 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.TabManager.Save();
         }
 
+        // A real emote image next to the tab name in the sidebar, not literal Unicode text - typing
+        // an emoji character into the Name field above wouldn't render (Dalamud's UI font has no
+        // colour-emoji glyphs), same reasoning as the friend marker in Settings > General.
+        var iconTexture = string.IsNullOrEmpty(tab.IconEmoji) ? null : plugin.EmoteService.TryGetTexture(tab.IconEmoji);
+        if (iconTexture != null)
+        {
+            ImGui.Image(iconTexture.Handle, new Vector2(20, 20));
+            ImGui.SameLine();
+        }
+
+        var iconLabel = string.IsNullOrEmpty(tab.IconEmoji) ? "Choose tab icon..." : $"Icon: {tab.IconEmoji}";
+        if (ImGui.Button($"{iconLabel}##tabIconPicker_{tab.Id}"))
+        {
+            tabIconSearch = string.Empty;
+            ImGui.OpenPopup($"TabIconPicker_{tab.Id}");
+        }
+
+        EmotePicker.Draw($"TabIconPicker_{tab.Id}", plugin.EmoteService, ref tabIconSearch, code =>
+        {
+            tab.IconEmoji = code;
+            plugin.TabManager.Save();
+        });
+
+        if (!string.IsNullOrEmpty(tab.IconEmoji))
+        {
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"Clear icon##clearIcon_{tab.Id}"))
+            {
+                tab.IconEmoji = null;
+                plugin.TabManager.Save();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Notification colours (this tab)");
+
+        var defaultBlink = tab.IsPmTab ? configuration.WhisperNotifyColor : configuration.ChannelBlinkColor;
+        var blink = tab.BlinkColorOverride ?? defaultBlink;
+        if (ImGui.ColorEdit4($"Blink colour##blink_{tab.Id}", ref blink))
+        {
+            tab.BlinkColorOverride = blink;
+            plugin.TabManager.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!tab.BlinkColorOverride.HasValue))
+        {
+            if (ImGui.SmallButton($"Use default##blinkreset_{tab.Id}"))
+            {
+                tab.BlinkColorOverride = null;
+                plugin.TabManager.Save();
+            }
+        }
+
+        var defaultCount = tab.IsPmTab ? configuration.WhisperNotifyColor : configuration.ChannelUnreadCountColor;
+        var count = tab.UnreadCountColorOverride ?? defaultCount;
+        if (ImGui.ColorEdit4($"Unread count colour##count_{tab.Id}", ref count))
+        {
+            tab.UnreadCountColorOverride = count;
+            plugin.TabManager.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!tab.UnreadCountColorOverride.HasValue))
+        {
+            if (ImGui.SmallButton($"Use default##countreset_{tab.Id}"))
+            {
+                tab.UnreadCountColorOverride = null;
+                plugin.TabManager.Save();
+            }
+        }
+
+        ImGui.Spacing();
+
         if (!tab.IsPmTab)
         {
             using (var child = ImRaii.Child($"channels_{tab.Id}", new Vector2(0, 220), true))
@@ -272,6 +345,32 @@ public sealed class ConfigWindow : Window, IDisposable
                                     else
                                         tab.Channels.Remove(type);
                                     plugin.TabManager.Save();
+                                }
+
+                                if (!enabled)
+                                    continue;
+
+                                // A compact colour swatch (no inline text/label - the checkbox already
+                                // has one) for this specific message type, only shown once the channel
+                                // is actually part of the tab. Pre-filled from the existing override, or
+                                // the built-in default colour when there isn't one yet.
+                                ImGui.SameLine();
+                                var hasOverride = tab.ColorOverrides.TryGetValue(type, out var packed);
+                                var color = hasOverride ? ImGui.ColorConvertU32ToFloat4(packed) : ChatMessageRenderer.GetDefaultColor(type);
+                                if (ImGui.ColorEdit4($"##colorch_{tab.Id}_{type}", ref color, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoLabel | ImGuiColorEditFlags.AlphaPreview))
+                                {
+                                    tab.ColorOverrides[type] = ImGui.ColorConvertFloat4ToU32(color);
+                                    plugin.TabManager.Save();
+                                }
+
+                                if (hasOverride)
+                                {
+                                    ImGui.SameLine();
+                                    if (ImGui.SmallButton($"Reset##colorreset_{tab.Id}_{type}"))
+                                    {
+                                        tab.ColorOverrides.Remove(type);
+                                        plugin.TabManager.Save();
+                                    }
                                 }
                             }
                         }

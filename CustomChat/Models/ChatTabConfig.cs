@@ -47,6 +47,19 @@ public sealed class ChatTabConfig
     /// <summary>Per-channel colour overrides (ABGR uint as ImGui expects). Empty = use global defaults from <see cref="Configuration"/>.</summary>
     public Dictionary<XivChatType, uint> ColorOverrides { get; set; } = new();
 
+    /// <summary>Emote code (see <see cref="EmoteDefinition"/>) shown as a small icon before this tab's
+    /// name in the sidebar. Null = no icon. A real emote image, not literal Unicode text, since
+    /// Dalamud's UI font has no colour-emoji glyphs to type into the name field directly.</summary>
+    public string? IconEmoji { get; set; }
+
+    /// <summary>Per-tab override for the sidebar blink colour. Null = use <see cref="Configuration.ChannelBlinkColor"/>
+    /// (or <see cref="Configuration.WhisperNotifyColor"/> for whisper tabs).</summary>
+    public Vector4? BlinkColorOverride { get; set; }
+
+    /// <summary>Per-tab override for the sidebar unread-count colour. Null = use <see cref="Configuration.ChannelUnreadCountColor"/>
+    /// (or <see cref="Configuration.WhisperNotifyColor"/> for whisper tabs).</summary>
+    public Vector4? UnreadCountColorOverride { get; set; }
+
     /// <summary>Whether new messages make this tab blink and show a red unread count in the sidebar.
     /// Whisper tabs always behave this way regardless of this flag (see
     /// <see cref="ChatTabConfig.ShouldNotify"/>) - this only matters for regular tabs, where it's an
