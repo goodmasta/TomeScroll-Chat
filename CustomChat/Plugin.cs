@@ -63,6 +63,14 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin()
     {
+        // TEMPORARY build-verification marker (2026-08-13) - /xllog showed literally zero CustomChat-
+        // sourced lines even at DBG verbosity despite the plugin loading successfully, which cast doubt
+        // on whether the dev-plugin path Dalamud loads from was actually picking up rebuilt DLLs at
+        // all. ChatGui.Print goes straight into the native chat pipeline (which this plugin's own
+        // ChatCaptureService also listens to unconditionally), so it's visible directly in the chat
+        // window regardless of any log-level filtering - remove once that's confirmed either way.
+        ChatGui.Print("CustomChat: plugin build loaded (diagnostic marker, remove me)");
+
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
         TabManager = new TabManager(Configuration);
