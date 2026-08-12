@@ -52,7 +52,7 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 - Right-clicking anywhere in a message opens one menu:
   - A header naming who it's from (**You** for your own messages, including outgoing tells).
   - **Copy message** - the whole line as `[HH:mm] Sender: text`.
-  - **Translate** / **Hide translation** - see [Translation](#translation) below.
+  - **Translate** / **Retranslate** / **Hide translation** - see [Translation](#translation) below.
   - **Copy nickname**.
   - **Send Tell** (not shown on your own messages).
   - **Send Party Invite** (not shown on your own messages) - works by name+world, same as the `/invite` command, no need to target/see the player.
@@ -66,7 +66,7 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 
 ## Translation
 
-- Right-click a message → **Translate** to see it translated inline, under the original text.
+- Right-click a message → **Translate** to see it translated inline, under the original text. **Retranslate** re-fetches (e.g. after changing the target language) without needing to hide and re-translate first.
 - Source language is always detected automatically; the target language is set once in **Settings → General → "Translate messages to"** (~20 common languages).
 - Uses Google Translate's free, unofficial endpoint - no API key or billing setup needed, but also not an officially supported integration, so it could occasionally be rate-limited or stop working without notice.
 

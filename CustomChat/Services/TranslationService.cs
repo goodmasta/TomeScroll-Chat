@@ -54,6 +54,17 @@ public sealed class TranslationService : IDisposable
         _ = TranslateAsync(message, targetLanguage);
     }
 
+    /// <summary>Always re-fetches, even if a translation is already cached - "Retranslate" in the
+    /// message context menu, for when the target language was changed after the fact or the first
+    /// result just looked wrong. A no-op while one's already in flight for this message.</summary>
+    public void ForceRetranslate(ChatMessageRecord message, string targetLanguage)
+    {
+        if (string.IsNullOrWhiteSpace(message.Body) || !inFlight.TryAdd(message, 0))
+            return;
+
+        _ = TranslateAsync(message, targetLanguage);
+    }
+
     private async Task TranslateAsync(ChatMessageRecord message, string targetLanguage)
     {
         try

@@ -187,7 +187,10 @@ public static class ChatMessageRenderer
         {
             ImGui.PushStyleColor(ImGuiCol.Text, TranslationColor);
             ImGui.PushTextWrapPos(ImGui.GetWindowContentRegionMax().X);
-            ImGui.TextUnformatted($"→ {translatedText}");
+            // "Retranslate" re-fetches without clearing the old text first, so the previous
+            // translation stays visible (rather than briefly disappearing) while the new one loads -
+            // the "..." is the only sign a refresh is in progress.
+            ImGui.TextUnformatted(translation.IsTranslating(msg) ? $"→ {translatedText} ..." : $"→ {translatedText}");
             ImGui.PopTextWrapPos();
             ImGui.PopStyleColor();
         }
@@ -239,6 +242,9 @@ public static class ChatMessageRenderer
             {
                 if (translatedText != null)
                 {
+                    if (ImGui.MenuItem("Retranslate"))
+                        translation.ForceRetranslate(msg, config.TranslateTargetLanguage);
+
                     if (ImGui.MenuItem("Hide translation"))
                         translation.ClearTranslation(msg);
                 }
