@@ -30,6 +30,18 @@ public sealed class EmoteService : IDisposable
     private const string BttvGlobalUrl = "https://api.betterttv.net/3/cached/emotes/global";
     private const string SevenTvGlobalUrl = "https://7tv.io/v3/emote-sets/global";
 
+    // jsdelivr (the primary Twemoji host) is unreachable from some regions, which otherwise leaves
+    // every standard-emoji image stuck permanently unloaded - and ChatMessageRenderer.DrawEmote falls
+    // back to printing the raw code as plain text when a texture never finishes loading, which looks
+    // indistinguishable from "the emote feature doesn't work" even though everything else is fine.
+    // Mirrors are tried in order and the first one that succeeds wins.
+    private static readonly string[] TwemojiMirrors =
+    {
+        "https://cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/72x72/{0}.png",
+        "https://raw.githubusercontent.com/twitter/twemoji/v14.0.2/assets/72x72/{0}.png",
+        "https://cdn.statically.io/gh/twitter/twemoji/v14.0.2/assets/72x72/{0}.png",
+    };
+
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(15) };
     private readonly ITextureProvider textureProvider;
     private readonly IPluginLog log;
@@ -244,7 +256,10 @@ public sealed class EmoteService : IDisposable
             }
         }
 
-        var bytes = await http.GetByteArrayAsync(def.ImageUrl, cts.Token).ConfigureAwait(false);
+        var bytes = def.Provider == EmoteProvider.Standard
+            ? await DownloadFromMirrorsAsync(def).ConfigureAwait(false)
+            : await http.GetByteArrayAsync(def.ImageUrl, cts.Token).ConfigureAwait(false);
+
         try
         {
             await File.WriteAllBytesAsync(cachePath, bytes, cts.Token).ConfigureAwait(false);
@@ -255,6 +270,26 @@ public sealed class EmoteService : IDisposable
         }
 
         return bytes;
+    }
+
+    /// <summary>Tries every Twemoji mirror in order (def.Id is the raw hex codepoint for standard
+    /// emoji) and returns the first successful download - see <see cref="TwemojiMirrors"/> for why.</summary>
+    private async Task<byte[]> DownloadFromMirrorsAsync(EmoteDefinition def)
+    {
+        Exception? lastError = null;
+        foreach (var mirror in TwemojiMirrors)
+        {
+            try
+            {
+                return await http.GetByteArrayAsync(string.Format(mirror, def.Id), cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException($"No Twemoji mirrors configured for {def.Code}");
     }
 
     private bool TryLoadManifestFromDisk(TimeSpan ttl)
