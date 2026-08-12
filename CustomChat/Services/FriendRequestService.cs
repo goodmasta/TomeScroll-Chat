@@ -1,6 +1,3 @@
-using System;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Plugin.Services;
 
 namespace CustomChat.Services;
@@ -33,27 +30,16 @@ public sealed class FriendRequestService
     /// tell the user that, rather than implying the request was sent.</returns>
     public bool TrySend(string name, string world)
     {
-        foreach (var obj in objectTable)
-        {
-            if (obj.ObjectKind != ObjectKind.Pc || obj is not IPlayerCharacter pc)
-                continue;
+        var obj = NearbyPlayerLookup.Find(objectTable, name, world);
+        if (obj == null)
+            return false;
 
-            if (!string.Equals(obj.Name.TextValue, name, StringComparison.Ordinal))
-                continue;
-
-            var objWorld = pc.HomeWorld.ValueNullable?.Name.ToString();
-            if (!string.Equals(objWorld, world, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            // Restored right after sending - targeting them is only a means to give the command
-            // something to point "<t>" at, not something the player asked to change.
-            var previousTarget = targetManager.Target;
-            targetManager.Target = obj;
-            chatSendService.Send(string.Empty, "/friendlist add <t>");
-            targetManager.Target = previousTarget;
-            return true;
-        }
-
-        return false;
+        // Restored right after sending - targeting them is only a means to give the command
+        // something to point "<t>" at, not something the player asked to change.
+        var previousTarget = targetManager.Target;
+        targetManager.Target = obj;
+        chatSendService.Send(string.Empty, "/friendlist add <t>");
+        targetManager.Target = previousTarget;
+        return true;
     }
 }

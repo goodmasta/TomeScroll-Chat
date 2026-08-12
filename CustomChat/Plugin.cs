@@ -44,6 +44,7 @@ public sealed class Plugin : IDalamudPlugin
     public FriendListService FriendListService { get; }
     public PartyInviteService PartyInviteService { get; }
     public FriendRequestService FriendRequestService { get; }
+    public AdventurerPlateService AdventurerPlateService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly EnterToChatService enterToChatService;
@@ -69,6 +70,7 @@ public sealed class Plugin : IDalamudPlugin
         FriendListService = new FriendListService(worldIdResolver, Log);
         PartyInviteService = new PartyInviteService(worldIdResolver, Log);
         FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
+        AdventurerPlateService = new AdventurerPlateService(ObjectTable);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -197,6 +199,21 @@ public sealed class Plugin : IDalamudPlugin
         var world = partnerKey[(at + 1)..];
         var sent = FriendRequestService.TrySend(name, world);
         ToastGui.ShowNormal(sent ? $"Friend request sent to {name}." : $"{name} isn't nearby - can't send a friend request.");
+    }
+
+    /// <summary>Opens a player's Adventurer Plate - the message context menu's "View Adventurer
+    /// Plate" handler. Same "has to actually be nearby" limitation as <see cref="SendFriendRequest"/>
+    /// - see <see cref="AdventurerPlateService"/>.</summary>
+    public void ViewAdventurerPlate(string partnerKey)
+    {
+        var at = partnerKey.IndexOf('@');
+        if (at <= 0)
+            return;
+
+        var name = partnerKey[..at];
+        var world = partnerKey[(at + 1)..];
+        if (!AdventurerPlateService.TryOpen(name, world))
+            ToastGui.ShowNormal($"{name} isn't nearby - can't open their Adventurer Plate.");
     }
 
     /// <summary>Exports a tab's *entire* stored history (not just what's currently buffered in
