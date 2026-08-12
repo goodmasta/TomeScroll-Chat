@@ -68,9 +68,22 @@ public sealed class DetachedTabWindow : Window, IDisposable
         pendingScrollToDivider = dividerIndex >= 0;
     }
 
-    /// <summary>Same fade-while-unfocused behaviour as MainWindow.PreDraw - see there for the reasoning.</summary>
-    public override void PreDraw() =>
+    private static readonly Vector4 TitleBarColor = new(0f, 0f, 0f, 1f);
+
+    /// <summary>Same fade-while-unfocused and solid-black-title-bar behaviour as MainWindow.PreDraw -
+    /// see there for the reasoning.</summary>
+    public override void PreDraw()
+    {
         BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+
+        ImGui.PushStyleColor(ImGuiCol.TitleBg, TitleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, TitleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, TitleBarColor);
+    }
+
+    /// <summary>Pops the three colours pushed in <see cref="PreDraw"/> - see MainWindow.PostDraw for
+    /// why this can't just be tacked onto the end of <c>Draw()</c> instead.</summary>
+    public override void PostDraw() => ImGui.PopStyleColor(3);
 
     public override void Draw()
     {

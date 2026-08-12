@@ -94,12 +94,28 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
     public override void OnClose() => IsOpen = true;
 
+    private static readonly Vector4 TitleBarColor = new(0f, 0f, 0f, 1f);
+
     /// <summary>Fades the window background while unfocused (see <see cref="Configuration.FadeWindowWhenInactive"/>)
-    /// - has to happen in <c>PreDraw</c>, before <c>Begin()</c>, since <see cref="Window.BgAlpha"/> is
-    /// only read at that point. <see cref="Window.IsFocused"/> reflects last frame's focus state here
+    /// and forces a solid black title bar in every state (focused/unfocused/collapsed) instead of
+    /// whatever the current theme's accent colour is - has to happen in <c>PreDraw</c>, before
+    /// <c>Begin()</c>, since both <see cref="Window.BgAlpha"/> and any pushed style colours are only
+    /// picked up at that point. <see cref="Window.IsFocused"/> reflects last frame's focus state here
     /// (this frame's Begin() hasn't run yet), which is an imperceptible one-frame lag for a fade.</summary>
-    public override void PreDraw() =>
+    public override void PreDraw()
+    {
         BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+
+        ImGui.PushStyleColor(ImGuiCol.TitleBg, TitleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, TitleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, TitleBarColor);
+    }
+
+    /// <summary>Pops the three colours pushed in <see cref="PreDraw"/> - has to happen after
+    /// <c>End()</c>, which is why it can't just be tacked onto the end of <c>Draw()</c> (this window
+    /// never actually collapses, but <c>Draw()</c> only runs while the window is open and expanded,
+    /// same as any Dalamud window - <c>PostDraw</c> always runs regardless).</summary>
+    public override void PostDraw() => ImGui.PopStyleColor(3);
 
     /// <summary>Brings the window to front and focuses the current tab's input box - the "press Enter
     /// to open chat" keybind's handler (see <see cref="Services.EnterToChatService"/>).</summary>
