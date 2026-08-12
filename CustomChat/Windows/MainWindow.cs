@@ -25,6 +25,14 @@ public sealed class MainWindow : Window, IDisposable
     /// the message area got a visible border to actually compare it against.</summary>
     private const float TightRowSpacing = 2f;
 
+    /// <summary>How many lines tall the message compose box is - see <see cref="DrawInputRow"/> for
+    /// the Shift+Enter/Enter handling this enables (a single-line InputText can't hold a newline at
+    /// all). Fixed rather than auto-growing with content, to keep the sidebar/message-area height
+    /// alignment (see DrawSidebar) simple - both sides reserve space using this same constant.</summary>
+    private const int ComposeBoxLines = 3;
+
+    private static float ComposeBoxHeight => ImGui.GetTextLineHeightWithSpacing() * ComposeBoxLines;
+
     private readonly Plugin plugin;
     private Guid? selectedTabId;
     private string inputText = string.Empty;
@@ -179,8 +187,10 @@ public sealed class MainWindow : Window, IDisposable
         // Same reserve formula as DrawContent's "Messages" child (not the old flat -28px) so the
         // sidebar and message area end up exactly the same height, and "Close All PM" lines up evenly
         // with the input row instead of sitting at a slightly different Y from one hardcoded pixel
-        // count and the other computed from the current font/frame size.
-        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
+        // count and the other computed from the current font/frame size. Uses the same ComposeBoxHeight
+        // as the (now multi-line) input box, not a single frame height, so the two stay aligned now
+        // that the input row is taller than one line.
+        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
         using (var child = ImRaii.Child("Sidebar", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -369,8 +379,9 @@ public sealed class MainWindow : Window, IDisposable
         // see DrawInputRow, rather than a separate row of its own). Uses TightRowSpacing rather than
         // the theme's default ItemSpacing.Y, matching the spacing actually applied below the child
         // (see there) - otherwise this would over-reserve relative to what's really drawn, since the
-        // gap now visibly reads as a gap against the message area's own border.
-        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
+        // gap now visibly reads as a gap against the message area's own border. ComposeBoxHeight
+        // (not a single frame height) since the input is a multi-line box now, see DrawInputRow.
+        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -476,20 +487,20 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
-    /// <summary>The message input box with a "jump to bottom" button (always visible, but only
-    /// actually clickable while scrolled up from the bottom - see <see cref="canScrollToBottom"/>), a
-    /// "select text" toggle, and a Telegram/Discord-style emote-picker smiley button, all attached
-    /// flush to its right edge (zero spacing between all four) instead of any of them living on a
-    /// separate row.</summary>
+    /// <summary>The message input box - a multi-line box (see <see cref="ComposeBoxHeight"/>) so
+    /// Shift+Enter can insert an actual line break, Telegram/Discord-style - with a "jump to bottom"
+    /// button (always visible, but only actually clickable while scrolled up from the bottom - see
+    /// <see cref="canScrollToBottom"/>), a "select text" toggle, and an emote-picker smiley button, all
+    /// attached flush to its right edge (zero spacing between all four) instead of any of them living
+    /// on a separate row.</summary>
     private void DrawInputRow(ChatTabConfig tab)
     {
         var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetNextItemWidth(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X));
 
-        // Re-focusing after a send has to happen right before InputText is submitted (offset 0 = "the
-        // very next widget") - doing it *after*, like before the icon buttons were added here, would
-        // now count back through them/their popups instead of the input box, an unpredictable number
-        // of widgets depending on whether the emote popup happens to be open that frame.
+        // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
+        // "the very next widget") - doing it *after*, like before the icon buttons were added here,
+        // would now count back through them/their popups instead of the input box, an unpredictable
+        // number of widgets depending on whether the emote popup happens to be open that frame.
         if (refocusInput)
         {
             ImGui.SetKeyboardFocusHere();
@@ -515,12 +526,27 @@ public sealed class MainWindow : Window, IDisposable
             pendingInputSplice = null;
         }
 
-        var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.CallbackAlways, data =>
+        var boxSize = new Vector2(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X), ComposeBoxHeight);
+        ImGui.InputTextMultiline($"##input_{tab.Id}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
             return 0;
         });
+
+        // A multi-line InputText has no "Enter submits" concept of its own - by default Enter (with
+        // or without Shift) always just inserts a newline, which is exactly what's wanted for
+        // Shift+Enter but not for a plain Enter, which should send instead. Rather than fight ImGui's
+        // key handling, this lets it insert the newline as normal, then - only for a plain Enter,
+        // checked via the raw key state since InputText itself doesn't distinguish Shift here - strips
+        // the newline it just added back off and treats it as "send" instead.
+        var send = false;
+        if (ImGui.IsItemFocused() && !ImGui.GetIO().KeyShift && (ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
+        {
+            if (inputText.EndsWith('\n'))
+                inputText = inputText[..^1];
+            send = true;
+        }
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
         // selection if there is one.

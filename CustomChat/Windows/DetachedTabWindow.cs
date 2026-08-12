@@ -17,6 +17,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// <summary>Same tightened row spacing as MainWindow - see its field comment for the reasoning.</summary>
     private const float TightRowSpacing = 2f;
 
+    /// <summary>Same fixed multi-line compose box height as MainWindow - see its field comment for
+    /// the reasoning.</summary>
+    private const int ComposeBoxLines = 3;
+
+    private static float ComposeBoxHeight => ImGui.GetTextLineHeightWithSpacing() * ComposeBoxLines;
+
     private readonly Plugin plugin;
     public ChatTabConfig Tab { get; }
     private string inputText = string.Empty;
@@ -126,8 +132,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
         // Leave room for the input row below (the "jump to bottom" button now lives flush against it,
         // see the input row further down, rather than a separate row of its own) - see MainWindow's
         // own bottomReserve comment for why this uses TightRowSpacing rather than the theme's default
-        // ItemSpacing.Y.
-        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
+        // ItemSpacing.Y, and ComposeBoxHeight rather than a single frame height now that the input is
+        // a multi-line box (see the input row further down).
+        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -189,9 +196,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         var iconSize = ImGui.GetFrameHeight();
         var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
-        ImGui.SetNextItemWidth(-(iconSize * 3 + toolbarSpacing));
 
-        // Re-focus has to happen right before InputText (offset 0 = "the very next widget") rather
+        // Re-focus has to happen right before the input box (offset 0 = "the very next widget") rather
         // than after, since after now runs through the icon buttons/popup - an unpredictable number of
         // widgets depending on whether the emote popup happens to be open that frame.
         if (refocusInput)
@@ -212,12 +218,23 @@ public sealed class DetachedTabWindow : Window, IDisposable
             pendingInputSplice = null;
         }
 
-        var send = ImGui.InputText($"##input_{Tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.CallbackAlways, data =>
+        // Multi-line so Shift+Enter can insert an actual line break, Telegram/Discord-style - see
+        // MainWindow.DrawInputRow for the full reasoning behind the send-detection logic below.
+        var boxSize = new Vector2(-(iconSize * 3 + toolbarSpacing), ComposeBoxHeight);
+        ImGui.InputTextMultiline($"##input_{Tab.Id}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
             return 0;
         });
+
+        var send = false;
+        if (ImGui.IsItemFocused() && !ImGui.GetIO().KeyShift && (ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
+        {
+            if (inputText.EndsWith('\n'))
+                inputText = inputText[..^1];
+            send = true;
+        }
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
         // selection if there is one.
