@@ -218,19 +218,31 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer.ClearAll();
     }
 
+    /// <summary>Startup load: uses the disk-cached manifest if it's still within the configured TTL,
+    /// same as before - fast, and doesn't hit BTTV/7TV/the standard-emoji CDN on every launch.</summary>
     public void RefreshEmotes()
     {
-        _ = RefreshEmotesAsync();
+        _ = RunEmoteRefresh(() => EmoteService.EnsureLoadedAsync(
+            Configuration.BttvEnabled,
+            Configuration.SevenTvEnabled,
+            TimeSpan.FromHours(Configuration.EmoteCacheTtlHours)));
     }
 
-    private async System.Threading.Tasks.Task RefreshEmotesAsync()
+    /// <summary>The Settings "Refresh emotes now" button's handler. Unlike <see cref="RefreshEmotes"/>,
+    /// this always rebuilds the emote list from scratch (BTTV/7TV/standard emoji) regardless of the
+    /// disk cache's age - otherwise clicking it while the cache is still within its TTL (e.g. right
+    /// after adding more entries to the standard emoji catalog and reloading the plugin) would just
+    /// reload the same stale cached list and look like nothing happened.</summary>
+    public void ForceRefreshEmotes()
+    {
+        _ = RunEmoteRefresh(() => EmoteService.RefreshAsync(Configuration.BttvEnabled, Configuration.SevenTvEnabled));
+    }
+
+    private async System.Threading.Tasks.Task RunEmoteRefresh(Func<System.Threading.Tasks.Task> refresh)
     {
         try
         {
-            await EmoteService.EnsureLoadedAsync(
-                Configuration.BttvEnabled,
-                Configuration.SevenTvEnabled,
-                TimeSpan.FromHours(Configuration.EmoteCacheTtlHours)).ConfigureAwait(false);
+            await refresh().ConfigureAwait(false);
         }
         catch (Exception ex)
         {

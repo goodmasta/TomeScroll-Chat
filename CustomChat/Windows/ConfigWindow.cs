@@ -379,7 +379,7 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         if (ImGui.Button("Refresh emotes now"))
-            plugin.RefreshEmotes();
+            plugin.ForceRefreshEmotes();
 
         ImGui.TextDisabled("Only global emote sets are loaded in this version - per-channel Twitch emotes are not yet supported.");
 
