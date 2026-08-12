@@ -81,5 +81,10 @@ public class Configuration : IPluginConfiguration
     /// text/images stay fully visible, so the chat is still readable while faded.</summary>
     public float InactiveWindowAlpha { get; set; } = 0.35f;
 
+    /// <summary>Fully hides the main chat window and any popped-out tab windows (not drawn at all,
+    /// unlike <see cref="FadeWindowWhenInactive"/> which just dims the background) while a cutscene
+    /// is playing.</summary>
+    public bool HideChatDuringCutscenes { get; set; } = true;
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

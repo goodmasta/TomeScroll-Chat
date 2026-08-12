@@ -108,6 +108,13 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var hideDuringCutscenes = configuration.HideChatDuringCutscenes;
+        if (ImGui.Checkbox("Hide chat during cutscenes", ref hideDuringCutscenes))
+        {
+            configuration.HideChatDuringCutscenes = hideDuringCutscenes;
+            configuration.Save();
+        }
+
         ImGui.Separator();
         ImGui.TextUnformatted("Translation");
 

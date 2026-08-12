@@ -3,6 +3,7 @@ using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
@@ -177,6 +178,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// <summary>Pops the three colours pushed in <see cref="PreDraw"/> - see MainWindow.PostDraw for
     /// why this can't just be tacked onto the end of <c>Draw()</c> instead.</summary>
     public override void PostDraw() => ImGui.PopStyleColor(3);
+
+    /// <summary>Same cutscene hiding as MainWindow - see there for the reasoning.</summary>
+    public override bool DrawConditions() =>
+        !Plugin.Configuration.HideChatDuringCutscenes ||
+        !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent);
 
     public override void Draw()
     {

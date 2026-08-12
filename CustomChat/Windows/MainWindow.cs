@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
@@ -175,6 +176,15 @@ public sealed class MainWindow : Window, IDisposable
     /// never actually collapses, but <c>Draw()</c> only runs while the window is open and expanded,
     /// same as any Dalamud window - <c>PostDraw</c> always runs regardless).</summary>
     public override void PostDraw() => ImGui.PopStyleColor(3);
+
+    /// <summary>Fully hides the window (not drawn at all, no PreDraw/PostDraw either - unlike
+    /// <see cref="Configuration.FadeWindowWhenInactive"/>, which still draws, just translucent) while
+    /// a cutscene is playing, if that's enabled (see <see cref="Configuration.HideChatDuringCutscenes"/>).
+    /// Both cutscene condition flags are checked - regular cutscenes and the separate "78" one FFXIV
+    /// uses for some scripted/quest cutscenes.</summary>
+    public override bool DrawConditions() =>
+        !Plugin.Configuration.HideChatDuringCutscenes ||
+        !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent);
 
     /// <summary>Brings the window to front and focuses the current tab's input box - the "press Enter
     /// to open chat" keybind's handler (see <see cref="Services.EnterToChatService"/>).</summary>
