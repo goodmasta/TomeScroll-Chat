@@ -94,21 +94,29 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
     public override void OnClose() => IsOpen = true;
 
-    private static readonly Vector4 TitleBarColor = new(0f, 0f, 0f, 1f);
-
     /// <summary>Fades the window background while unfocused (see <see cref="Configuration.FadeWindowWhenInactive"/>)
-    /// and forces a solid black title bar in every state (focused/unfocused/collapsed) instead of
-    /// whatever the current theme's accent colour is - has to happen in <c>PreDraw</c>, before
-    /// <c>Begin()</c>, since both <see cref="Window.BgAlpha"/> and any pushed style colours are only
-    /// picked up at that point. <see cref="Window.IsFocused"/> reflects last frame's focus state here
-    /// (this frame's Begin() hasn't run yet), which is an imperceptible one-frame lag for a fade.</summary>
+    /// and makes the title bar match the window body's own background colour in every state
+    /// (focused/unfocused/collapsed) instead of whatever the current theme's accent colour is - a
+    /// flat black title bar (tried first) looked like a separate strip glued onto a dark-but-not-quite-
+    /// black window body; sampling the theme's actual <see cref="ImGuiCol.WindowBg"/> instead makes it
+    /// read as one continuous panel, whatever shade of dark the current theme happens to use. Has to
+    /// happen in <c>PreDraw</c>, before <c>Begin()</c>, since both <see cref="Window.BgAlpha"/> and any
+    /// pushed style colours are only picked up at that point. <see cref="Window.IsFocused"/> reflects
+    /// last frame's focus state here (this frame's Begin() hasn't run yet), an imperceptible one-frame
+    /// lag for a fade.</summary>
     public override void PreDraw()
     {
-        BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+        var fading = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive;
+        BgAlpha = fading ? Plugin.Configuration.InactiveWindowAlpha : null;
 
-        ImGui.PushStyleColor(ImGuiCol.TitleBg, TitleBarColor);
-        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, TitleBarColor);
-        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, TitleBarColor);
+        // Same alpha the body fades to, not just the same colour - otherwise a fully-opaque title
+        // bar would sit on top of an increasingly translucent body while unfocused, right back to
+        // looking like two separate panels instead of one.
+        var bodyColor = ImGui.GetStyle().Colors[(int)ImGuiCol.WindowBg];
+        var titleBarColor = fading ? new Vector4(bodyColor.X, bodyColor.Y, bodyColor.Z, Plugin.Configuration.InactiveWindowAlpha) : bodyColor;
+        ImGui.PushStyleColor(ImGuiCol.TitleBg, titleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, titleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, titleBarColor);
     }
 
     /// <summary>Pops the three colours pushed in <see cref="PreDraw"/> - has to happen after

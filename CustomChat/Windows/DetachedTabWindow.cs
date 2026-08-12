@@ -68,17 +68,18 @@ public sealed class DetachedTabWindow : Window, IDisposable
         pendingScrollToDivider = dividerIndex >= 0;
     }
 
-    private static readonly Vector4 TitleBarColor = new(0f, 0f, 0f, 1f);
-
-    /// <summary>Same fade-while-unfocused and solid-black-title-bar behaviour as MainWindow.PreDraw -
+    /// <summary>Same fade-while-unfocused and body-matching-title-bar behaviour as MainWindow.PreDraw -
     /// see there for the reasoning.</summary>
     public override void PreDraw()
     {
-        BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+        var fading = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive;
+        BgAlpha = fading ? Plugin.Configuration.InactiveWindowAlpha : null;
 
-        ImGui.PushStyleColor(ImGuiCol.TitleBg, TitleBarColor);
-        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, TitleBarColor);
-        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, TitleBarColor);
+        var bodyColor = ImGui.GetStyle().Colors[(int)ImGuiCol.WindowBg];
+        var titleBarColor = fading ? new Vector4(bodyColor.X, bodyColor.Y, bodyColor.Z, Plugin.Configuration.InactiveWindowAlpha) : bodyColor;
+        ImGui.PushStyleColor(ImGuiCol.TitleBg, titleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgActive, titleBarColor);
+        ImGui.PushStyleColor(ImGuiCol.TitleBgCollapsed, titleBarColor);
     }
 
     /// <summary>Pops the three colours pushed in <see cref="PreDraw"/> - see MainWindow.PostDraw for
