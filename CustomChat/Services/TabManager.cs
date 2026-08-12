@@ -18,6 +18,30 @@ public sealed class TabManager
             configuration.Tabs.AddRange(DefaultTabFactory.CreateDefaults());
             configuration.Save();
         }
+        else
+        {
+            MigrateNoviceCommand();
+        }
+    }
+
+    /// <summary>"/nov" (the default Novice Chat outgoing command up to this version) isn't a command
+    /// the game recognises and errors instead of sending - "/n" is the correct one. Existing installs
+    /// already have "/nov" saved to disk from first run, so this corrects it in place rather than only
+    /// fixing it for brand-new installs via <see cref="DefaultTabFactory"/>.</summary>
+    private void MigrateNoviceCommand()
+    {
+        var changed = false;
+        foreach (var tab in configuration.Tabs)
+        {
+            if (tab.IsBuiltIn && tab.OutgoingChannelCommand == "/nov")
+            {
+                tab.OutgoingChannelCommand = "/n";
+                changed = true;
+            }
+        }
+
+        if (changed)
+            configuration.Save();
     }
 
     public IReadOnlyList<ChatTabConfig> Tabs => configuration.Tabs;

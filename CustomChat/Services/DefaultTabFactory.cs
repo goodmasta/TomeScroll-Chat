@@ -80,7 +80,7 @@ public static class DefaultTabFactory
         new ChatTabConfig { Name = "Party", Channels = new(PartyChannels), OutgoingChannelCommand = "/p", IsBuiltIn = true },
         new ChatTabConfig { Name = "General", Channels = new(GeneralChannels), OutgoingChannelCommand = "/s", IsBuiltIn = true },
         new ChatTabConfig { Name = "Free Company", Channels = new(FreeCompanyChannels), OutgoingChannelCommand = "/fc", IsBuiltIn = true },
-        new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/nov", IsBuiltIn = true },
+        new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/n", IsBuiltIn = true },
         new ChatTabConfig { Name = "Log", Channels = new(LogChannels), OutgoingChannelCommand = string.Empty, IsBuiltIn = true },
     };
 }

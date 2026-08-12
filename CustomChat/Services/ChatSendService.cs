@@ -34,7 +34,7 @@ public sealed unsafe class ChatSendService
         if (string.IsNullOrWhiteSpace(message))
             return;
 
-        var isExplicitCommand = message.TrimStart().StartsWith('/');
+        var isExplicitCommand = IsExplicitCommand(message);
         var full = string.IsNullOrEmpty(channelCommand) || isExplicitCommand ? message : $"{channelCommand} {message}";
         var byteCount = Encoding.UTF8.GetByteCount(full);
         if (byteCount > MaxUtf8Bytes)
@@ -59,5 +59,17 @@ public sealed unsafe class ChatSendService
         {
             utf8->Dtor(true);
         }
+    }
+
+    /// <summary>A real slash command starts with "/" immediately followed by a letter (e.g. "/p",
+    /// "/invite"). A leading "//" is the game's own escape sequence for a literal slash - not a
+    /// command - used to type a message that starts with "/" without it being parsed as one (e.g.
+    /// "///" sends a literal "/"). Treating that as an explicit command too would skip the tab's
+    /// channel prefix and let the message fall through to whatever channel the game's native chat
+    /// state last had active, instead of the tab's configured one.</summary>
+    private static bool IsExplicitCommand(string message)
+    {
+        var trimmed = message.TrimStart();
+        return trimmed.Length > 1 && trimmed[0] == '/' && char.IsLetter(trimmed[1]);
     }
 }

@@ -178,6 +178,23 @@ public sealed class MainWindow : Window, IDisposable
             textX += iconSize + 4;
         }
 
+        // Same friend marker shown next to a friend's name in the message list (see
+        // ChatMessageRenderer.DrawMessage) - also shown here so a friend's whisper tab is
+        // recognisable in the sidebar itself, not just once you're already looking at their messages.
+        if (tab.IsPmTab && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
+            !string.IsNullOrEmpty(tab.PmPartnerKey) && plugin.FriendListService.IsFriendKey(tab.PmPartnerKey))
+        {
+            var markerSize = ImGui.GetTextLineHeight();
+            var markerTexture = plugin.EmoteService.TryGetTexture(config.FriendMarkerEmoji);
+            if (markerTexture != null)
+            {
+                var markerMin = new Vector2(textX, textY);
+                drawList.AddImage(markerTexture.Handle, markerMin, markerMin + new Vector2(markerSize, markerSize));
+            }
+
+            textX += markerSize + 4;
+        }
+
         var namePos = new Vector2(textX, textY);
         drawList.AddText(namePos, ImGui.ColorConvertFloat4ToU32(nameColor), tab.Name);
 
