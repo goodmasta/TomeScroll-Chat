@@ -48,6 +48,10 @@ public sealed class MainWindow : Window, IDisposable
     private bool pendingScrollToDivider;
     private bool pendingScrollToBottom;
 
+    // Whether the "jump to bottom" button (always visible, see DrawInputRow) is actually usable this
+    // frame - captured while the "Messages" child is current, see DrawContent.
+    private bool canScrollToBottom;
+
     // "Select text" mode: swaps the rich message rendering for a read-only plain-text transcript
     // (native ImGui click-drag selection + Ctrl+C) - see DrawContent.
     private bool selectionMode;
@@ -356,13 +360,12 @@ public sealed class MainWindow : Window, IDisposable
             pendingScrollToDivider = dividerIndex >= 0;
         }
 
-        // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box) -
-        // this used to be a flat -28 for just the input row, and grew the window's own scroll region
-        // when the buttons row was added without updating it. Uses TightRowSpacing rather than the
-        // theme's default ItemSpacing.Y, matching the spacing actually applied below the child (see
-        // there) - otherwise this would over-reserve relative to what's really drawn, since the gap
-        // now visibly reads as a gap against the message area's own border.
-        var bottomReserve = ImGui.GetFrameHeight() * 2f + TightRowSpacing * 2f;
+        // Leave room for the input row below (the "jump to bottom" button now lives flush against it,
+        // see DrawInputRow, rather than a separate row of its own). Uses TightRowSpacing rather than
+        // the theme's default ItemSpacing.Y, matching the spacing actually applied below the child
+        // (see there) - otherwise this would over-reserve relative to what's really drawn, since the
+        // gap now visibly reads as a gap against the message area's own border.
+        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -408,6 +411,11 @@ public sealed class MainWindow : Window, IDisposable
                     if (!searchMode && !wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                         ImGui.SetScrollHereY(1f);
                 }
+
+                // Captured here (inside the child, the only place its scroll state is queryable) for
+                // the "jump to bottom" button drawn later in DrawInputRow - always visible now, but
+                // only clickable while there's actually somewhere below to jump to.
+                canScrollToBottom = ImGui.GetScrollY() < ImGui.GetScrollMaxY() - 2f;
             }
         }
 
@@ -415,7 +423,6 @@ public sealed class MainWindow : Window, IDisposable
         // have to stay in sync.
         var itemSpacing = ImGui.GetStyle().ItemSpacing;
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(itemSpacing.X, TightRowSpacing));
-        DrawToolbarRow(tab);
         DrawInputRow(tab);
         ImGui.PopStyleVar();
     }
@@ -464,34 +471,15 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
-    /// <summary>A "jump to bottom" button, right-aligned above the input row, only actually shown -
-    /// not just enabled - while there are unread messages. Still occupies the row's height even when
-    /// not drawn as a real button, via Dummy, so the layout doesn't jump around.</summary>
-    private void DrawToolbarRow(ChatTabConfig tab)
-    {
-        var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
-
-        if (tab.UnreadCount == 0)
-        {
-            ImGui.Dummy(new Vector2(iconSize, iconSize));
-            return;
-        }
-
-        bool clicked;
-        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-            clicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{tab.Id}", new Vector2(iconSize, iconSize));
-        if (clicked)
-            pendingScrollToBottom = true;
-    }
-
-    /// <summary>The message input box with a "select text" toggle and a Telegram/Discord-style
-    /// emote-picker smiley button attached flush to its right edge (zero spacing between all three,
-    /// same height) instead of either living on a separate row.</summary>
+    /// <summary>The message input box with a "jump to bottom" button (always visible, but only
+    /// actually clickable while scrolled up from the bottom - see <see cref="canScrollToBottom"/>), a
+    /// "select text" toggle, and a Telegram/Discord-style emote-picker smiley button, all attached
+    /// flush to its right edge (zero spacing between all four) instead of any of them living on a
+    /// separate row.</summary>
     private void DrawInputRow(ChatTabConfig tab)
     {
         var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetNextItemWidth(-(iconSize * 2 + ImGui.GetStyle().ItemSpacing.X));
+        ImGui.SetNextItemWidth(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X));
 
         // Re-focusing after a send has to happen right before InputText is submitted (offset 0 = "the
         // very next widget") - doing it *after*, like before the icon buttons were added here, would
@@ -536,6 +524,14 @@ public sealed class MainWindow : Window, IDisposable
             DrawInputTranslateMenu();
             ImGui.EndPopup();
         }
+
+        ImGui.SameLine(0, 0);
+        bool jumpClicked;
+        using (ImRaii.Disabled(!canScrollToBottom))
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            jumpClicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{tab.Id}", new Vector2(iconSize, iconSize));
+        if (jumpClicked)
+            pendingScrollToBottom = true;
 
         ImGui.SameLine(0, 0);
         bool selectClicked;

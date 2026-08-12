@@ -30,6 +30,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private bool pendingScrollToDivider;
     private bool pendingScrollToBottom;
 
+    // Whether the "jump to bottom" button (always visible) is actually usable this frame - captured
+    // while the "Messages" child is current, see MainWindow's field comment for the same flag.
+    private bool canScrollToBottom;
+
     // "Select text" mode: swaps the rich message rendering for a read-only plain-text transcript
     // (native ImGui click-drag selection + Ctrl+C) - see MainWindow's field comment for the same flag.
     private bool selectionMode;
@@ -119,10 +123,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
         if (searchMode)
             DrawSearchBar();
 
-        // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box) -
-        // see MainWindow's own bottomReserve comment for why this uses TightRowSpacing rather than
-        // the theme's default ItemSpacing.Y.
-        var bottomReserve = ImGui.GetFrameHeight() * 2f + TightRowSpacing * 2f;
+        // Leave room for the input row below (the "jump to bottom" button now lives flush against it,
+        // see the input row further down, rather than a separate row of its own) - see MainWindow's
+        // own bottomReserve comment for why this uses TightRowSpacing rather than the theme's default
+        // ItemSpacing.Y.
+        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -169,6 +174,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     if (!searchMode && !wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                         ImGui.SetScrollHereY(1f);
                 }
+
+                // Captured here (inside the child, the only place its scroll state is queryable) for
+                // the "jump to bottom" button drawn later - always visible now, but only clickable
+                // while there's actually somewhere below to jump to.
+                canScrollToBottom = ImGui.GetScrollY() < ImGui.GetScrollMaxY() - 2f;
             }
         }
 
@@ -179,22 +189,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         var iconSize = ImGui.GetFrameHeight();
         var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
-        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
-
-        if (Tab.UnreadCount == 0)
-        {
-            ImGui.Dummy(new Vector2(iconSize, iconSize));
-        }
-        else
-        {
-            bool jumpClicked;
-            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-                jumpClicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{Tab.Id}", new Vector2(iconSize, iconSize));
-            if (jumpClicked)
-                pendingScrollToBottom = true;
-        }
-
-        ImGui.SetNextItemWidth(-(iconSize * 2 + toolbarSpacing));
+        ImGui.SetNextItemWidth(-(iconSize * 3 + toolbarSpacing));
 
         // Re-focus has to happen right before InputText (offset 0 = "the very next widget") rather
         // than after, since after now runs through the icon buttons/popup - an unpredictable number of
@@ -231,6 +226,14 @@ public sealed class DetachedTabWindow : Window, IDisposable
             DrawInputTranslateMenu();
             ImGui.EndPopup();
         }
+
+        ImGui.SameLine(0, 0);
+        bool jumpClicked;
+        using (ImRaii.Disabled(!canScrollToBottom))
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            jumpClicked = ImGui.Button($"{FontAwesomeIcon.AngleDoubleDown.ToIconString()}##jumpbottom_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (jumpClicked)
+            pendingScrollToBottom = true;
 
         ImGui.SameLine(0, 0);
         bool selectClicked;
