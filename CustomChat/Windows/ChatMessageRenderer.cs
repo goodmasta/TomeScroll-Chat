@@ -131,6 +131,11 @@ public static class ChatMessageRenderer
             ? "You"
             : config.ScreenshotMode && !string.IsNullOrEmpty(msg.SenderName) ? RedactedName : msg.SenderName;
 
+        // Hoisted out of the sender-name block below so the context menu's header (see the popup
+        // further down) can reuse the exact same colour the name is actually drawn in, without
+        // recomputing the colour-key logic a second time.
+        var senderColor = channelColor;
+
         if (!string.IsNullOrEmpty(sender))
         {
             var showMarker = !isOwn && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
@@ -152,7 +157,7 @@ public static class ChatMessageRenderer
             // normal per-channel colour, same as before. Own messages use the local player's own key so
             // "You" gets one consistent colour everywhere, rather than an outgoing tell's target's colour.
             var colorKey = isOwn ? localPlayerKey : msg.SenderKey;
-            var senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
+            senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
             ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
             ImGui.TextUnformatted($"{sender}:");
             ImGui.PopStyleColor();
@@ -195,6 +200,17 @@ public static class ChatMessageRenderer
 
         if (ImGui.BeginPopup(popupId))
         {
+            // Non-interactive header naming who this menu's message is from - "You" (not the sender's
+            // real name) when it's the local player's own message, same as the row itself shows,
+            // including for outgoing tells where msg.SenderName is actually the *recipient's* name.
+            if (!string.IsNullOrEmpty(sender))
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
+                ImGui.TextUnformatted(sender);
+                ImGui.PopStyleColor();
+                ImGui.Separator();
+            }
+
             if (ImGui.MenuItem("Copy message"))
                 ImGui.SetClipboardText(BuildCopyText(msg));
 
