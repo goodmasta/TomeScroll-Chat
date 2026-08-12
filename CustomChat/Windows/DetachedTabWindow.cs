@@ -181,8 +181,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
     /// <summary>Same cutscene hiding as MainWindow - see there for the reasoning.</summary>
     public override bool DrawConditions() =>
-        !Plugin.Configuration.HideChatDuringCutscenes ||
-        !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent);
+        Plugin.PlayerState.IsLoaded && // hidden at the title screen/character select - see MainWindow's version
+        (!Plugin.Configuration.HideChatDuringCutscenes ||
+         !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent));
 
     public override void Draw()
     {

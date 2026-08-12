@@ -183,8 +183,9 @@ public sealed class MainWindow : Window, IDisposable
     /// Both cutscene condition flags are checked - regular cutscenes and the separate "78" one FFXIV
     /// uses for some scripted/quest cutscenes.</summary>
     public override bool DrawConditions() =>
-        !Plugin.Configuration.HideChatDuringCutscenes ||
-        !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent);
+        Plugin.PlayerState.IsLoaded && // hidden at the title screen/character select - nothing useful to show before a character is actually in the world
+        (!Plugin.Configuration.HideChatDuringCutscenes ||
+         !Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent));
 
     /// <summary>Brings the window to front and focuses the current tab's input box - the "press Enter
     /// to open chat" keybind's handler (see <see cref="Services.EnterToChatService"/>).</summary>
