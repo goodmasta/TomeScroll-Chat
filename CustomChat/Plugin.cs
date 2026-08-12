@@ -32,7 +32,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
-    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+    [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
 
@@ -52,7 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     public WindowsNotificationService WindowsNotificationService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
-    private readonly ItemLinkContextMenuService itemLinkContextMenuService;
+    private readonly ItemLinkHookService itemLinkHookService;
     private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
@@ -89,7 +89,7 @@ public sealed class Plugin : IDalamudPlugin
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
-        itemLinkContextMenuService = new ItemLinkContextMenuService(ContextMenu, AttachItemLink);
+        itemLinkHookService = new ItemLinkHookService(GameInteropProvider, Log, AttachItemLink);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -459,7 +459,7 @@ public sealed class Plugin : IDalamudPlugin
 
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
-        itemLinkContextMenuService.Dispose();
+        itemLinkHookService.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();
