@@ -657,6 +657,14 @@ public sealed class MainWindow : Window, IDisposable
             if (inputText.EndsWith('\n'))
                 inputText = inputText[..^1];
             send = true;
+
+            // Forces a fresh widget next frame (see the inputGeneration field comment) - needed even
+            // when the line turns out empty/whitespace-only and nothing actually gets sent below,
+            // since the newline-strip just above is itself an external mutation a still-focused widget
+            // would otherwise silently ignore, keeping the stale newline visible - reported as
+            // "pressing Enter on an empty line still inserts a line break."
+            inputGeneration++;
+            refocusInput = true;
         }
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
@@ -708,8 +716,6 @@ public sealed class MainWindow : Window, IDisposable
         {
             plugin.SendFromTab(tab, inputText);
             inputText = string.Empty;
-            refocusInput = true;
-            inputGeneration++; // see the field comment - forces a fresh widget next frame so the now-empty text actually shows
         }
     }
 

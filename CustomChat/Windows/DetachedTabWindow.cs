@@ -319,6 +319,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
             if (inputText.EndsWith('\n'))
                 inputText = inputText[..^1];
             send = true;
+
+            // Forces a fresh widget next frame - see MainWindow's version for the full reasoning
+            // (needed even when nothing actually gets sent below, e.g. Enter on an empty line).
+            inputGeneration++;
+            refocusInput = true;
         }
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
@@ -370,8 +375,6 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             plugin.SendFromTab(Tab, inputText);
             inputText = string.Empty;
-            refocusInput = true;
-            inputGeneration++; // see the field comment - forces a fresh widget next frame so the now-empty text actually shows
         }
 
         ImGui.PopStyleVar();
