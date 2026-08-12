@@ -71,5 +71,15 @@ public class Configuration : IPluginConfiguration
     /// auto-detected per message, only the target is configurable.</summary>
     public string TranslateTargetLanguage { get; set; } = "en";
 
+    /// <summary>Fades the main chat window and any popped-out tab windows to
+    /// <see cref="InactiveWindowAlpha"/> while they don't have keyboard focus - same idea as the
+    /// game's own native chat log fading out when you're not actively looking at it.</summary>
+    public bool FadeWindowWhenInactive { get; set; } = true;
+
+    /// <summary>Background opacity (0 = invisible, 1 = fully opaque) applied while unfocused, when
+    /// <see cref="FadeWindowWhenInactive"/> is on. Only the window's background panel fades - message
+    /// text/images stay fully visible, so the chat is still readable while faded.</summary>
+    public float InactiveWindowAlpha { get; set; } = 0.35f;
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

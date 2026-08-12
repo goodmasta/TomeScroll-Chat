@@ -68,6 +68,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
         pendingScrollToDivider = dividerIndex >= 0;
     }
 
+    /// <summary>Same fade-while-unfocused behaviour as MainWindow.PreDraw - see there for the reasoning.</summary>
+    public override void PreDraw() =>
+        BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+
     public override void Draw()
     {
         WindowName = $"{Tab.Name}###CustomChatTab_{Tab.Id}";

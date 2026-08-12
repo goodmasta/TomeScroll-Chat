@@ -83,6 +83,24 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var fadeInactive = configuration.FadeWindowWhenInactive;
+        if (ImGui.Checkbox("Fade the chat window when it's not focused", ref fadeInactive))
+        {
+            configuration.FadeWindowWhenInactive = fadeInactive;
+            configuration.Save();
+        }
+
+        using (ImRaii.Disabled(!configuration.FadeWindowWhenInactive))
+        {
+            var inactiveAlpha = configuration.InactiveWindowAlpha;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.SliderFloat("Inactive opacity", ref inactiveAlpha, 0.05f, 1f, "%.2f"))
+            {
+                configuration.InactiveWindowAlpha = inactiveAlpha;
+                configuration.Save();
+            }
+        }
+
         var openLinks = configuration.OpenLinksOnClick;
         if (ImGui.Checkbox("Open links in the browser on click", ref openLinks))
         {

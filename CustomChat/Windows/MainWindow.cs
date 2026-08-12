@@ -94,6 +94,13 @@ public sealed class MainWindow : Window, IDisposable
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
     public override void OnClose() => IsOpen = true;
 
+    /// <summary>Fades the window background while unfocused (see <see cref="Configuration.FadeWindowWhenInactive"/>)
+    /// - has to happen in <c>PreDraw</c>, before <c>Begin()</c>, since <see cref="Window.BgAlpha"/> is
+    /// only read at that point. <see cref="Window.IsFocused"/> reflects last frame's focus state here
+    /// (this frame's Begin() hasn't run yet), which is an imperceptible one-frame lag for a fade.</summary>
+    public override void PreDraw() =>
+        BgAlpha = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive ? Plugin.Configuration.InactiveWindowAlpha : null;
+
     /// <summary>Brings the window to front and focuses the current tab's input box - the "press Enter
     /// to open chat" keybind's handler (see <see cref="Services.EnterToChatService"/>).</summary>
     public void RequestFocusInput()
