@@ -31,6 +31,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private string transcriptText = string.Empty;
     private int transcriptMessageCount = -1;
 
+    // Ctrl+F "search in this tab" - see MainWindow's field comment for the same flag.
+    private bool searchMode;
+    private string searchQuery = string.Empty;
+    private bool focusSearchInput;
+
     public DetachedTabWindow(Plugin plugin, ChatTabConfig tab)
         : base($"{tab.Name}###CustomChatTab_{tab.Id}")
     {
@@ -65,6 +70,17 @@ public sealed class DetachedTabWindow : Window, IDisposable
             return;
         }
 
+        // Same Ctrl+F handling as MainWindow.DrawContent - see there for the reasoning.
+        if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F))
+        {
+            searchMode = true;
+            selectionMode = false;
+            focusSearchInput = true;
+        }
+
+        if (searchMode)
+            DrawSearchBar();
+
         // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box).
         var bottomReserve = ImGui.GetFrameHeightWithSpacing() * 2f;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), false))
@@ -94,10 +110,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
-                    if (lastVisible >= 0)
+                    if (!searchMode && lastVisible >= 0)
                     {
                         var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
                         if (newUnread < Tab.UnreadCount)
@@ -108,8 +124,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     }
 
                     // Never auto-follow to the bottom on the same frame we just scrolled to the "New
-                    // messages" divider - see MainWindow's DrawContent for why.
-                    if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                    // messages" divider - see MainWindow's DrawContent for why. Also skipped while
+                    // searching - see MainWindow's DrawContent for that reasoning too.
+                    if (!searchMode && !wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                         ImGui.SetScrollHereY(1f);
                 }
             }
@@ -117,19 +134,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         var iconSize = ImGui.GetFrameHeight();
         var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
-        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize * 2 - toolbarSpacing);
-        bool selectClicked;
-        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{Tab.Id}", new Vector2(iconSize, iconSize));
-        if (selectClicked)
-        {
-            selectionMode = !selectionMode;
-            transcriptMessageCount = -1;
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
-
-        ImGui.SameLine(0, toolbarSpacing);
+        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
 
         if (Tab.UnreadCount == 0)
         {
@@ -144,10 +149,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
                 pendingScrollToBottom = true;
         }
 
-        ImGui.SetNextItemWidth(-(iconSize + ImGui.GetStyle().ItemSpacing.X));
+        ImGui.SetNextItemWidth(-(iconSize * 2 + toolbarSpacing));
 
         // Re-focus has to happen right before InputText (offset 0 = "the very next widget") rather
-        // than after, since after now runs through the icon button/popup - an unpredictable number of
+        // than after, since after now runs through the icon buttons/popup - an unpredictable number of
         // widgets depending on whether the emote popup happens to be open that frame.
         if (refocusInput)
         {
@@ -156,6 +161,20 @@ public sealed class DetachedTabWindow : Window, IDisposable
         }
 
         var send = ImGui.InputText($"##input_{Tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine(0, 0);
+        bool selectClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (selectClicked)
+        {
+            selectionMode = !selectionMode;
+            if (selectionMode)
+                searchMode = false;
+            transcriptMessageCount = -1;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
 
         ImGui.SameLine(0, 0);
         bool emoteClicked;
@@ -178,6 +197,34 @@ public sealed class DetachedTabWindow : Window, IDisposable
             inputText = string.Empty;
             refocusInput = true;
         }
+    }
+
+    /// <summary>Same behaviour as MainWindow.DrawSearchBar - see there for the reasoning.</summary>
+    private void DrawSearchBar()
+    {
+        var closeSize = ImGui.GetFrameHeight();
+        ImGui.SetNextItemWidth(-(closeSize + ImGui.GetStyle().ItemSpacing.X));
+
+        if (focusSearchInput)
+        {
+            ImGui.SetKeyboardFocusHere();
+            focusSearchInput = false;
+        }
+
+        ImGui.InputTextWithHint($"##search_{Tab.Id}", "Search in this tab...", ref searchQuery, 200);
+
+        var escapePressed = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.IsKeyPressed(ImGuiKey.Escape);
+
+        ImGui.SameLine(0, 0);
+        var closeClicked = ImGui.Button($"X##searchclose_{Tab.Id}", new Vector2(closeSize, closeSize));
+
+        if (escapePressed || closeClicked)
+        {
+            searchMode = false;
+            searchQuery = string.Empty;
+        }
+
+        ImGui.Separator();
     }
 
     /// <summary>Closing the floating window (X button) reattaches the tab to the main window rather than deleting it.</summary>

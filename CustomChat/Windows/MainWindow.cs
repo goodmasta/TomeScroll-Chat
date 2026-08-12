@@ -39,6 +39,11 @@ public sealed class MainWindow : Window, IDisposable
     private string transcriptText = string.Empty;
     private int transcriptMessageCount = -1;
 
+    // Ctrl+F "search in this tab": filters the message list down to matches - see DrawContent.
+    private bool searchMode;
+    private string searchQuery = string.Empty;
+    private bool focusSearchInput;
+
     public MainWindow(Plugin plugin)
         : base("Custom Chat###CustomChatMainWindow")
     {
@@ -246,6 +251,9 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.MenuItem("Pop out to floating window"))
             plugin.SetTabDetached(tab, true);
 
+        if (ImGui.MenuItem("Export to file..."))
+            plugin.ExportTabToFile(tab);
+
         if (tab.IsPmTab)
         {
             // Whisper history is keyed by conversation partner, not by this tab's id, so closing it
@@ -274,6 +282,19 @@ public sealed class MainWindow : Window, IDisposable
             ImGui.TextDisabled("No tabs yet - create one on the left.");
             return;
         }
+
+        // Ctrl+F opens the search bar, same as a browser - checked against the whole window (sidebar
+        // included) rather than just the message area, so it works regardless of which part of the
+        // window currently has focus.
+        if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F))
+        {
+            searchMode = true;
+            selectionMode = false;
+            focusSearchInput = true;
+        }
+
+        if (searchMode)
+            DrawSearchBar(tab);
 
         if (contentTabId != tab.Id)
         {
@@ -317,11 +338,13 @@ public sealed class MainWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
-                    // Unread count shrinks as messages actually scroll into view, not all at once on open.
-                    if (lastVisible >= 0)
+                    // Unread count shrinks as messages actually scroll into view, not all at once on
+                    // open - skipped while searching, since a filtered view's "last visible" doesn't
+                    // reflect genuine reading progress through the tab.
+                    if (!searchMode && lastVisible >= 0)
                     {
                         var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
                         if (newUnread < tab.UnreadCount)
@@ -331,8 +354,10 @@ public sealed class MainWindow : Window, IDisposable
                     // Never auto-follow to the bottom on the same frame we just scrolled to the "New
                     // messages" divider - leftover scroll state from whatever tab was previously shown in
                     // this same child can otherwise read as "already at the bottom" (e.g. clamped down to
-                    // the new, shorter content's max) and immediately snap back past the divider.
-                    if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                    // the new, shorter content's max) and immediately snap back past the divider. Also
+                    // skipped while searching - the filtered list's size changes as the query changes,
+                    // which would otherwise fight the player's own scroll position while typing.
+                    if (!searchMode && !wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
                         ImGui.SetScrollHereY(1f);
                 }
             }
@@ -340,6 +365,36 @@ public sealed class MainWindow : Window, IDisposable
 
         DrawToolbarRow(tab);
         DrawInputRow(tab);
+    }
+
+    /// <summary>The Ctrl+F search bar: filters the message list live as the query changes, closes on
+    /// Escape or the "x" button. Drawn above the "Messages" child so its own height is automatically
+    /// subtracted from what's left for the child, no manual reserve math needed.</summary>
+    private void DrawSearchBar(ChatTabConfig tab)
+    {
+        var closeSize = ImGui.GetFrameHeight();
+        ImGui.SetNextItemWidth(-(closeSize + ImGui.GetStyle().ItemSpacing.X));
+
+        if (focusSearchInput)
+        {
+            ImGui.SetKeyboardFocusHere();
+            focusSearchInput = false;
+        }
+
+        ImGui.InputTextWithHint($"##search_{tab.Id}", "Search in this tab...", ref searchQuery, 200);
+
+        var escapePressed = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.IsKeyPressed(ImGuiKey.Escape);
+
+        ImGui.SameLine(0, 0);
+        var closeClicked = ImGui.Button($"X##searchclose_{tab.Id}", new Vector2(closeSize, closeSize));
+
+        if (escapePressed || closeClicked)
+        {
+            searchMode = false;
+            searchQuery = string.Empty;
+        }
+
+        ImGui.Separator();
     }
 
     /// <summary>Read-only plain-text transcript shown instead of the normal rich message list while
@@ -356,29 +411,13 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
-    /// <summary>The row above the input box: a "select text" toggle (left) and a "jump to bottom"
-    /// button (right, same size, only actually shown - not just enabled - while there are unread
-    /// messages). Both still occupy the row's height even when not drawn as their real button, via
-    /// Dummy, so the layout doesn't jump around.</summary>
+    /// <summary>A "jump to bottom" button, right-aligned above the input row, only actually shown -
+    /// not just enabled - while there are unread messages. Still occupies the row's height even when
+    /// not drawn as a real button, via Dummy, so the layout doesn't jump around.</summary>
     private void DrawToolbarRow(ChatTabConfig tab)
     {
         var iconSize = ImGui.GetFrameHeight();
-        var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var rightEdge = ImGui.GetWindowContentRegionMax().X;
-
-        ImGui.SetCursorPosX(rightEdge - iconSize * 2 - spacing);
-        bool selectClicked;
-        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{tab.Id}", new Vector2(iconSize, iconSize));
-        if (selectClicked)
-        {
-            selectionMode = !selectionMode;
-            transcriptMessageCount = -1; // force a rebuild next time selection mode is entered
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
-
-        ImGui.SameLine(0, spacing);
+        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
 
         if (tab.UnreadCount == 0)
         {
@@ -393,18 +432,18 @@ public sealed class MainWindow : Window, IDisposable
             pendingScrollToBottom = true;
     }
 
-    /// <summary>The message input box with a Telegram/Discord-style emote-picker smiley button
-    /// attached flush to its right edge (zero spacing between them, same height) instead of a
-    /// separate button on its own row.</summary>
+    /// <summary>The message input box with a "select text" toggle and a Telegram/Discord-style
+    /// emote-picker smiley button attached flush to its right edge (zero spacing between all three,
+    /// same height) instead of either living on a separate row.</summary>
     private void DrawInputRow(ChatTabConfig tab)
     {
         var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetNextItemWidth(-(iconSize + ImGui.GetStyle().ItemSpacing.X));
+        ImGui.SetNextItemWidth(-(iconSize * 2 + ImGui.GetStyle().ItemSpacing.X));
 
         // Re-focusing after a send has to happen right before InputText is submitted (offset 0 = "the
-        // very next widget") - doing it *after*, like before the icon button was added here, would now
-        // count back through the button/popup instead of the input box, which is an unpredictable
-        // number of widgets depending on whether the emote popup happens to be open that frame.
+        // very next widget") - doing it *after*, like before the icon buttons were added here, would
+        // now count back through them/their popups instead of the input box, an unpredictable number
+        // of widgets depending on whether the emote popup happens to be open that frame.
         if (refocusInput)
         {
             ImGui.SetKeyboardFocusHere();
@@ -419,6 +458,20 @@ public sealed class MainWindow : Window, IDisposable
         }
 
         var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+
+        ImGui.SameLine(0, 0);
+        bool selectClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{tab.Id}", new Vector2(iconSize, iconSize));
+        if (selectClicked)
+        {
+            selectionMode = !selectionMode;
+            if (selectionMode)
+                searchMode = false;
+            transcriptMessageCount = -1; // force a rebuild next time selection mode is entered
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
 
         ImGui.SameLine(0, 0);
         bool emoteClicked;

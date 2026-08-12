@@ -22,6 +22,7 @@ public static class ChatMessageRenderer
     private static readonly Vector4 LinkColor = new(0.45f, 0.7f, 1f, 1f);
     private static readonly Vector4 FallbackColor = new(0.85f, 0.85f, 0.85f, 1f);
     private static readonly Vector4 TranslationColor = new(0.65f, 0.8f, 0.65f, 1f);
+    private static readonly Vector4 MentionColor = new(1f, 0.85f, 0.3f, 0.16f);
     private const string RedactedName = "Player";
 
     private static readonly Dictionary<XivChatType, Vector4> DefaultColors = new()
@@ -57,14 +58,20 @@ public static class ChatMessageRenderer
     /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
     /// <param name="dividerIndex">Index to draw a Discord-style "New messages" divider before, or -1 for none.</param>
     /// <param name="scrollToDivider">Scrolls the divider into view once, the frame it's drawn (tab just opened).</param>
+    /// <param name="searchQuery">When non-empty, only messages whose body or sender name contain this
+    /// (case-insensitive) are drawn at all - the Ctrl+F "search in this tab" filter. The "New messages"
+    /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
         {
-            if (i == dividerIndex && dividerIndex > 0)
+            if (!string.IsNullOrEmpty(searchQuery) && !MatchesSearch(messages[i], searchQuery))
+                continue;
+
+            if (string.IsNullOrEmpty(searchQuery) && i == dividerIndex && dividerIndex > 0)
             {
                 DrawDivider();
                 if (scrollToDivider)
@@ -77,6 +84,10 @@ public static class ChatMessageRenderer
 
         return lastVisible;
     }
+
+    private static bool MatchesSearch(ChatMessageRecord msg, string query) =>
+        msg.Body.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+        msg.SenderName.Contains(query, StringComparison.OrdinalIgnoreCase);
 
     private const string DividerLabel = "New messages";
 
@@ -214,7 +225,14 @@ public static class ChatMessageRenderer
         // the popup itself (which un-hovers the "Messages" child window underneath it).
         var highlightActive = rawHovered || ImGui.IsPopupOpen(popupId);
 
+        // Persistent tint (not just on hover) for a message that name-drops the local player - FFXIV
+        // chat has no @mention system, so this is a plain-text match against the player's own name
+        // (whole name or either half of it, so "hey Firstname" or "nice one Lastname" both count too).
+        var isMention = !isOwn && !string.IsNullOrEmpty(localPlayerName) && ContainsMention(msg.Body, localPlayerName);
+
         drawList.ChannelsSetCurrent(0); // background: painted after the content, but rendered behind it
+        if (isMention)
+            drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(MentionColor));
         if (highlightActive)
             drawList.AddRectFilled(rowMin, rowMax, ImGui.GetColorU32(ImGuiCol.HeaderHovered, 0.4f));
         drawList.ChannelsMerge();
@@ -294,6 +312,26 @@ public static class ChatMessageRenderer
         }
 
         return isVisible;
+    }
+
+    /// <summary>Whether <paramref name="body"/> name-drops <paramref name="localPlayerName"/> - the
+    /// full "First Last" name, or either half of it on its own (so a message just saying "Firstname"
+    /// or just "Lastname" still counts as a mention, not only the exact full name).</summary>
+    private static bool ContainsMention(string body, string localPlayerName)
+    {
+        if (string.IsNullOrEmpty(body))
+            return false;
+
+        if (body.Contains(localPlayerName, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        foreach (var part in localPlayerName.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part.Length >= 2 && body.Contains(part, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static string BuildCopyText(ChatMessageRecord msg)

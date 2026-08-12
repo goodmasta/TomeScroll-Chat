@@ -455,6 +455,10 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
+        if (ImGui.Button($"Export to file...##export_{tab.Id}"))
+            plugin.ExportTabToFile(tab);
+
+        ImGui.SameLine();
         if (tab.IsPmTab)
         {
             // Whisper history is keyed by conversation partner, not this tab's id, so this never

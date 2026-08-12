@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
@@ -195,6 +197,44 @@ public sealed class Plugin : IDalamudPlugin
         var world = partnerKey[(at + 1)..];
         var sent = FriendRequestService.TrySend(name, world);
         ToastGui.ShowNormal(sent ? $"Friend request sent to {name}." : $"{name} isn't nearby - can't send a friend request.");
+    }
+
+    /// <summary>Exports a tab's *entire* stored history (not just what's currently buffered in
+    /// memory - reads straight from <see cref="ChatHistoryService"/>) to a plain-text file under the
+    /// plugin's config directory, then reveals it in Explorer - the sidebar tab context menu's
+    /// "Export to file..." handler.</summary>
+    public void ExportTabToFile(ChatTabConfig tab)
+    {
+        var routingKey = tab.IsPmTab ? tab.PmPartnerKey : tab.Id.ToString();
+        if (string.IsNullOrEmpty(routingKey))
+            return;
+
+        try
+        {
+            var messages = ChatHistoryService.LoadRecent(routingKey, int.MaxValue);
+            var lines = messages.Select(m =>
+            {
+                var time = m.TimestampUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                return string.IsNullOrEmpty(m.SenderName) ? $"[{time}] {m.Body}" : $"[{time}] {m.SenderName}: {m.Body}";
+            });
+
+            var exportDir = Path.Combine(PluginInterface.ConfigDirectory.FullName, "exports");
+            Directory.CreateDirectory(exportDir);
+
+            var invalidChars = Path.GetInvalidFileNameChars();
+            var safeName = new string(tab.Name.Select(c => invalidChars.Contains(c) ? '_' : c).ToArray());
+            var fileName = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
+            var path = Path.Combine(exportDir, fileName);
+            File.WriteAllLines(path, lines);
+
+            ToastGui.ShowNormal($"Exported {messages.Count} message(s) to {fileName}.");
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "CustomChat: failed to export tab {Tab}", tab.Name);
+            ToastGui.ShowError("Failed to export chat history.");
+        }
     }
 
     public void SetTabDetached(ChatTabConfig tab, bool detached)

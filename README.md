@@ -22,8 +22,9 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 
 - **Sidebar** lists every tab that isn't popped out into its own window. Each row shows the tab's icon (if set), a friend marker (if the tab is a friend's whisper and that's enabled), the tab name, and an unread count that pulses in a configurable colour while there's something new to read.
 - **Discord-style unread tracking**: opening a tab scrolls to a "New messages" divider marking where you left off, rather than jumping straight to the bottom. The divider stays put as you read - it doesn't recompute until you switch away and back. A "jump to bottom" button appears next to the message input whenever there's something unread.
-- **Select text mode**: an I-beam toggle button next to "jump to bottom" swaps the rich message view for a read-only, plain-text transcript of the same tab, which supports native click-drag selection and Ctrl+C (the rich view's colours/links/emote images aren't selectable directly, since it's built from individual widgets, not one block of text).
-- **Message input** has an emote-picker button (searchable image grid: standard emoji, then BTTV/7TV) attached to its right edge. Pressing Enter with no ImGui text field focused anywhere opens/focuses the current tab's input, mimicking the game's own "press Enter to chat" keybind.
+- **Select text mode**: an I-beam toggle button next to the emote-picker button swaps the rich message view for a read-only, plain-text transcript of the same tab, which supports native click-drag selection and Ctrl+C (the rich view's colours/links/emote images aren't selectable directly, since it's built from individual widgets, not one block of text).
+- **Search in this tab**: press **Ctrl+F** to open a search bar that filters the message list down to whatever matches (body or sender name, case-insensitive) as you type. Escape or the "x" button closes it.
+- **Message input** has a "select text" toggle and an emote-picker button (searchable image grid: standard emoji, then BTTV/7TV) attached to its right edge. Pressing Enter with no ImGui text field focused anywhere opens/focuses the current tab's input, mimicking the game's own "press Enter to chat" keybind.
 - Typing `/` directly (without pressing Enter first) is also redirected into the plugin's input instead of leaking into the game's own (hidden) chat box - including `/tell`/`/t `, which instead opens the matching whisper tab. A bare `/` you didn't mean as a command (e.g. the game's own `//` escape for a literal leading slash) is left alone.
 
 ## Tabs
@@ -62,7 +63,13 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 - BTTV/7TV emote codes and the standard emoji pool are rendered as inline images, not text.
 - Your own name shows as **"You"** in every channel, including whispers.
 - Per-player nickname colours are stable across sessions (derived from their name, not random).
+- A message that name-drops your own character (full name, or just the first/last half of it) gets a persistent highlight tint, since FFXIV chat has no @mention system to rely on for this.
 - **Screenshot mode** (Settings → General) redacts player/sender names for screenshots.
+
+## Exporting a tab
+
+- Right-click a tab in the sidebar → **Export to file...**, or use the same button in **Settings → Tabs**'s tab editor (works even for a popped-out tab, which isn't in the sidebar).
+- Exports that tab's *entire* stored history (not just what's currently loaded on screen) to a plain-text file under the plugin's config folder, one `[yyyy-MM-dd HH:mm] Sender: text` line per message, and opens Explorer with the file selected.
 
 ## Translation
 
