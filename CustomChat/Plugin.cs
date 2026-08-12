@@ -20,7 +20,6 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
-    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
@@ -38,7 +37,6 @@ public sealed class Plugin : IDalamudPlugin
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
     private readonly NativeChatHider nativeChatHider;
-    private readonly ContextMenuService contextMenuService;
     private readonly NativeTellWatcher nativeTellWatcher;
     private readonly EnterToChatService enterToChatService;
 
@@ -60,7 +58,6 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         FriendListService = new FriendListService(DataManager, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
-        contextMenuService = new ContextMenuService(this, ContextMenu, Log);
         nativeTellWatcher = new NativeTellWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -263,7 +260,6 @@ public sealed class Plugin : IDalamudPlugin
             window.Dispose();
 
         nativeChatHider.Dispose();
-        contextMenuService.Dispose();
         nativeTellWatcher.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
