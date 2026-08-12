@@ -118,7 +118,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box).
         var bottomReserve = ImGui.GetFrameHeightWithSpacing() * 2f;
-        using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), false))
+        using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
             {
