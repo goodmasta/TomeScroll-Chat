@@ -196,13 +196,14 @@ public sealed class MainWindow : Window, IDisposable
     }
 
     /// <summary>Same as <see cref="RequestFocusInput"/>, but also seeds the input box with text - the
-    /// "typed '/' into the native chat" redirect's handler (see
-    /// <see cref="Services.NativeChatInputWatcher"/>): the native input already captured the
-    /// character(s) before this fires, so they have to be carried over explicitly rather than just
-    /// refocusing an empty box. The text is deliberately applied one frame *after* the focus request
-    /// (see <see cref="DrawInputRow"/>), not in the same one - ImGui's InputText selects the entire
-    /// buffer when it's given keyboard focus and already-non-empty text on the very same frame, which
-    /// made the next keystroke overwrite the redirected "/" instead of continuing after it.</summary>
+    /// native-chat-leak-through redirect's handler (see <see cref="Services.NativeChatInputWatcher"/>),
+    /// covering both a typed "/" command and a right-click "Link" item/map-coordinate insertion: the
+    /// native input already captured the content before this fires, so it has to be carried over
+    /// explicitly rather than just refocusing an empty box. The text is deliberately applied one frame
+    /// *after* the focus request (see <see cref="DrawInputRow"/>), not in the same one - ImGui's
+    /// InputText selects the entire buffer when it's given keyboard focus and already-non-empty text on
+    /// the very same frame, which made the next keystroke overwrite the redirected text instead of
+    /// continuing after it.</summary>
     public void PrefillInput(string text)
     {
         pendingPrefillText = text;
@@ -629,7 +630,13 @@ public sealed class MainWindow : Window, IDisposable
         {
             // Deliberately not applied on the same frame the focus request above fires (see
             // PrefillInput) - it lands here, one frame later, once the widget is already active.
-            inputText = pendingPrefillText;
+            // Appended rather than replacing outright: for a fresh "/" leak the box is normally empty
+            // anyway (append behaves the same as replace), but for a right-click "Link" item/map
+            // insertion the player usually already has text typed and expects the link to land after
+            // it, not to wipe out what they wrote.
+            if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+                inputText += " ";
+            inputText += pendingPrefillText;
             pendingPrefillText = null;
         }
 
