@@ -69,20 +69,32 @@ public sealed class TranslationService : IDisposable
     {
         try
         {
-            var url = "https://translate.googleapis.com/translate_a/single" +
-                      $"?client=gtx&sl=auto&tl={Uri.EscapeDataString(targetLanguage)}&dt=t&q={Uri.EscapeDataString(message.Body)}";
-            var json = await http.GetStringAsync(url).ConfigureAwait(false);
-            var translated = ParseTranslation(json);
+            var translated = await TranslateRawAsync(message.Body, targetLanguage).ConfigureAwait(false);
             if (!string.IsNullOrEmpty(translated))
                 results[message] = translated;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "CustomChat: failed to translate a message");
         }
         finally
         {
             inFlight.TryRemove(message, out _);
+        }
+    }
+
+    /// <summary>The same translation call, without the per-message cache - used for one-off
+    /// translations that aren't tied to a received <see cref="ChatMessageRecord"/>, e.g. translating
+    /// the player's own not-yet-sent text in the message input box.</summary>
+    public async Task<string?> TranslateRawAsync(string text, string targetLanguage)
+    {
+        try
+        {
+            var url = "https://translate.googleapis.com/translate_a/single" +
+                      $"?client=gtx&sl=auto&tl={Uri.EscapeDataString(targetLanguage)}&dt=t&q={Uri.EscapeDataString(text)}";
+            var json = await http.GetStringAsync(url).ConfigureAwait(false);
+            return ParseTranslation(json);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to translate text");
+            return null;
         }
     }
 

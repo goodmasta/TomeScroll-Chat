@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
+using CustomChat.Utility;
 
 namespace CustomChat.Windows;
 
@@ -24,6 +26,14 @@ public sealed class MainWindow : Window, IDisposable
     private string emoteSearch = string.Empty;
     private bool refocusInput;
     private string? pendingPrefillText;
+
+    // Right-click the message input -> "Translate to" a picked language: tracked live via the
+    // InputText callback (ImGuiInputTextFlags.CallbackAlways) so the selection at the moment of the
+    // right-click is known; the splice is applied on a later frame once the translation comes back
+    // (background thread continuation, same pattern as TranslationService's own result cache).
+    private int inputSelectionStart;
+    private int inputSelectionEnd;
+    private (int Start, int Length, string Translated)? pendingInputSplice;
 
     // Discord-style "last read position": which tab the content area is currently showing, a frozen
     // divider index into that tab's message list (set once when switching in, not updated as the
@@ -456,7 +466,32 @@ public sealed class MainWindow : Window, IDisposable
             pendingPrefillText = null;
         }
 
-        var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+        if (pendingInputSplice != null)
+        {
+            // "Translate to <language>" landing - see DrawInputTranslateMenu. Bounds are re-clamped
+            // against the *current* inputText rather than trusted as-is, in case it was edited in the
+            // time the translation request was in flight.
+            var splice = pendingInputSplice.Value;
+            var start = Math.Clamp(splice.Start, 0, inputText.Length);
+            var length = Math.Clamp(splice.Length, 0, inputText.Length - start);
+            inputText = inputText[..start] + splice.Translated + inputText[(start + length)..];
+            pendingInputSplice = null;
+        }
+
+        var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.CallbackAlways, data =>
+        {
+            inputSelectionStart = data.SelectionStart;
+            inputSelectionEnd = data.SelectionEnd;
+            return 0;
+        });
+
+        // Right-click the input box to translate what's typed - the whole text, or just the current
+        // selection if there is one.
+        if (ImGui.BeginPopupContextItem($"inputctx_{tab.Id}"))
+        {
+            DrawInputTranslateMenu();
+            ImGui.EndPopup();
+        }
 
         ImGui.SameLine(0, 0);
         bool selectClicked;
@@ -493,6 +528,38 @@ public sealed class MainWindow : Window, IDisposable
             inputText = string.Empty;
             refocusInput = true;
         }
+    }
+
+    /// <summary>The message input box's right-click menu: a "Translate to" submenu listing every
+    /// language in <see cref="TranslationLanguageCatalog"/>. Translates the current selection if
+    /// there is one (tracked live via the InputText callback in <see cref="DrawInputRow"/>), otherwise
+    /// the whole input.</summary>
+    private void DrawInputTranslateMenu()
+    {
+        if (string.IsNullOrEmpty(inputText) || !ImGui.BeginMenu("Translate to"))
+            return;
+
+        var min = Math.Min(inputSelectionStart, inputSelectionEnd);
+        var max = Math.Max(inputSelectionStart, inputSelectionEnd);
+        var hasSelection = max > min && max <= inputText.Length;
+        var start = hasSelection ? min : 0;
+        var length = hasSelection ? max - min : inputText.Length;
+        var textToTranslate = inputText.Substring(start, length);
+
+        foreach (var (code, name) in TranslationLanguageCatalog.Entries)
+        {
+            if (ImGui.MenuItem(name) && !string.IsNullOrWhiteSpace(textToTranslate))
+                _ = TranslateInputAsync(start, length, textToTranslate, code);
+        }
+
+        ImGui.EndMenu();
+    }
+
+    private async Task TranslateInputAsync(int start, int length, string original, string targetLanguage)
+    {
+        var translated = await plugin.TranslationService.TranslateRawAsync(original, targetLanguage).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(translated))
+            pendingInputSplice = (start, length, translated);
     }
 
     /// <summary>Marks a tab's unread counter - called by <see cref="Plugin"/> for every incoming

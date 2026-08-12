@@ -74,7 +74,8 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 ## Translation
 
 - Right-click a message → **Translate** to see it translated inline, under the original text. **Retranslate** re-fetches (e.g. after changing the target language) without needing to hide and re-translate first.
-- Source language is always detected automatically; the target language is set once in **Settings → General → "Translate messages to"** (~20 common languages).
+- Source language is always detected automatically; the target language for received messages is set once in **Settings → General → "Translate messages to"** (~20 common languages).
+- **Translating your own outgoing text**: select some (or none, for the whole box) of what you've typed in the message input, right-click it → **Translate to** → pick a language from the same list - the selection (or the whole input if nothing's selected) is replaced with the translation, ready to send.
 - Uses Google Translate's free, unofficial endpoint - no API key or billing setup needed, but also not an officially supported integration, so it could occasionally be rate-limited or stop working without notice.
 
 ## Emotes
