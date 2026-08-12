@@ -353,6 +353,19 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer.ClearAll();
     }
 
+    /// <summary>Resets every setting (not tabs - see <see cref="Configuration.ResetToDefaults"/>) to
+    /// its default value and reapplies the handful that have side effects elsewhere beyond just being
+    /// read live each frame - the Settings "Reset settings to defaults" handler.</summary>
+    public void ResetSettingsToDefaults()
+    {
+        Configuration.ResetToDefaults();
+        Configuration.Save();
+
+        ApplyNativeChatHidden();
+        ChatHistoryService.SetMaxBytes(Configuration.MaxHistoryBytes);
+        WindowsNotificationService.Enabled = Configuration.NotifyWhisperInWindows;
+    }
+
     /// <summary>Startup load: uses the disk-cached manifest if it's still within the configured TTL,
     /// same as before - fast, and doesn't hit BTTV/7TV/the standard-emoji CDN on every launch.</summary>
     public void RefreshEmotes()

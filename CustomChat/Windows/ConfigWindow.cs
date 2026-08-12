@@ -239,7 +239,13 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.OpenPopup("CustomChatClearHistoryConfirm");
         ImGui.TextDisabled("Permanently deletes all stored chat history for every tab and whisper. Cannot be undone.");
 
+        ImGui.Spacing();
+        if (ImGui.Button("Reset settings to defaults..."))
+            ImGui.OpenPopup("CustomChatResetSettingsConfirm");
+        ImGui.TextDisabled("Resets every setting on this page and the Emotes tab. Tabs (channels, colours, filters) are left alone.");
+
         DrawClearHistoryConfirmPopup();
+        DrawResetSettingsConfirmPopup();
     }
 
     private void DrawClearHistoryConfirmPopup()
@@ -255,6 +261,29 @@ public sealed class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Yes, delete everything"))
         {
             plugin.ClearAllHistory();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
+    }
+
+    private void DrawResetSettingsConfirmPopup()
+    {
+        var open = true;
+        if (!ImGui.BeginPopupModal("CustomChatResetSettingsConfirm", ref open, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+
+        ImGui.TextUnformatted("Reset all settings to their defaults?");
+        ImGui.TextDisabled("Tabs, whisper history, and emote cache are not affected - only preferences on this\npage and the Emotes tab (colours, font size, translation language, notifications, etc).");
+        ImGui.Spacing();
+
+        if (ImGui.Button("Yes, reset everything"))
+        {
+            plugin.ResetSettingsToDefaults();
             ImGui.CloseCurrentPopup();
         }
 

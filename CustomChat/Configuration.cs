@@ -92,5 +92,38 @@ public class Configuration : IPluginConfiguration
     /// balloon tips need a visible icon to attach to).</summary>
     public bool NotifyWhisperInWindows { get; set; } = true;
 
+    /// <summary>Resets every *setting* below to its default value - deliberately leaves
+    /// <see cref="Tabs"/> alone, since that's the user's own custom tab setup (channels, colours,
+    /// filters, icons), not a preference to reset. Doesn't call <see cref="Save"/> itself, and some
+    /// of these have side effects elsewhere that need reapplying - see
+    /// <see cref="Plugin.ResetSettingsToDefaults"/>, the actual "Reset settings to defaults" handler.
+    /// Field list has to be kept in sync by hand whenever a new setting is added.</summary>
+    public void ResetToDefaults()
+    {
+        var defaults = new Configuration();
+
+        OpenWhispersInSeparateWindow = defaults.OpenWhispersInSeparateWindow;
+        HideNativeChat = defaults.HideNativeChat;
+        ScreenshotMode = defaults.ScreenshotMode;
+        FontSize = defaults.FontSize;
+        OpenLinksOnClick = defaults.OpenLinksOnClick;
+        BttvEnabled = defaults.BttvEnabled;
+        SevenTvEnabled = defaults.SevenTvEnabled;
+        EmoteTwitchChannel = defaults.EmoteTwitchChannel;
+        EmoteScale = defaults.EmoteScale;
+        EmoteCacheTtlHours = defaults.EmoteCacheTtlHours;
+        MaxHistoryBytes = defaults.MaxHistoryBytes;
+        ChannelBlinkColor = defaults.ChannelBlinkColor;
+        ChannelUnreadCountColor = defaults.ChannelUnreadCountColor;
+        WhisperNotifyColor = defaults.WhisperNotifyColor;
+        FriendMarkerEnabled = defaults.FriendMarkerEnabled;
+        FriendMarkerEmoji = defaults.FriendMarkerEmoji;
+        TranslateTargetLanguage = defaults.TranslateTargetLanguage;
+        FadeWindowWhenInactive = defaults.FadeWindowWhenInactive;
+        InactiveWindowAlpha = defaults.InactiveWindowAlpha;
+        HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
+        NotifyWhisperInWindows = defaults.NotifyWhisperInWindows;
+    }
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
