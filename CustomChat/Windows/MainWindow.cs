@@ -25,13 +25,38 @@ public sealed class MainWindow : Window, IDisposable
     /// the message area got a visible border to actually compare it against.</summary>
     private const float TightRowSpacing = 2f;
 
-    /// <summary>How many lines tall the message compose box is - see <see cref="DrawInputRow"/> for
-    /// the Shift+Enter/Enter handling this enables (a single-line InputText can't hold a newline at
-    /// all). Fixed rather than auto-growing with content, to keep the sidebar/message-area height
-    /// alignment (see DrawSidebar) simple - both sides reserve space using this same constant.</summary>
-    private const int ComposeBoxLines = 3;
+    /// <summary>One line tall normally, growing up to this many while composing a multi-line message
+    /// (Shift+Enter, see <see cref="DrawInputRow"/>) and shrinking back once it's empty again - never
+    /// more than this many, even if the message has more line breaks than that (it just scrolls).</summary>
+    private const int MaxComposeBoxLines = 3;
 
-    private static float ComposeBoxHeight => ImGui.GetTextLineHeightWithSpacing() * ComposeBoxLines;
+    /// <summary>Current height for the compose box, based on <see cref="inputText"/>'s line count -
+    /// also used by <see cref="DrawSidebar"/>'s and <see cref="DrawContent"/>'s bottom-reserve math so
+    /// the sidebar/message-area height stays in sync with the input row as it grows/shrinks.</summary>
+    private float GetComposeBoxHeight()
+    {
+        var lines = 1;
+        foreach (var c in inputText)
+        {
+            if (c == '\n')
+                lines++;
+        }
+
+        // GetTextLineHeightWithSpacing() * n (tried first) undersizes the box relative to what a
+        // multi-line InputText actually needs - it accounts for ItemSpacing *between* lines, but not
+        // the widget's own FramePadding around the text, so even 1 line came out a couple pixels
+        // short of comfortably fitting. That was enough for ImGui's internal cursor-follow scroll to
+        // shift the visible line up/down by a pixel or two on every keystroke as the cursor moved,
+        // even with no line breaks at all. n=1 has to equal GetFrameHeight() exactly - the same
+        // "one text line plus frame padding" definition already used for the icon buttons next to it
+        // (so the row still lines up) - and each additional line adds its own text-line-height plus
+        // the spacing between lines.
+        var n = Math.Clamp(lines, 1, MaxComposeBoxLines);
+        var textHeight = ImGui.GetTextLineHeight();
+        var framePadding = ImGui.GetStyle().FramePadding.Y;
+        var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+    }
 
     private readonly Plugin plugin;
     private Guid? selectedTabId;
@@ -39,6 +64,14 @@ public sealed class MainWindow : Window, IDisposable
     private string emoteSearch = string.Empty;
     private bool refocusInput;
     private string? pendingPrefillText;
+
+    // Bumped every time a message is sent, and folded into the input box's ImGui id (see
+    // DrawInputRow). Without EnterReturnsTrue (removed for the multi-line Shift+Enter rework), ImGui
+    // never deactivates the widget on Enter, so it stays "active" continuously while typing - and an
+    // externally-cleared inputText is silently ignored by an still-active widget, which kept showing
+    // its own stale internal buffer instead of the now-empty text after sending. Changing the id
+    // forces ImGui to treat it as a brand new widget next frame, with no stale state to ignore.
+    private int inputGeneration;
 
     // Right-click the message input -> "Translate to" a picked language: tracked live via the
     // InputText callback (ImGuiInputTextFlags.CallbackAlways) so the selection at the moment of the
@@ -187,10 +220,10 @@ public sealed class MainWindow : Window, IDisposable
         // Same reserve formula as DrawContent's "Messages" child (not the old flat -28px) so the
         // sidebar and message area end up exactly the same height, and "Close All PM" lines up evenly
         // with the input row instead of sitting at a slightly different Y from one hardcoded pixel
-        // count and the other computed from the current font/frame size. Uses the same ComposeBoxHeight
-        // as the (now multi-line) input box, not a single frame height, so the two stay aligned now
-        // that the input row is taller than one line.
-        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
+        // count and the other computed from the current font/frame size. Uses the same
+        // GetComposeBoxHeight() as the (now multi-line, auto-growing) input box, not a single frame
+        // height, so the two stay aligned as the input row grows/shrinks.
+        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Sidebar", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -379,9 +412,9 @@ public sealed class MainWindow : Window, IDisposable
         // see DrawInputRow, rather than a separate row of its own). Uses TightRowSpacing rather than
         // the theme's default ItemSpacing.Y, matching the spacing actually applied below the child
         // (see there) - otherwise this would over-reserve relative to what's really drawn, since the
-        // gap now visibly reads as a gap against the message area's own border. ComposeBoxHeight
-        // (not a single frame height) since the input is a multi-line box now, see DrawInputRow.
-        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
+        // gap now visibly reads as a gap against the message area's own border. GetComposeBoxHeight()
+        // (not a single frame height) since the input is a multi-line, auto-growing box, see DrawInputRow.
+        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -487,7 +520,7 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
-    /// <summary>The message input box - a multi-line box (see <see cref="ComposeBoxHeight"/>) so
+    /// <summary>The message input box - a multi-line box (see <see cref="GetComposeBoxHeight"/>) so
     /// Shift+Enter can insert an actual line break, Telegram/Discord-style - with a "jump to bottom"
     /// button (always visible, but only actually clickable while scrolled up from the bottom - see
     /// <see cref="canScrollToBottom"/>), a "select text" toggle, and an emote-picker smiley button, all
@@ -526,8 +559,8 @@ public sealed class MainWindow : Window, IDisposable
             pendingInputSplice = null;
         }
 
-        var boxSize = new Vector2(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X), ComposeBoxHeight);
-        ImGui.InputTextMultiline($"##input_{tab.Id}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
+        var boxSize = new Vector2(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X), GetComposeBoxHeight());
+        ImGui.InputTextMultiline($"##input_{tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
@@ -598,6 +631,7 @@ public sealed class MainWindow : Window, IDisposable
             plugin.SendFromTab(tab, inputText);
             inputText = string.Empty;
             refocusInput = true;
+            inputGeneration++; // see the field comment - forces a fresh widget next frame so the now-empty text actually shows
         }
     }
 

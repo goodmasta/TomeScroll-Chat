@@ -17,17 +17,37 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// <summary>Same tightened row spacing as MainWindow - see its field comment for the reasoning.</summary>
     private const float TightRowSpacing = 2f;
 
-    /// <summary>Same fixed multi-line compose box height as MainWindow - see its field comment for
-    /// the reasoning.</summary>
-    private const int ComposeBoxLines = 3;
-
-    private static float ComposeBoxHeight => ImGui.GetTextLineHeightWithSpacing() * ComposeBoxLines;
+    /// <summary>Same auto-growing compose box cap as MainWindow - see its field comment for the
+    /// reasoning.</summary>
+    private const int MaxComposeBoxLines = 3;
 
     private readonly Plugin plugin;
     public ChatTabConfig Tab { get; }
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
     private bool refocusInput;
+
+    /// <summary>Same "force a fresh widget on send" trick as MainWindow - see its field comment for
+    /// the reasoning.</summary>
+    private int inputGeneration;
+
+    /// <summary>Same "GetFrameHeight()-for-one-line" formula as MainWindow - see its field comment for
+    /// why GetTextLineHeightWithSpacing() * n (tried first) caused per-keystroke height jitter.</summary>
+    private float GetComposeBoxHeight()
+    {
+        var lines = 1;
+        foreach (var c in inputText)
+        {
+            if (c == '\n')
+                lines++;
+        }
+
+        var n = Math.Clamp(lines, 1, MaxComposeBoxLines);
+        var textHeight = ImGui.GetTextLineHeight();
+        var framePadding = ImGui.GetStyle().FramePadding.Y;
+        var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+    }
 
     // Same Discord-style "last read position" tracking as MainWindow - see its DrawContent for the
     // reasoning. This window only ever shows one fixed tab, so it's frozen once at construction
@@ -132,9 +152,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
         // Leave room for the input row below (the "jump to bottom" button now lives flush against it,
         // see the input row further down, rather than a separate row of its own) - see MainWindow's
         // own bottomReserve comment for why this uses TightRowSpacing rather than the theme's default
-        // ItemSpacing.Y, and ComposeBoxHeight rather than a single frame height now that the input is
-        // a multi-line box (see the input row further down).
-        var bottomReserve = ComposeBoxHeight + TightRowSpacing;
+        // ItemSpacing.Y, and GetComposeBoxHeight() rather than a single frame height now that the input
+        // is a multi-line, auto-growing box (see the input row further down).
+        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -220,8 +240,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         // Multi-line so Shift+Enter can insert an actual line break, Telegram/Discord-style - see
         // MainWindow.DrawInputRow for the full reasoning behind the send-detection logic below.
-        var boxSize = new Vector2(-(iconSize * 3 + toolbarSpacing), ComposeBoxHeight);
-        ImGui.InputTextMultiline($"##input_{Tab.Id}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
+        var boxSize = new Vector2(-(iconSize * 3 + toolbarSpacing), GetComposeBoxHeight());
+        ImGui.InputTextMultiline($"##input_{Tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
@@ -286,6 +306,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
             plugin.SendFromTab(Tab, inputText);
             inputText = string.Empty;
             refocusInput = true;
+            inputGeneration++; // see the field comment - forces a fresh widget next frame so the now-empty text actually shows
         }
 
         ImGui.PopStyleVar();
