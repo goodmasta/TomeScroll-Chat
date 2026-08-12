@@ -27,6 +27,7 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 - **Message input** has a "select text" toggle and an emote-picker button (searchable image grid: standard emoji, then BTTV/7TV) attached to its right edge. Pressing Enter with no ImGui text field focused anywhere opens/focuses the current tab's input, mimicking the game's own "press Enter to chat" keybind.
 - Typing `/` directly (without pressing Enter first) is also redirected into the plugin's input instead of leaking into the game's own (hidden) chat box - including `/tell`/`/t `, which instead opens the matching whisper tab. A bare `/` you didn't mean as a command (e.g. the game's own `//` escape for a literal leading slash) is left alone.
 - **Fades when unfocused**: the main window and any popped-out tab windows fade their background to a configurable opacity while you're not actively interacting with them (**Settings → General**, on by default) - same idea as the game's own native chat log. Only the background panel fades; message text/images stay fully readable.
+- The title bar is always solid black, regardless of focus state, rather than following the current theme's accent colour.
 
 ## Tabs
 
