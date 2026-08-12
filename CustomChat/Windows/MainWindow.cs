@@ -20,6 +20,11 @@ public sealed class MainWindow : Window, IDisposable
 {
     private static readonly Vector4 BlinkBase = new(1f, 1f, 1f, 1f);
 
+    /// <summary>Vertical gap below the (now bordered) "Messages" child and between the toolbar/input
+    /// rows - tighter than the theme's default ItemSpacing.Y, which read as an oddly large gap once
+    /// the message area got a visible border to actually compare it against.</summary>
+    private const float TightRowSpacing = 2f;
+
     private readonly Plugin plugin;
     private Guid? selectedTabId;
     private string inputText = string.Empty;
@@ -353,8 +358,11 @@ public sealed class MainWindow : Window, IDisposable
 
         // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box) -
         // this used to be a flat -28 for just the input row, and grew the window's own scroll region
-        // when the buttons row was added without updating it.
-        var bottomReserve = ImGui.GetFrameHeightWithSpacing() * 2f;
+        // when the buttons row was added without updating it. Uses TightRowSpacing rather than the
+        // theme's default ItemSpacing.Y, matching the spacing actually applied below the child (see
+        // there) - otherwise this would over-reserve relative to what's really drawn, since the gap
+        // now visibly reads as a gap against the message area's own border.
+        var bottomReserve = ImGui.GetFrameHeight() * 2f + TightRowSpacing * 2f;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -403,8 +411,13 @@ public sealed class MainWindow : Window, IDisposable
             }
         }
 
+        // Tighter than the theme's default ItemSpacing.Y - see bottomReserve above for why the two
+        // have to stay in sync.
+        var itemSpacing = ImGui.GetStyle().ItemSpacing;
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(itemSpacing.X, TightRowSpacing));
         DrawToolbarRow(tab);
         DrawInputRow(tab);
+        ImGui.PopStyleVar();
     }
 
     /// <summary>The Ctrl+F search bar: filters the message list live as the query changes, closes on

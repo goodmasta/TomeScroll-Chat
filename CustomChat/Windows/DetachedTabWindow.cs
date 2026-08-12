@@ -14,6 +14,9 @@ namespace CustomChat.Windows;
 /// configured to open this way by default (see <see cref="Configuration.OpenWhispersInSeparateWindow"/>).</summary>
 public sealed class DetachedTabWindow : Window, IDisposable
 {
+    /// <summary>Same tightened row spacing as MainWindow - see its field comment for the reasoning.</summary>
+    private const float TightRowSpacing = 2f;
+
     private readonly Plugin plugin;
     public ChatTabConfig Tab { get; }
     private string inputText = string.Empty;
@@ -116,8 +119,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
         if (searchMode)
             DrawSearchBar();
 
-        // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box).
-        var bottomReserve = ImGui.GetFrameHeightWithSpacing() * 2f;
+        // Leave room for the two rows below (Jump to bottom/Emotes buttons, then the input box) -
+        // see MainWindow's own bottomReserve comment for why this uses TightRowSpacing rather than
+        // the theme's default ItemSpacing.Y.
+        var bottomReserve = ImGui.GetFrameHeight() * 2f + TightRowSpacing * 2f;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -166,6 +171,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
                 }
             }
         }
+
+        // Tighter than the theme's default ItemSpacing.Y - see bottomReserve above for why the two
+        // have to stay in sync. Popped at the end of this method.
+        var rowItemSpacing = ImGui.GetStyle().ItemSpacing;
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(rowItemSpacing.X, TightRowSpacing));
 
         var iconSize = ImGui.GetFrameHeight();
         var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
@@ -257,6 +267,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
             inputText = string.Empty;
             refocusInput = true;
         }
+
+        ImGui.PopStyleVar();
     }
 
     /// <summary>Same behaviour as MainWindow.DrawInputTranslateMenu - see there for the reasoning.</summary>
