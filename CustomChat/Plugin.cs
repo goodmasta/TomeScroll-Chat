@@ -63,14 +63,6 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin()
     {
-        // TEMPORARY build-verification marker (2026-08-13) - /xllog showed literally zero CustomChat-
-        // sourced lines even at DBG verbosity despite the plugin loading successfully, which cast doubt
-        // on whether the dev-plugin path Dalamud loads from was actually picking up rebuilt DLLs at
-        // all. ChatGui.Print goes straight into the native chat pipeline (which this plugin's own
-        // ChatCaptureService also listens to unconditionally), so it's visible directly in the chat
-        // window regardless of any log-level filtering - remove once that's confirmed either way.
-        ChatGui.Print("CustomChat: plugin build loaded (diagnostic marker, remove me)");
-
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
         TabManager = new TabManager(Configuration);
@@ -122,6 +114,13 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.DisableUserUiHide = true;
 
         RefreshEmotes();
+
+        // TEMPORARY build-verification marker (2026-08-13) - moved here (end of the constructor,
+        // after ChatCaptureService's subscription is registered above) from the very top, where it
+        // silently never got captured by our own ChatCaptureService (registered later) even though the
+        // print itself worked fine - explains why it appeared to do nothing in the first test. Remove
+        // once the actual /xllog-visibility question (still open) is resolved.
+        ChatGui.Print("CustomChat: plugin build loaded (diagnostic marker, remove me)");
     }
 
     private void OnMessageRouted(ChatTabConfig tab, ChatMessageRecord record)
