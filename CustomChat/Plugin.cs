@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Dalamud.Game.Command;
+using Dalamud.Game.Text;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -46,6 +47,7 @@ public sealed class Plugin : IDalamudPlugin
     public PartyInviteService PartyInviteService { get; }
     public FriendRequestService FriendRequestService { get; }
     public AdventurerPlateService AdventurerPlateService { get; }
+    public WindowsNotificationService WindowsNotificationService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly EnterToChatService enterToChatService;
@@ -72,6 +74,7 @@ public sealed class Plugin : IDalamudPlugin
         PartyInviteService = new PartyInviteService(worldIdResolver, Log);
         FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
         AdventurerPlateService = new AdventurerPlateService(ObjectTable);
+        WindowsNotificationService = new WindowsNotificationService { Enabled = Configuration.NotifyWhisperInWindows };
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -113,6 +116,14 @@ public sealed class Plugin : IDalamudPlugin
     {
         TabMessageBuffer.Append(tab, record);
         mainWindow.NotifyUnread(tab);
+
+        // Only the incoming half - an outgoing tell echoing back into the same PM tab shouldn't
+        // notify about a message the player just sent themselves.
+        if (record.ChatType == XivChatType.TellIncoming)
+        {
+            var senderName = string.IsNullOrEmpty(record.SenderName) ? "Unknown" : record.SenderName;
+            WindowsNotificationService.ShowTell(senderName, record.Body);
+        }
     }
 
     /// <summary>Sends text typed into a tab's input box, routed through that tab's outgoing channel
@@ -400,6 +411,7 @@ public sealed class Plugin : IDalamudPlugin
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();
+        WindowsNotificationService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();
     }

@@ -115,6 +115,15 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var notifyWhisperInWindows = configuration.NotifyWhisperInWindows;
+        if (ImGui.Checkbox("Show a Windows notification on incoming tells", ref notifyWhisperInWindows))
+        {
+            configuration.NotifyWhisperInWindows = notifyWhisperInWindows;
+            configuration.Save();
+            plugin.WindowsNotificationService.Enabled = notifyWhisperInWindows;
+        }
+        ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
+
         ImGui.Separator();
         ImGui.TextUnformatted("Translation");
 

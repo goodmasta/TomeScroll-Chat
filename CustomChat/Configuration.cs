@@ -86,5 +86,11 @@ public class Configuration : IPluginConfiguration
     /// is playing.</summary>
     public bool HideChatDuringCutscenes { get; set; } = true;
 
+    /// <summary>Shows a native Windows notification (system tray balloon) whenever an incoming tell
+    /// is received - noticeable even with the game minimized/unfocused, unlike the in-game chat
+    /// itself. Requires a small tray icon to stay present while this is on (a Windows limitation -
+    /// balloon tips need a visible icon to attach to).</summary>
+    public bool NotifyWhisperInWindows { get; set; } = true;
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }

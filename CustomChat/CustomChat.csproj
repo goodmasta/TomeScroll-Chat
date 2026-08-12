@@ -8,6 +8,7 @@
     <IsPackable>false</IsPackable>
     <RootNamespace>CustomChat</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
 
   <ItemGroup>
