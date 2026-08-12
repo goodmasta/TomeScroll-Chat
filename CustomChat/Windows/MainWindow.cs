@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
@@ -30,6 +31,12 @@ public sealed class MainWindow : Window, IDisposable
     private int dividerIndex = -1;
     private bool pendingScrollToDivider;
     private bool pendingScrollToBottom;
+
+    // "Select text" mode: swaps the rich message rendering for a read-only plain-text transcript
+    // (native ImGui click-drag selection + Ctrl+C) - see DrawContent.
+    private bool selectionMode;
+    private string transcriptText = string.Empty;
+    private int transcriptMessageCount = -1;
 
     public MainWindow(Plugin plugin)
         : base("Custom Chat###CustomChatMainWindow")
@@ -278,46 +285,84 @@ public sealed class MainWindow : Window, IDisposable
                 // Scoped to just this child (not the sidebar/buttons/whole window) - resets
                 // automatically when the child ends. 14pt is the slider's default, i.e. 1x scale.
                 ImGui.SetWindowFontScale(Plugin.Configuration.FontSize / 14f);
-                if (pendingScrollToBottom)
-                {
-                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
-                    pendingScrollToBottom = false;
-                    dividerIndex = -1;
-                }
-
-                var wasScrollingToDivider = pendingScrollToDivider;
                 var messages = plugin.TabMessageBuffer.GetMessages(tab);
-                var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
-                pendingScrollToDivider = false;
 
-                // Unread count shrinks as messages actually scroll into view, not all at once on open.
-                if (lastVisible >= 0)
+                if (selectionMode)
                 {
-                    var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
-                    if (newUnread < tab.UnreadCount)
-                        tab.UnreadCount = newUnread;
+                    DrawSelectionTranscript(tab, messages);
                 }
+                else
+                {
+                    if (pendingScrollToBottom)
+                    {
+                        ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                        pendingScrollToBottom = false;
+                        dividerIndex = -1;
+                    }
 
-                // Never auto-follow to the bottom on the same frame we just scrolled to the "New
-                // messages" divider - leftover scroll state from whatever tab was previously shown in
-                // this same child can otherwise read as "already at the bottom" (e.g. clamped down to
-                // the new, shorter content's max) and immediately snap back past the divider.
-                if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
-                    ImGui.SetScrollHereY(1f);
+                    var wasScrollingToDivider = pendingScrollToDivider;
+                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
+                    pendingScrollToDivider = false;
+
+                    // Unread count shrinks as messages actually scroll into view, not all at once on open.
+                    if (lastVisible >= 0)
+                    {
+                        var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
+                        if (newUnread < tab.UnreadCount)
+                            tab.UnreadCount = newUnread;
+                    }
+
+                    // Never auto-follow to the bottom on the same frame we just scrolled to the "New
+                    // messages" divider - leftover scroll state from whatever tab was previously shown in
+                    // this same child can otherwise read as "already at the bottom" (e.g. clamped down to
+                    // the new, shorter content's max) and immediately snap back past the divider.
+                    if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                        ImGui.SetScrollHereY(1f);
+                }
             }
         }
 
-        DrawJumpToBottomButton(tab);
+        DrawToolbarRow(tab);
         DrawInputRow(tab);
     }
 
-    /// <summary>A small square button the same size as the emote icon below it, right above it, only
-    /// shown (not just enabled - not drawn at all) while there are unread messages. Still occupies
-    /// the row's height even when hidden (via Dummy) so the layout doesn't jump when it appears/disappears.</summary>
-    private void DrawJumpToBottomButton(ChatTabConfig tab)
+    /// <summary>Read-only plain-text transcript shown instead of the normal rich message list while
+    /// "select text" mode is on - see the field comment on <see cref="selectionMode"/>. Rebuilt only
+    /// when the message count changes, not every frame.</summary>
+    private void DrawSelectionTranscript(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages)
+    {
+        if (transcriptMessageCount != messages.Count)
+        {
+            transcriptText = ChatMessageRenderer.BuildTranscript(messages);
+            transcriptMessageCount = messages.Count;
+        }
+
+        ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
+    }
+
+    /// <summary>The row above the input box: a "select text" toggle (left) and a "jump to bottom"
+    /// button (right, same size, only actually shown - not just enabled - while there are unread
+    /// messages). Both still occupy the row's height even when not drawn as their real button, via
+    /// Dummy, so the layout doesn't jump around.</summary>
+    private void DrawToolbarRow(ChatTabConfig tab)
     {
         var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var rightEdge = ImGui.GetWindowContentRegionMax().X;
+
+        ImGui.SetCursorPosX(rightEdge - iconSize * 2 - spacing);
+        bool selectClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{tab.Id}", new Vector2(iconSize, iconSize));
+        if (selectClicked)
+        {
+            selectionMode = !selectionMode;
+            transcriptMessageCount = -1; // force a rebuild next time selection mode is entered
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
+
+        ImGui.SameLine(0, spacing);
 
         if (tab.UnreadCount == 0)
         {

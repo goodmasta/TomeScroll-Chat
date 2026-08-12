@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Text;
 using Dalamud.Bindings.ImGui;
@@ -190,6 +191,14 @@ public static class ChatMessageRenderer
             ? $"[{time}] {msg.Body}"
             : $"[{time}] {msg.SenderName}: {msg.Body}";
     }
+
+    /// <summary>Plain-text version of a tab's whole message list, one line each - used by the
+    /// "select text" toggle (see MainWindow/DetachedTabWindow), which swaps the normal rich rendering
+    /// (custom per-token widgets, no click-drag text selection possible across them) for a read-only
+    /// <c>ImGui.InputTextMultiline</c> over this string, which gets native mouse-drag selection and
+    /// Ctrl+C for free.</summary>
+    public static string BuildTranscript(IReadOnlyList<ChatMessageRecord> messages) =>
+        string.Join('\n', messages.Select(BuildCopyText));
 
     /// <summary>
     /// Plain runs of text (no link, no known emote code) are batched and drawn with a single

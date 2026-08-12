@@ -25,6 +25,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private bool pendingScrollToDivider;
     private bool pendingScrollToBottom;
 
+    // "Select text" mode: swaps the rich message rendering for a read-only plain-text transcript
+    // (native ImGui click-drag selection + Ctrl+C) - see MainWindow's field comment for the same flag.
+    private bool selectionMode;
+    private string transcriptText = string.Empty;
+    private int transcriptMessageCount = -1;
+
     public DetachedTabWindow(Plugin plugin, ChatTabConfig tab)
         : base($"{tab.Name}###CustomChatTab_{tab.Id}")
     {
@@ -66,38 +72,65 @@ public sealed class DetachedTabWindow : Window, IDisposable
             if (child.Success)
             {
                 ImGui.SetWindowFontScale(Plugin.Configuration.FontSize / 14f);
-
-                if (pendingScrollToBottom)
-                {
-                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
-                    pendingScrollToBottom = false;
-                    dividerIndex = -1;
-                }
-
-                var wasScrollingToDivider = pendingScrollToDivider;
                 var messages = plugin.TabMessageBuffer.GetMessages(Tab);
-                var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
-                pendingScrollToDivider = false;
 
-                if (lastVisible >= 0)
+                if (selectionMode)
                 {
-                    var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
-                    if (newUnread < Tab.UnreadCount)
+                    if (transcriptMessageCount != messages.Count)
                     {
-                        Tab.UnreadCount = newUnread;
-                        plugin.TabManager.Save();
+                        transcriptText = ChatMessageRenderer.BuildTranscript(messages);
+                        transcriptMessageCount = messages.Count;
                     }
-                }
 
-                // Never auto-follow to the bottom on the same frame we just scrolled to the "New
-                // messages" divider - see MainWindow's DrawContent for why.
-                if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
-                    ImGui.SetScrollHereY(1f);
+                    ImGui.InputTextMultiline($"##transcript_{Tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
+                }
+                else
+                {
+                    if (pendingScrollToBottom)
+                    {
+                        ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                        pendingScrollToBottom = false;
+                        dividerIndex = -1;
+                    }
+
+                    var wasScrollingToDivider = pendingScrollToDivider;
+                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.OpenTellToKey, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider);
+                    pendingScrollToDivider = false;
+
+                    if (lastVisible >= 0)
+                    {
+                        var newUnread = Math.Max(0, messages.Count - 1 - lastVisible);
+                        if (newUnread < Tab.UnreadCount)
+                        {
+                            Tab.UnreadCount = newUnread;
+                            plugin.TabManager.Save();
+                        }
+                    }
+
+                    // Never auto-follow to the bottom on the same frame we just scrolled to the "New
+                    // messages" divider - see MainWindow's DrawContent for why.
+                    if (!wasScrollingToDivider && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                        ImGui.SetScrollHereY(1f);
+                }
             }
         }
 
         var iconSize = ImGui.GetFrameHeight();
-        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize);
+        var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
+        ImGui.SetCursorPosX(ImGui.GetWindowContentRegionMax().X - iconSize * 2 - toolbarSpacing);
+        bool selectClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            selectClicked = ImGui.Button($"{FontAwesomeIcon.ICursor.ToIconString()}##selecttoggle_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (selectClicked)
+        {
+            selectionMode = !selectionMode;
+            transcriptMessageCount = -1;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
+
+        ImGui.SameLine(0, toolbarSpacing);
+
         if (Tab.UnreadCount == 0)
         {
             ImGui.Dummy(new Vector2(iconSize, iconSize));
