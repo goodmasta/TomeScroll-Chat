@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Text;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -47,6 +48,50 @@ public sealed class DetachedTabWindow : Window, IDisposable
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
         return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+    }
+
+    /// <summary>Same manual word-wrap simulation as MainWindow - see its version for the full
+    /// reasoning (no built-in word-wrap in Dear ImGui's InputTextMultiline, byte-vs-character offset
+    /// care for multi-byte UTF-8 text).</summary>
+    private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    {
+        var bytes = data.BufTextSpan;
+        if (bytes.Length == 0 || wrapWidth <= 0)
+            return;
+
+        var cursorByte = Math.Clamp(data.CursorPos, 0, bytes.Length);
+
+        var lineStartByte = 0;
+        for (var i = 0; i < cursorByte; i++)
+        {
+            if (bytes[i] == (byte)'\n')
+                lineStartByte = i + 1;
+        }
+
+        var lineEndByte = bytes.Length;
+        for (var i = cursorByte; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'\n')
+            {
+                lineEndByte = i;
+                break;
+            }
+        }
+
+        if (lineEndByte <= lineStartByte)
+            return;
+
+        var line = Encoding.UTF8.GetString(bytes[lineStartByte..lineEndByte]);
+        if (ImGui.CalcTextSize(line).X <= wrapWidth)
+            return;
+
+        var lastSpaceIndex = line.LastIndexOf(' ');
+        if (lastSpaceIndex <= 0)
+            return;
+
+        var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
+        data.DeleteChars(spaceByteOffset, 1);
+        data.InsertChars(spaceByteOffset, "\n");
     }
 
     // Same Discord-style "last read position" tracking as MainWindow - see its DrawContent for the
@@ -240,11 +285,17 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         // Multi-line so Shift+Enter can insert an actual line break, Telegram/Discord-style - see
         // MainWindow.DrawInputRow for the full reasoning behind the send-detection logic below.
-        var boxSize = new Vector2(-(iconSize * 3 + toolbarSpacing), GetComposeBoxHeight());
+        // Explicit absolute width (not the usual negative-size trick) so it can double as the wrap
+        // width passed to WrapComposeLineIfNeeded - see MainWindow's own version for the full reasoning.
+        var boxWidth = ImGui.GetContentRegionAvail().X - (iconSize * 3 + toolbarSpacing);
+        var boxSize = new Vector2(boxWidth, GetComposeBoxHeight());
+        var wrapWidth = boxWidth - ImGui.GetStyle().FramePadding.X * 2f - 4f;
+
         ImGui.InputTextMultiline($"##input_{Tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
+            WrapComposeLineIfNeeded(data, wrapWidth);
             return 0;
         });
 

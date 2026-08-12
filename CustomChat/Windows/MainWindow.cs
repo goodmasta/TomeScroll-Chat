@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Text;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
@@ -520,6 +521,56 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
+    /// <summary>Dear ImGui's InputTextMultiline has no built-in word-wrap - long lines just scroll
+    /// horizontally. This simulates it by physically inserting a real newline once the line containing
+    /// the cursor gets too wide, breaking at the last space in that line (close enough to a proper
+    /// word-wrap point since this runs every frame - <see cref="ImGuiInputTextFlags.CallbackAlways"/> -
+    /// and so catches the overflow right as the newest character causes it, not on a whole
+    /// already-typed paragraph). If there's no space to break at (one long unbroken word/URL), it's
+    /// left alone rather than risk a hard break landing mid-codepoint in multi-byte UTF-8 text -
+    /// <see cref="ImGuiInputTextCallbackData.CursorPos"/> and friends are UTF-8 *byte* offsets, not
+    /// character offsets, which matters for Cyrillic (2 bytes/char) text.</summary>
+    private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    {
+        var bytes = data.BufTextSpan;
+        if (bytes.Length == 0 || wrapWidth <= 0)
+            return;
+
+        var cursorByte = Math.Clamp(data.CursorPos, 0, bytes.Length);
+
+        var lineStartByte = 0;
+        for (var i = 0; i < cursorByte; i++)
+        {
+            if (bytes[i] == (byte)'\n')
+                lineStartByte = i + 1;
+        }
+
+        var lineEndByte = bytes.Length;
+        for (var i = cursorByte; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'\n')
+            {
+                lineEndByte = i;
+                break;
+            }
+        }
+
+        if (lineEndByte <= lineStartByte)
+            return;
+
+        var line = Encoding.UTF8.GetString(bytes[lineStartByte..lineEndByte]);
+        if (ImGui.CalcTextSize(line).X <= wrapWidth)
+            return;
+
+        var lastSpaceIndex = line.LastIndexOf(' ');
+        if (lastSpaceIndex <= 0)
+            return;
+
+        var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
+        data.DeleteChars(spaceByteOffset, 1);
+        data.InsertChars(spaceByteOffset, "\n");
+    }
+
     /// <summary>The message input box - a multi-line box (see <see cref="GetComposeBoxHeight"/>) so
     /// Shift+Enter can insert an actual line break, Telegram/Discord-style - with a "jump to bottom"
     /// button (always visible, but only actually clickable while scrolled up from the bottom - see
@@ -559,11 +610,22 @@ public sealed class MainWindow : Window, IDisposable
             pendingInputSplice = null;
         }
 
-        var boxSize = new Vector2(-(iconSize * 3 + ImGui.GetStyle().ItemSpacing.X), GetComposeBoxHeight());
+        // An explicit absolute width (not ImGui's usual "negative = distance from the right edge"
+        // trick) so the exact same number can be reused below as the wrap width - CalcTextSize can't
+        // measure against a relative size.
+        var boxWidth = ImGui.GetContentRegionAvail().X - (iconSize * 3 + ImGui.GetStyle().ItemSpacing.X);
+        var boxSize = new Vector2(boxWidth, GetComposeBoxHeight());
+
+        // A few pixels short of the box's actual usable text width (minus its own FramePadding) as a
+        // safety margin - measuring right up against the exact limit risks the wrap decision
+        // flickering frame to frame from sub-pixel rounding.
+        var wrapWidth = boxWidth - ImGui.GetStyle().FramePadding.X * 2f - 4f;
+
         ImGui.InputTextMultiline($"##input_{tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
+            WrapComposeLineIfNeeded(data, wrapWidth);
             return 0;
         });
 
