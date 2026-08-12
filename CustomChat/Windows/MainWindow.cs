@@ -176,7 +176,12 @@ public sealed class MainWindow : Window, IDisposable
 
     private void DrawSidebar()
     {
-        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -28), true))
+        // Same reserve formula as DrawContent's "Messages" child (not the old flat -28px) so the
+        // sidebar and message area end up exactly the same height, and "Close All PM" lines up evenly
+        // with the input row instead of sitting at a slightly different Y from one hardcoded pixel
+        // count and the other computed from the current font/frame size.
+        var bottomReserve = ImGui.GetFrameHeight() + TightRowSpacing;
+        using (var child = ImRaii.Child("Sidebar", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
             {
