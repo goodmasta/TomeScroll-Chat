@@ -344,10 +344,18 @@ public static class ChatMessageRenderer
             var spacing = ImGui.GetStyle().ItemSpacing.X;
             if (canInline)
             {
+                // Checking only the *first word*'s width here (the original check) is wrong for a
+                // multi-word run: fitting the first word doesn't mean there's comfortable room for
+                // the rest, and ImGui's word-wrap keeps every wrapped line of a Text widget pinned to
+                // that widget's own starting X - so inlining a multi-word run into a narrow leftover
+                // gap near the right edge turns every subsequent wrapped line into a ~1-character-wide
+                // column running down the right edge instead of a normal paragraph (seen with a run
+                // right after two links in the same message left little room on that line). Checking
+                // the *whole* run's unwrapped width instead means it only ever inlines when it can sit
+                // on the current line without wrapping at all - if it doesn't fit, it starts fresh
+                // with the full window width to wrap into, same as any other wrapped paragraph.
                 var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
-                var firstWordEnd = text.IndexOf(' ');
-                var firstWord = firstWordEnd < 0 ? text : text[..firstWordEnd];
-                if (prevRightX + spacing + ImGui.CalcTextSize(firstWord).X <= rightEdge)
+                if (prevRightX + spacing + ImGui.CalcTextSize(text).X <= rightEdge)
                     ImGui.SameLine(0, spacing);
             }
 
