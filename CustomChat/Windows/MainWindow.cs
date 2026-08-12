@@ -23,6 +23,7 @@ public sealed class MainWindow : Window, IDisposable
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
     private bool refocusInput;
+    private string? pendingPrefillText;
 
     // Discord-style "last read position": which tab the content area is currently showing, a frozen
     // divider index into that tab's message list (set once when switching in, not updated as the
@@ -89,10 +90,13 @@ public sealed class MainWindow : Window, IDisposable
     /// "typed '/' into the native chat" redirect's handler (see
     /// <see cref="Services.NativeChatInputWatcher"/>): the native input already captured the
     /// character(s) before this fires, so they have to be carried over explicitly rather than just
-    /// refocusing an empty box.</summary>
+    /// refocusing an empty box. The text is deliberately applied one frame *after* the focus request
+    /// (see <see cref="DrawInputRow"/>), not in the same one - ImGui's InputText selects the entire
+    /// buffer when it's given keyboard focus and already-non-empty text on the very same frame, which
+    /// made the next keystroke overwrite the redirected "/" instead of continuing after it.</summary>
     public void PrefillInput(string text)
     {
-        inputText = text;
+        pendingPrefillText = text;
         RequestFocus = true;
         refocusInput = true;
     }
@@ -405,6 +409,13 @@ public sealed class MainWindow : Window, IDisposable
         {
             ImGui.SetKeyboardFocusHere();
             refocusInput = false;
+        }
+        else if (pendingPrefillText != null)
+        {
+            // Deliberately not applied on the same frame the focus request above fires (see
+            // PrefillInput) - it lands here, one frame later, once the widget is already active.
+            inputText = pendingPrefillText;
+            pendingPrefillText = null;
         }
 
         var send = ImGui.InputText($"##input_{tab.Id}", ref inputText, 500, ImGuiInputTextFlags.EnterReturnsTrue);
