@@ -56,6 +56,7 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
   - **Copy nickname**.
   - **Send Tell** (not shown on your own messages).
   - **Send Party Invite** (not shown on your own messages) - works by name+world, same as the `/invite` command, no need to target/see the player.
+  - **Send Friend Request** (not shown on your own messages) - sends `/friendlist add "Name@World"`.
   - **Copy link**, or a submenu listing each one if the message has more than one.
 - Links (`https://...`, `www...`, and bare domains like `discord.gg/xxxx`) are coloured and clickable, opening in your default browser.
 - BTTV/7TV emote codes and the standard emoji pool are rendered as inline images, not text.

@@ -50,6 +50,8 @@ public static class ChatMessageRenderer
     /// sender name's right-click menu. Only offered for messages with a resolvable player sender.</param>
     /// <param name="onPartyInvite">Called with a "Name@World" key for "Send Party Invite" - same
     /// availability as <paramref name="onSendTell"/>.</param>
+    /// <param name="onFriendRequest">Called with a "Name@World" key for "Send Friend Request" - same
+    /// availability as <paramref name="onSendTell"/>.</param>
     /// <param name="localPlayerKey">The local character's own "Name@World" (see
     /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
     /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
@@ -57,7 +59,7 @@ public static class ChatMessageRenderer
     /// <param name="scrollToDivider">Scrolls the divider into view once, the frame it's drawn (tab just opened).</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -69,7 +71,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -104,7 +106,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -256,10 +258,14 @@ public static class ChatMessageRenderer
                 onSendTell(msg.SenderKey);
 
             // Works by name+world (like the vanilla `/invite` command) with no need to target/see the
-            // player - unlike a friend request, which the game only lets you send by actually
-            // targeting/examining someone, so there's no equivalent "by name from chat" version of it.
+            // player.
             if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Party Invite"))
                 onPartyInvite(msg.SenderKey);
+
+            // Goes through "/friendlist add" as a plain text command, not a dedicated native call -
+            // see Plugin.SendFriendRequest for why.
+            if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Friend Request"))
+                onFriendRequest(msg.SenderKey);
 
             var links = LinkDetector.Split(msg.Body).Where(s => s.IsLink).Select(s => s.Slice(msg.Body)).Distinct().ToList();
             if (links.Count == 1)

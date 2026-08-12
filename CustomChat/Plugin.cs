@@ -174,6 +174,28 @@ public sealed class Plugin : IDalamudPlugin
         ToastGui.ShowNormal(sent ? $"Party invite sent to {name}." : $"Couldn't send a party invite to {name}.");
     }
 
+    /// <summary>Sends a friend request via the "/friendlist add" text command - the message context
+    /// menu's "Send Friend Request" handler. Unlike <see cref="SendPartyInvite"/> this goes through
+    /// the normal chat-command pipeline (<see cref="ChatSendService"/>), not a dedicated native
+    /// function - there's no confirmed native "add friend by name" entry point (see the reflection
+    /// notes on <see cref="PartyInviteService"/>'s sibling investigation), so this relies entirely on
+    /// the command existing and working the way it was specified. No optimistic "sent" toast here,
+    /// since - unlike the party invite call, which reports success/failure - there's no way to know
+    /// whether this actually did anything; if the command is wrong, the game's own error message
+    /// (e.g. "The command is invalid...") still comes through normally and lands in any tab whose
+    /// channels include system/error messages (the default "Log" tab does), same as it would if the
+    /// player had typed it by hand.</summary>
+    public void SendFriendRequest(string partnerKey)
+    {
+        var at = partnerKey.IndexOf('@');
+        if (at <= 0)
+            return;
+
+        var name = partnerKey[..at];
+        var world = partnerKey[(at + 1)..];
+        ChatSendService.Send(string.Empty, $"/friendlist add \"{name}@{world}\"");
+    }
+
     public void SetTabDetached(ChatTabConfig tab, bool detached)
     {
         TabManager.SetDetached(tab, detached);
