@@ -24,6 +24,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
     [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -39,6 +41,7 @@ public sealed class Plugin : IDalamudPlugin
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
     public PartyInviteService PartyInviteService { get; }
+    public FriendRequestService FriendRequestService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly EnterToChatService enterToChatService;
@@ -63,6 +66,7 @@ public sealed class Plugin : IDalamudPlugin
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
         FriendListService = new FriendListService(worldIdResolver, Log);
         PartyInviteService = new PartyInviteService(worldIdResolver, Log);
+        FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -174,17 +178,13 @@ public sealed class Plugin : IDalamudPlugin
         ToastGui.ShowNormal(sent ? $"Party invite sent to {name}." : $"Couldn't send a party invite to {name}.");
     }
 
-    /// <summary>Sends a friend request via the "/friendlist add" text command - the message context
-    /// menu's "Send Friend Request" handler. Unlike <see cref="SendPartyInvite"/> this goes through
-    /// the normal chat-command pipeline (<see cref="ChatSendService"/>), not a dedicated native
-    /// function - there's no confirmed native "add friend by name" entry point (see the reflection
-    /// notes on <see cref="PartyInviteService"/>'s sibling investigation), so this relies entirely on
-    /// the command existing and working the way it was specified. No optimistic "sent" toast here,
-    /// since - unlike the party invite call, which reports success/failure - there's no way to know
-    /// whether this actually did anything; if the command is wrong, the game's own error message
-    /// (e.g. "The command is invalid...") still comes through normally and lands in any tab whose
-    /// channels include system/error messages (the default "Log" tab does), same as it would if the
-    /// player had typed it by hand.</summary>
+    /// <summary>Sends a friend request - the message context menu's "Send Friend Request" handler.
+    /// "/friendlist add "Name@World"" (a literal name) turned out to not be valid syntax - the game
+    /// rejected it with "invalid argument, please specify a valid placeholder", confirming there
+    /// really is no by-name path (see <see cref="FriendRequestService"/> for the full story and the
+    /// placeholder-based workaround it uses instead). Shows a toast either way, since whether the
+    /// player is actually nearby enough to target is genuine, useful information the player can't
+    /// otherwise get from this UI.</summary>
     public void SendFriendRequest(string partnerKey)
     {
         var at = partnerKey.IndexOf('@');
@@ -193,7 +193,8 @@ public sealed class Plugin : IDalamudPlugin
 
         var name = partnerKey[..at];
         var world = partnerKey[(at + 1)..];
-        ChatSendService.Send(string.Empty, $"/friendlist add \"{name}@{world}\"");
+        var sent = FriendRequestService.TrySend(name, world);
+        ToastGui.ShowNormal(sent ? $"Friend request sent to {name}." : $"{name} isn't nearby - can't send a friend request.");
     }
 
     public void SetTabDetached(ChatTabConfig tab, bool detached)
