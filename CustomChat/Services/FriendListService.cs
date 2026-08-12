@@ -41,8 +41,16 @@ public sealed unsafe class FriendListService
         return at > 0 && IsFriend(key[..at], key[(at + 1)..]);
     }
 
-    public bool IsFriend(string name, string world)
+    public bool IsFriend(string name, string world) => TryGetContentId(name, world, out _);
+
+    /// <summary>The friend list entry's content id, if this player is a friend - lets
+    /// <see cref="AdventurerPlateService"/> open their Adventurer Plate by content id (works
+    /// regardless of whether they're actually rendered nearby, unlike the plain object-table lookup
+    /// other features here have to fall back to), same as opening a plate from the friends list UI
+    /// itself doesn't require them to be nearby either.</summary>
+    public bool TryGetContentId(string name, string world, out ulong contentId)
     {
+        contentId = 0;
         if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
             return false;
 
@@ -57,7 +65,11 @@ public sealed unsafe class FriendListService
                 return false;
 
             var entry = proxy->GetEntryByName(name, worldId.Value);
-            return entry != null && entry->ContentId != 0;
+            if (entry == null || entry->ContentId == 0)
+                return false;
+
+            contentId = entry->ContentId;
+            return true;
         }
         catch (Exception ex)
         {

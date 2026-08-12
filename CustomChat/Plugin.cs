@@ -73,7 +73,7 @@ public sealed class Plugin : IDalamudPlugin
         FriendListService = new FriendListService(worldIdResolver, Log);
         PartyInviteService = new PartyInviteService(worldIdResolver, Log);
         FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
-        AdventurerPlateService = new AdventurerPlateService(ObjectTable);
+        AdventurerPlateService = new AdventurerPlateService(ObjectTable, FriendListService);
         WindowsNotificationService = new WindowsNotificationService(Log) { Enabled = Configuration.NotifyWhisperInWindows };
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
