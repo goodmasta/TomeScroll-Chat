@@ -22,7 +22,7 @@ public static class ChatMessageRenderer
     private static readonly Vector4 LinkColor = new(0.45f, 0.7f, 1f, 1f);
     private static readonly Vector4 FallbackColor = new(0.85f, 0.85f, 0.85f, 1f);
     private static readonly Vector4 TranslationColor = new(0.65f, 0.8f, 0.65f, 1f);
-    private static readonly Vector4 MentionColor = new(1f, 0.85f, 0.3f, 0.16f);
+    private static readonly Vector4 MentionColor = new(1f, 0.85f, 0.2f, 0.35f);
     private const string RedactedName = "Player";
 
     private static readonly Dictionary<XivChatType, Vector4> DefaultColors = new()

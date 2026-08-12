@@ -209,6 +209,15 @@ public sealed class Plugin : IDalamudPlugin
         if (string.IsNullOrEmpty(routingKey))
             return;
 
+        string path;
+        int count;
+
+        // Reading history and writing the file is the part that actually matters - kept in its own
+        // try/catch so a failure here (and only here) reports "failed to export". Revealing the file
+        // in Explorer below is a separate, best-effort convenience: launching an external process from
+        // inside the game can fail for reasons that have nothing to do with whether the export itself
+        // worked (e.g. an elevation mismatch between the game and the shell), and treating that as the
+        // whole export having failed was misleading - the file was already written successfully.
         try
         {
             var messages = ChatHistoryService.LoadRecent(routingKey, int.MaxValue);
@@ -224,16 +233,26 @@ public sealed class Plugin : IDalamudPlugin
             var invalidChars = Path.GetInvalidFileNameChars();
             var safeName = new string(tab.Name.Select(c => invalidChars.Contains(c) ? '_' : c).ToArray());
             var fileName = $"{safeName}_{DateTime.Now:yyyyMMdd_HHmmss}.txt";
-            var path = Path.Combine(exportDir, fileName);
+            path = Path.Combine(exportDir, fileName);
             File.WriteAllLines(path, lines);
-
-            ToastGui.ShowNormal($"Exported {messages.Count} message(s) to {fileName}.");
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+            count = messages.Count;
         }
         catch (Exception ex)
         {
             Log.Warning(ex, "CustomChat: failed to export tab {Tab}", tab.Name);
             ToastGui.ShowError("Failed to export chat history.");
+            return;
+        }
+
+        ToastGui.ShowNormal($"Exported {count} message(s) to {Path.GetFileName(path)}.");
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "CustomChat: exported chat history but failed to open Explorer to show it");
         }
     }
 

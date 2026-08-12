@@ -70,13 +70,22 @@ public sealed class DetachedTabWindow : Window, IDisposable
             return;
         }
 
-        // Same Ctrl+F handling as MainWindow.DrawContent - see there for the reasoning.
-        if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F))
+        // No sidebar/right-click menu to hang a "Search..." item off of in a single-tab floating
+        // window (unlike MainWindow's DrawTabContextMenu), so this is a small button instead.
+        ImGui.SameLine();
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
         {
-            searchMode = true;
-            selectionMode = false;
-            focusSearchInput = true;
+            if (ImGui.SmallButton($"{FontAwesomeIcon.Search.ToIconString()}##searchtoggle_{Tab.Id}"))
+            {
+                searchMode = !searchMode;
+                selectionMode = false;
+                focusSearchInput = searchMode;
+                if (!searchMode)
+                    searchQuery = string.Empty;
+            }
         }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Search in this tab");
 
         if (searchMode)
             DrawSearchBar();

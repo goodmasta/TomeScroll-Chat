@@ -39,7 +39,8 @@ public sealed class MainWindow : Window, IDisposable
     private string transcriptText = string.Empty;
     private int transcriptMessageCount = -1;
 
-    // Ctrl+F "search in this tab": filters the message list down to matches - see DrawContent.
+    // "Search in this tab" (opened from the tab's right-click menu, see DrawTabContextMenu):
+    // filters the message list down to matches - see DrawContent.
     private bool searchMode;
     private string searchQuery = string.Empty;
     private bool focusSearchInput;
@@ -248,6 +249,14 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.Separator();
 
+        if (ImGui.MenuItem("Search..."))
+        {
+            selectedTabId = tab.Id;
+            searchMode = true;
+            selectionMode = false;
+            focusSearchInput = true;
+        }
+
         if (ImGui.MenuItem("Pop out to floating window"))
             plugin.SetTabDetached(tab, true);
 
@@ -281,16 +290,6 @@ public sealed class MainWindow : Window, IDisposable
         {
             ImGui.TextDisabled("No tabs yet - create one on the left.");
             return;
-        }
-
-        // Ctrl+F opens the search bar, same as a browser - checked against the whole window (sidebar
-        // included) rather than just the message area, so it works regardless of which part of the
-        // window currently has focus.
-        if (ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows) && ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.F))
-        {
-            searchMode = true;
-            selectionMode = false;
-            focusSearchInput = true;
         }
 
         if (searchMode)
