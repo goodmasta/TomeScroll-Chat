@@ -37,7 +37,7 @@ public sealed class Plugin : IDalamudPlugin
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
     private readonly NativeChatHider nativeChatHider;
-    private readonly NativeTellWatcher nativeTellWatcher;
+    private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
@@ -58,7 +58,6 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         FriendListService = new FriendListService(DataManager, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
-        nativeTellWatcher = new NativeTellWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo);
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 
@@ -68,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.AddWindow(configWindow);
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
+        nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -272,7 +272,7 @@ public sealed class Plugin : IDalamudPlugin
             window.Dispose();
 
         nativeChatHider.Dispose();
-        nativeTellWatcher.Dispose();
+        nativeChatInputWatcher.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
         ChatCaptureService.Dispose();

@@ -85,6 +85,18 @@ public sealed class MainWindow : Window, IDisposable
         refocusInput = true;
     }
 
+    /// <summary>Same as <see cref="RequestFocusInput"/>, but also seeds the input box with text - the
+    /// "typed '/' into the native chat" redirect's handler (see
+    /// <see cref="Services.NativeChatInputWatcher"/>): the native input already captured the
+    /// character(s) before this fires, so they have to be carried over explicitly rather than just
+    /// refocusing an empty box.</summary>
+    public void PrefillInput(string text)
+    {
+        inputText = text;
+        RequestFocus = true;
+        refocusInput = true;
+    }
+
     public override void Draw()
     {
         using var table = ImRaii.Table("CustomChatLayout", 2, ImGuiTableFlags.Resizable);
