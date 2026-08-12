@@ -15,7 +15,7 @@ namespace CustomChat.Services;
 /// (see <see cref="EnterToChatService"/> for the other half of this) from being captured there
 /// instead of by this plugin's ImGui input box.
 ///
-/// Three cases:
+/// Two cases:
 /// - "/tell "/"/t " (a name typically pre-filled instantly by the game itself, not hand-typed, the
 ///   moment "Send Tell" is picked from any right-click menu, the friends list, or "R") opens/focuses
 ///   the matching whisper tab, same as before this watcher also handled general commands.
@@ -23,18 +23,20 @@ namespace CustomChat.Services;
 ///   box (<see cref="Windows.MainWindow.PrefillInput"/>), so e.g. "/party hello" typed directly
 ///   (not via this plugin's own input) still ends up going through <see cref="ChatSendService"/>
 ///   instead of being submitted by the native chat straight past this plugin.
-/// - Anything that doesn't start with "/" at all - most notably an item or map/flag link inserted via
-///   a right-click "Link" context menu action (inventory, map, etc.), which the game writes as raw
-///   encoded SeString payload bytes directly into this same textbox regardless of what actually has
-///   ImGui keyboard focus - is redirected the same way. That encoded text round-trips fine through a
-///   plain C# string and back out through <see cref="ChatSendService"/>'s own
-///   <c>UIModule.ProcessChatBoxEntry</c> call (the payload marker bytes it uses are all in the
-///   printable-ASCII range, so nothing gets lost going C# string -> UTF8 -> native Utf8String), so no
-///   special parsing is needed here - just forward the raw text through untouched. Before this was
-///   added, any such link silently sat in the hidden native box and never reached the plugin's own
-///   input at all (reported as "right-click -> Link on an item doesn't do anything").
 ///
-/// In every case the native box is cleared and the log window hidden immediately, unconditionally -
+/// Deliberately does NOT try to redirect non-"/" content this way (an earlier version of this file
+/// did, to catch an item link inserted via a right-click "Link" context menu action) - the game
+/// writes such a link as raw encoded SeString payload bytes, which pack a 32-bit item id using
+/// arbitrary byte values, not just printable ASCII, so decoding it via <c>Utf8String.ToString()</c>
+/// and later re-encoding it via <c>Encoding.UTF8.GetBytes</c> for <see cref="ChatSendService"/> risks
+/// silently corrupting it - unlike a typed slash command, which is always plain ASCII/readable text
+/// and round-trips fine. Item links are instead handled by
+/// <see cref="ItemLinkContextMenuService"/>, which reads the item id/HQ flag from Dalamud's own typed
+/// inventory-context-menu API and builds the link itself via
+/// <see cref="Dalamud.Game.Text.SeStringHandling.SeStringBuilder.AddItemLink"/> - sidestepping the
+/// native textbox (and its binary-payload risk) entirely.
+///
+/// In both cases the native box is cleared and the log window hidden immediately, unconditionally -
 /// see the original tell-only version's history for why that has to happen on every detection, not
 /// just outside some cooldown (a same-target cooldown still exists, but only gates the tell
 /// *callback*, never this cleanup).
@@ -74,29 +76,22 @@ public sealed unsafe class NativeChatInputWatcher : IDisposable
             return;
 
         var raw = addon->TextInput->RawString.ToString();
-        if (raw.Length == 0)
+        if (raw.Length == 0 || raw[0] != '/')
             return;
 
-        if (raw[0] == '/')
+        var tellMatch = TellPrefix.Match(raw);
+        if (tellMatch.Success)
         {
-            var tellMatch = TellPrefix.Match(raw);
-            if (tellMatch.Success)
-            {
-                HandleTell(addon, tellMatch, raw);
-                return;
-            }
-
-            // A bare "/", still mid-typed with nothing after it yet, still gets redirected into the
-            // plugin's input as an empty-ish "/" anyway, which is harmless and exactly what "press '/'
-            // to start typing a command" should do regardless.
+            HandleTell(addon, tellMatch, raw);
+            return;
         }
 
-        // Either a "/" command (any other than a tell), or non-command content that has no business
-        // being here at all - an item/map link inserted via a right-click "Link" action being the
-        // main case (see the class doc comment). Either way it leaked into the hidden native box
-        // instead of the plugin's own ImGui input, so redirect it there as-is.
+        // Only a real command (letter right after "/") should be redirected - a bare "/", still
+        // mid-typed with nothing after it yet, would just get redirected into the plugin's input as
+        // an empty-ish "/" anyway, which is harmless and exactly what "press '/' to start typing a
+        // command" should do regardless.
         ClearNativeInput(addon);
-        log.Info("CustomChat: native chat input detected - '{Raw}' redirected to plugin input", raw);
+        log.Info("CustomChat: native slash input detected - '{Raw}' redirected to plugin input", raw);
         onGenericCommand(raw);
     }
 

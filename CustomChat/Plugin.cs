@@ -32,6 +32,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
 
@@ -51,6 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     public WindowsNotificationService WindowsNotificationService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
+    private readonly ItemLinkContextMenuService itemLinkContextMenuService;
     private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
@@ -87,6 +89,7 @@ public sealed class Plugin : IDalamudPlugin
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
+        itemLinkContextMenuService = new ItemLinkContextMenuService(ContextMenu, AttachItemLink);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -131,12 +134,38 @@ public sealed class Plugin : IDalamudPlugin
     /// command (or plain text if none is set). For whisper tabs, also primes
     /// <see cref="ChatCaptureService.PendingOutgoingTellTarget"/> so the sent tell round-trips back
     /// into the same conversation even if the game's own echo doesn't resolve a player payload.</summary>
-    public void SendFromTab(ChatTabConfig tab, string text)
+    public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null)
     {
         if (tab.IsPmTab && tab.PmPartnerKey != null)
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
-        ChatSendService.Send(tab.OutgoingChannelCommand, text);
+        ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments);
+    }
+
+    /// <summary>Queues an item link as a compose-box attachment - the inventory right-click "Link
+    /// (Custom Chat)" handler (see <see cref="ItemLinkContextMenuService"/>). Resolves a display name
+    /// from the Item sheet purely for the chip UI/link text; if that ever fails for some reason (e.g. a
+    /// row id from an unusually new patch not yet in the local sheet), falls back to a generic label
+    /// rather than dropping the link - the actual outgoing payload only needs the id/HQ flag, not the
+    /// name, to be a valid, clickable link.</summary>
+    private void AttachItemLink(uint itemId, bool isHq)
+    {
+        var name = ResolveItemName(itemId) ?? $"Item #{itemId}";
+        mainWindow.AttachItemLink(new PendingItemLink(itemId, isHq, name));
+    }
+
+    private static string? ResolveItemName(uint itemId)
+    {
+        try
+        {
+            var name = DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>()?.GetRowOrDefault(itemId)?.Name.ToString();
+            return string.IsNullOrEmpty(name) ? null : name;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "CustomChat: failed to resolve item name for {ItemId}", itemId);
+            return null;
+        }
     }
 
     /// <summary>The local character's own home world name, used as a fallback when the game's native
@@ -430,6 +459,7 @@ public sealed class Plugin : IDalamudPlugin
 
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
+        itemLinkContextMenuService.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();

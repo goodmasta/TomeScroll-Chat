@@ -57,7 +57,17 @@ public sealed class MainWindow : Window, IDisposable
         var textHeight = ImGui.GetTextLineHeight();
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
-        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+        var height = textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+
+        // Same reasoning as the rest of this function's doc comment: DrawSidebar/DrawContent's
+        // bottom-reserve math reads this same value, so the pending-item-link chip row drawn above the
+        // input box (see DrawInputRow) has to be folded in here too, not sized independently - anything
+        // else risks the exact "reserved space doesn't match what's actually drawn" bug class this
+        // project has hit repeatedly with the input row before.
+        if (pendingItemLinks.Count > 0)
+            height += ImGui.GetFrameHeight() + itemSpacing;
+
+        return height;
     }
 
     private readonly Plugin plugin;
@@ -66,6 +76,11 @@ public sealed class MainWindow : Window, IDisposable
     private string emoteSearch = string.Empty;
     private bool refocusInput;
     private string? pendingPrefillText;
+
+    /// <summary>Item links queued via the inventory right-click "Link (Custom Chat)" entry (see
+    /// <see cref="Services.ItemLinkContextMenuService"/>), shown as removable chips above the compose
+    /// box and sent as an attachment on the next message - see <see cref="AttachItemLink"/>.</summary>
+    private readonly List<PendingItemLink> pendingItemLinks = new();
 
     // Bumped every time a message is sent, and folded into the input box's ImGui id (see
     // DrawInputRow). Without EnterReturnsTrue (removed for the multi-line Shift+Enter rework), ImGui
@@ -210,6 +225,14 @@ public sealed class MainWindow : Window, IDisposable
         RequestFocus = true;
         refocusInput = true;
     }
+
+    /// <summary>Queues an item link as a compose-box attachment - the inventory right-click "Link
+    /// (Custom Chat)" handler (see <see cref="Services.ItemLinkContextMenuService"/>). Always lands on
+    /// the main window's shared compose state regardless of which tab/window last had focus, same
+    /// convention as <see cref="PrefillInput"/>. Doesn't steal focus the way PrefillInput does - linking
+    /// an item is an incidental action (usually done while browsing inventory, not actively typing),
+    /// so yanking focus back to the chat window every time would be more disruptive than helpful.</summary>
+    public void AttachItemLink(PendingItemLink link) => pendingItemLinks.Add(link);
 
     public override void Draw()
     {
@@ -617,6 +640,9 @@ public sealed class MainWindow : Window, IDisposable
     {
         var iconSize = ImGui.GetFrameHeight();
 
+        if (pendingItemLinks.Count > 0)
+            DrawPendingItemLinkChips(tab);
+
         // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
         // "the very next widget") - doing it *after*, like before the icon buttons were added here,
         // would now count back through them/their popups instead of the input box, an unpredictable
@@ -738,10 +764,33 @@ public sealed class MainWindow : Window, IDisposable
             inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
         });
 
-        if (send && !string.IsNullOrWhiteSpace(inputText))
+        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0))
         {
-            plugin.SendFromTab(tab, inputText);
+            plugin.SendFromTab(tab, inputText, pendingItemLinks);
             inputText = string.Empty;
+            pendingItemLinks.Clear();
+        }
+    }
+
+    /// <summary>One removable chip per queued item link (see <see cref="AttachItemLink"/>), drawn on
+    /// their own row above the compose box - clicking a chip removes that attachment without sending
+    /// it. Sized/reserved via the same <see cref="GetComposeBoxHeight"/> this row's height is folded
+    /// into, so the message area above never overlaps it.</summary>
+    private void DrawPendingItemLinkChips(ChatTabConfig tab)
+    {
+        for (var i = 0; i < pendingItemLinks.Count; i++)
+        {
+            if (i > 0)
+                ImGui.SameLine();
+
+            if (ImGui.Button($"{pendingItemLinks[i].DisplayName} ✕##pendingitem_{tab.Id}_{i}"))
+            {
+                pendingItemLinks.RemoveAt(i);
+                break; // mutated the list mid-loop - stop rather than iterate a now-stale one this frame
+            }
+
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Click to remove");
         }
     }
 

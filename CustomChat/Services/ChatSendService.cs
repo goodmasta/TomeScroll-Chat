@@ -1,8 +1,12 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
+using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using CustomChat.Models;
 
 namespace CustomChat.Services;
 
@@ -29,22 +33,50 @@ public sealed unsafe class ChatSendService
     /// as-is: prefixing a tab's channel command in front of an already-explicit command would just
     /// produce an invalid double command (e.g. "/p /invite Name"), which is why typing any command
     /// used to only work from the one tab whose channel command happened to be empty (Log).</param>
-    public void Send(string channelCommand, string message)
+    /// <param name="attachments">Item links queued via <see cref="ItemLinkContextMenuService"/> (right-
+    /// click an item -> "Link (Custom Chat)"), appended after the typed text in order. These are
+    /// encoded straight to bytes via <see cref="SeStringBuilder.AddItemLink"/> and appended to the
+    /// outgoing buffer directly - never round-tripped through a C# string/UTF8 decode, since the raw
+    /// payload bytes that encode an item id aren't all valid/printable UTF-8 on their own and could be
+    /// corrupted by that trip (see <see cref="ItemLinkContextMenuService"/> for the full reasoning).
+    /// A message can be sent with only attachments and no typed text at all - e.g. just linking an
+    /// item and hitting Enter.</param>
+    public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null)
     {
-        if (string.IsNullOrWhiteSpace(message))
+        message ??= string.Empty;
+        var hasAttachments = attachments is { Count: > 0 };
+        if (string.IsNullOrWhiteSpace(message) && !hasAttachments)
             return;
 
         var isExplicitCommand = IsExplicitCommand(message);
-        var full = string.IsNullOrEmpty(channelCommand) || isExplicitCommand ? message : $"{channelCommand} {message}";
-        var byteCount = Encoding.UTF8.GetByteCount(full);
-        if (byteCount > MaxUtf8Bytes)
+        var full = string.IsNullOrEmpty(channelCommand) || isExplicitCommand
+            ? message
+            : message.Length > 0 ? $"{channelCommand} {message}" : channelCommand;
+
+        using var buffer = new MemoryStream();
+        var textBytes = Encoding.UTF8.GetBytes(full);
+        buffer.Write(textBytes);
+
+        if (hasAttachments)
         {
-            log.Warning("CustomChat: outgoing message is {Bytes} UTF-8 bytes, over the {Max}-byte limit - not sending", byteCount, MaxUtf8Bytes);
+            foreach (var link in attachments!)
+            {
+                if (buffer.Length > 0)
+                    buffer.WriteByte((byte)' ');
+
+                var linkBytes = new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode();
+                buffer.Write(linkBytes);
+            }
+        }
+
+        if (buffer.Length > MaxUtf8Bytes)
+        {
+            log.Warning("CustomChat: outgoing message is {Bytes} bytes, over the {Max}-byte limit - not sending", buffer.Length, MaxUtf8Bytes);
             return;
         }
 
-        var bytes = new byte[byteCount + 1]; // native string wants a trailing null terminator
-        Encoding.UTF8.GetBytes(full, 0, full.Length, bytes, 0);
+        buffer.WriteByte(0); // native string wants a trailing null terminator
+        var bytes = buffer.ToArray();
 
         var utf8 = Utf8String.FromSequence(bytes);
         try
