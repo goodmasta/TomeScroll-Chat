@@ -51,6 +51,7 @@ public sealed unsafe class ItemLinkHookService : IDisposable
             var address = AgentChatLog.Addresses.LinkItem.Value;
             hook = gameInteropProvider.HookFromAddress<LinkItemDelegate>(address, Detour);
             hook.Enable();
+            log.Info("CustomChat: hooked AgentChatLog.LinkItem at 0x{Address:X}", address);
         }
         catch (Exception ex)
         {
@@ -60,6 +61,7 @@ public sealed unsafe class ItemLinkHookService : IDisposable
 
     private void Detour(AgentChatLog* agent, uint itemId)
     {
+        log.Info("CustomChat: native item link detected - raw item id {ItemId}", itemId);
         try
         {
             var isHq = itemId is >= HqOffset and < HqOffset * 2;
