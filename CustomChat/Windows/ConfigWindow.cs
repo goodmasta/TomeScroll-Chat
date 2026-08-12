@@ -91,6 +91,30 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Separator();
+        ImGui.TextUnformatted("Translation");
+
+        var languages = TranslationLanguageCatalog.Entries;
+        var currentIndex = Array.FindIndex(languages, l => l.Code == configuration.TranslateTargetLanguage);
+        if (currentIndex < 0)
+            currentIndex = 0;
+
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.BeginCombo("Translate messages to", languages[currentIndex].Name))
+        {
+            foreach (var (code, name) in languages)
+            {
+                if (ImGui.Selectable(name, code == configuration.TranslateTargetLanguage))
+                {
+                    configuration.TranslateTargetLanguage = code;
+                    configuration.Save();
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+        ImGui.TextDisabled("Used by the \"Translate\" item in a message's right-click menu. Source language is always detected automatically.");
+
+        ImGui.Separator();
         ImGui.TextUnformatted("Unread notifications");
 
         var channelBlink = configuration.ChannelBlinkColor;

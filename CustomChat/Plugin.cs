@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
     public ChatCaptureService ChatCaptureService { get; }
     public ChatSendService ChatSendService { get; }
     public EmoteService EmoteService { get; }
+    public TranslationService TranslationService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
     private readonly NativeChatHider nativeChatHider;
@@ -55,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, TabManager, ChatHistoryService);
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
+        TranslationService = new TranslationService(Log);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         FriendListService = new FriendListService(DataManager, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
@@ -275,6 +277,7 @@ public sealed class Plugin : IDalamudPlugin
         nativeChatInputWatcher.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
+        TranslationService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();
     }

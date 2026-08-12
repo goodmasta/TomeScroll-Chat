@@ -21,6 +21,7 @@ public static class ChatMessageRenderer
 {
     private static readonly Vector4 LinkColor = new(0.45f, 0.7f, 1f, 1f);
     private static readonly Vector4 FallbackColor = new(0.85f, 0.85f, 0.85f, 1f);
+    private static readonly Vector4 TranslationColor = new(0.65f, 0.8f, 0.65f, 1f);
     private const string RedactedName = "Player";
 
     private static readonly Dictionary<XivChatType, Vector4> DefaultColors = new()
@@ -54,7 +55,7 @@ public static class ChatMessageRenderer
     /// <param name="scrollToDivider">Scrolls the divider into view once, the frame it's drawn (tab just opened).</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -66,7 +67,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, onSendTell, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -101,7 +102,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -175,6 +176,22 @@ public static class ChatMessageRenderer
         DrawBody(msg.Body, config, emotes);
         ImGui.PopStyleColor();
 
+        // Drawn under the same hanging indent as the body above it, on its own line - "Translate"
+        // (see the context menu below) fetches this lazily, so most messages never pay for it at all.
+        var translatedText = translation.TryGetTranslation(msg);
+        if (translatedText != null)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, TranslationColor);
+            ImGui.PushTextWrapPos(ImGui.GetWindowContentRegionMax().X);
+            ImGui.TextUnformatted($"→ {translatedText}");
+            ImGui.PopTextWrapPos();
+            ImGui.PopStyleColor();
+        }
+        else if (translation.IsTranslating(msg))
+        {
+            ImGui.TextDisabled("Translating...");
+        }
+
         ImGui.Unindent(indentWidth);
 
         ImGui.EndGroup();
@@ -213,6 +230,19 @@ public static class ChatMessageRenderer
 
             if (ImGui.MenuItem("Copy message"))
                 ImGui.SetClipboardText(BuildCopyText(msg));
+
+            if (!string.IsNullOrWhiteSpace(msg.Body))
+            {
+                if (translatedText != null)
+                {
+                    if (ImGui.MenuItem("Hide translation"))
+                        translation.ClearTranslation(msg);
+                }
+                else if (ImGui.MenuItem("Translate"))
+                {
+                    translation.RequestTranslate(msg, config.TranslateTargetLanguage);
+                }
+            }
 
             if (!string.IsNullOrEmpty(msg.SenderName) && ImGui.MenuItem("Copy nickname"))
                 ImGui.SetClipboardText(msg.SenderName);

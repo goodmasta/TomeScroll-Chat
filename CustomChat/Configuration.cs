@@ -66,5 +66,10 @@ public class Configuration : IPluginConfiguration
     /// text rendering is single-colour per glyph. Empty = no emote picked yet / marker not shown.</summary>
     public string FriendMarkerEmoji { get; set; } = string.Empty;
 
+    /// <summary>ISO 639-1 code (see <see cref="Utility.TranslationLanguageCatalog"/>) messages are
+    /// translated into via the "Translate" context-menu item - the source language is always
+    /// auto-detected per message, only the target is configurable.</summary>
+    public string TranslateTargetLanguage { get; set; } = "en";
+
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
