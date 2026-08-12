@@ -40,6 +40,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
         ShowCloseButton = true;
         IsOpen = true;
 
+        // All scrolling happens inside the "Messages" child - see MainWindow's constructor for why
+        // the window itself should never grow its own second, outer scrollbar.
+        Flags |= ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+
         var messagesNow = plugin.TabMessageBuffer.GetMessages(tab);
         dividerIndex = tab.UnreadCount > 0 ? Math.Max(0, messagesNow.Count - tab.UnreadCount) : -1;
         pendingScrollToDivider = dividerIndex >= 0;

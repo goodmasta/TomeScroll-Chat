@@ -53,7 +53,11 @@ public sealed class MainWindow : Window, IDisposable
         IsTopMost = true;
 
         // No collapse triangle - a gear button that opens Settings takes its place instead.
-        Flags |= ImGuiWindowFlags.NoCollapse;
+        // NoScrollbar/NoScrollWithMouse: all scrolling happens inside the "Messages" child - if the
+        // window's own total content height ever slightly exceeds its size (e.g. from a future row
+        // added below the message list without perfectly updating the reserved space, as already
+        // happened once), it should never grow a second, outer scrollbar of its own.
+        Flags |= ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
         TitleBarButtons.Add(new TitleBarButton
         {
             Icon = FontAwesomeIcon.Cog,
