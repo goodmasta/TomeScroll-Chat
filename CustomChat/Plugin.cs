@@ -240,7 +240,10 @@ public sealed class Plugin : IDalamudPlugin
         catch (Exception ex)
         {
             Log.Warning(ex, "CustomChat: failed to export tab {Tab}", tab.Name);
-            ToastGui.ShowError("Failed to export chat history.");
+            // The exception message is included directly in the toast (not just /xllog) since this
+            // couldn't be reproduced/tested locally - if it fails again, the toast itself should say
+            // why instead of needing a follow-up round-trip to go dig up the log line.
+            ToastGui.ShowError($"Failed to export chat history: {ex.Message}");
             return;
         }
 

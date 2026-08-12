@@ -169,7 +169,12 @@ public sealed class ChatHistoryService : IDisposable
     /// <summary>Loads the most recent <paramref name="limit"/> messages for a routing key, oldest first.</summary>
     public List<ChatMessageRecord> LoadRecent(string routingKey, int limit = 500)
     {
-        var results = new List<ChatMessageRecord>(limit);
+        // Capped independently of the SQL LIMIT below - this is a List<T> *initial capacity* hint,
+        // not a row count, and callers exporting "everything" pass int.MaxValue as limit (no
+        // practical upper bound on rows they want back). Pre-sizing the list's backing array to over
+        // two billion elements throws immediately, regardless of how many rows the query actually
+        // returns - capping the hint avoids that while still helping the common small-limit case.
+        var results = new List<ChatMessageRecord>(Math.Min(limit, 1024));
         using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
         connection.Open();
         using var cmd = connection.CreateCommand();

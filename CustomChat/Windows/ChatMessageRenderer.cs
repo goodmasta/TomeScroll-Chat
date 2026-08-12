@@ -228,7 +228,9 @@ public static class ChatMessageRenderer
         // Persistent tint (not just on hover) for a message that name-drops the local player - FFXIV
         // chat has no @mention system, so this is a plain-text match against the player's own name
         // (whole name or either half of it, so "hey Firstname" or "nice one Lastname" both count too).
-        var isMention = !isOwn && !string.IsNullOrEmpty(localPlayerName) && ContainsMention(msg.Body, localPlayerName);
+        // Deliberately not excluding the player's own messages - the request was "highlight messages
+        // containing my name", with no carve-out for who sent them.
+        var isMention = !string.IsNullOrEmpty(localPlayerName) && ContainsMention(msg.Body, localPlayerName);
 
         drawList.ChannelsSetCurrent(0); // background: painted after the content, but rendered behind it
         if (isMention)
