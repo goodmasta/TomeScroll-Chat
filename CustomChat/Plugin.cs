@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
 using Dalamud.Plugin;
@@ -226,6 +227,14 @@ public sealed class Plugin : IDalamudPlugin
         var world = partnerKey[(at + 1)..];
         if (!AdventurerPlateService.TryOpen(name, world))
             ToastGui.ShowNormal($"{name} isn't nearby - can't open their Adventurer Plate.");
+    }
+
+    /// <summary>Opens the map at a clicked map/flag coordinate link - see
+    /// <see cref="Models.ChatPayloadLink"/> for how these are captured in the first place.</summary>
+    public void OpenMapLink(MapLinkPayload payload)
+    {
+        if (!GameGui.OpenMapWithMapLink(payload))
+            ToastGui.ShowError("Couldn't open that map link.");
     }
 
     /// <summary>Exports a tab's *entire* stored history (not just what's currently buffered in

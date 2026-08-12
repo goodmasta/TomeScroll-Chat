@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using Dalamud.Game.Chat;
 using Dalamud.Game.Text;
@@ -60,6 +61,7 @@ public sealed class ChatCaptureService : IDisposable
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
         var body = message.Message.TextValue;
+        var payloadLinks = ExtractPayloadLinks(message.Message);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
         // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
         // so this uses wall-clock time at the moment the message is actually handled instead - for
@@ -68,7 +70,7 @@ public sealed class ChatCaptureService : IDisposable
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
-            HandleTell(chatType, senderText, senderKey, body, timestamp);
+            HandleTell(chatType, senderText, senderKey, body, payloadLinks, timestamp);
             return;
         }
 
@@ -85,13 +87,14 @@ public sealed class ChatCaptureService : IDisposable
                 SenderKey = senderKey,
                 Body = body,
                 RoutingKey = tab.Id.ToString(),
+                PayloadLinks = payloadLinks,
             };
             historyService.Enqueue(record);
             MessageRouted?.Invoke(tab, record);
         }
     }
 
-    private void HandleTell(XivChatType chatType, string senderText, string senderKey, string body, DateTime timestamp)
+    private void HandleTell(XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
         var partnerKey = !string.IsNullOrEmpty(senderKey)
             ? senderKey
@@ -110,9 +113,60 @@ public sealed class ChatCaptureService : IDisposable
             SenderKey = senderKey,
             Body = body,
             RoutingKey = partnerKey,
+            PayloadLinks = payloadLinks,
         };
         historyService.Enqueue(record);
         MessageRouted?.Invoke(tab, record);
+    }
+
+    /// <summary>Walks the raw SeString payload sequence to find map/flag and item links, recording
+    /// where their auto-generated display text lands in the flattened <c>TextValue</c> string (see
+    /// <see cref="ChatPayloadLink"/>). <c>TextValue</c> only concatenates <see cref="TextPayload.Text"/>
+    /// from <see cref="TextPayload"/> instances - every other payload (formatting, the link markers
+    /// themselves) contributes zero characters - so the display text for a link is whatever
+    /// <see cref="TextPayload"/> immediately follows its marker payload, which is how the game itself
+    /// always structures these (a couple of formatting payloads, the link marker, one text payload
+    /// with the visible name/coordinates, then formatting payloads closing it back out).</summary>
+    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message)
+    {
+        var links = new List<ChatPayloadLink>();
+        var cursor = 0;
+        ChatPayloadLinkType? pendingType = null;
+        MapLinkPayload? pendingMapLink = null;
+
+        foreach (var payload in message.Payloads)
+        {
+            if (payload is TextPayload textPayload)
+            {
+                var text = textPayload.Text ?? string.Empty;
+                if (pendingType != null && text.Length > 0)
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Type = pendingType.Value,
+                        Start = cursor,
+                        Length = text.Length,
+                        MapLink = pendingMapLink,
+                    });
+                    pendingType = null;
+                    pendingMapLink = null;
+                }
+
+                cursor += text.Length;
+            }
+            else if (payload is MapLinkPayload mapLink)
+            {
+                pendingType = ChatPayloadLinkType.MapLink;
+                pendingMapLink = mapLink;
+            }
+            else if (payload is ItemPayload)
+            {
+                pendingType = ChatPayloadLinkType.Item;
+                pendingMapLink = null;
+            }
+        }
+
+        return links;
     }
 
     private static bool MatchesFilter(ChatTabConfig tab, string body) => tab.FilterMode switch

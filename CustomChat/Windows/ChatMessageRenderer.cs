@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Text;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Utility;
 using CustomChat.Models;
 using CustomChat.Services;
@@ -23,6 +24,8 @@ public static class ChatMessageRenderer
     private static readonly Vector4 FallbackColor = new(0.85f, 0.85f, 0.85f, 1f);
     private static readonly Vector4 TranslationColor = new(0.65f, 0.8f, 0.65f, 1f);
     private static readonly Vector4 MentionColor = new(1f, 0.85f, 0.2f, 0.35f);
+    private static readonly Vector4 MapLinkColor = new(0.55f, 0.85f, 0.55f, 1f);
+    private static readonly Vector4 ItemLinkColor = new(0.85f, 0.65f, 0.3f, 1f);
     private const string RedactedName = "Player";
 
     private static readonly Dictionary<XivChatType, Vector4> DefaultColors = new()
@@ -55,6 +58,8 @@ public static class ChatMessageRenderer
     /// availability as <paramref name="onSendTell"/>.</param>
     /// <param name="onViewPlate">Called with a "Name@World" key for "View Adventurer Plate" - same
     /// availability as <paramref name="onSendTell"/>.</param>
+    /// <param name="onOpenMapLink">Called when a map/flag coordinate link in a message is clicked -
+    /// see <see cref="ChatPayloadLink"/>.</param>
     /// <param name="localPlayerKey">The local character's own "Name@World" (see
     /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
     /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
@@ -65,7 +70,7 @@ public static class ChatMessageRenderer
     /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -80,7 +85,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -119,7 +124,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -190,7 +195,7 @@ public static class ChatMessageRenderer
         ImGui.Indent(indentWidth);
 
         ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
-        DrawBody(msg.Body, config, emotes);
+        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink);
         ImGui.PopStyleColor();
 
         // Drawn under the same hanging indent as the body above it, on its own line - "Translate"
@@ -365,7 +370,7 @@ public static class ChatMessageRenderer
     /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
     /// single-token placement.
     /// </summary>
-    private static void DrawBody(string body, Configuration config, EmoteService emotes)
+    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink)
     {
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
@@ -419,35 +424,72 @@ public static class ChatMessageRenderer
             canInline = renderedHeight <= ImGui.GetTextLineHeight() * 1.5f;
         }
 
-        foreach (var span in LinkDetector.Split(body))
+        // Extracted so it can be called once per plain-text stretch *between* map/item links below,
+        // instead of just once for the whole body - everything else about it (including canInline
+        // and the plain StringBuilder) is unchanged, still closed over from the outer scope.
+        void ProcessSegment(string segment)
         {
-            var text = span.Slice(body);
-            if (span.IsLink)
+            foreach (var span in LinkDetector.Split(segment))
             {
-                FlushPlain();
-                canInline = DrawLink(text, config, rightEdge, canInline);
-                continue;
-            }
-
-            foreach (var word in text.Split(' '))
-            {
-                if (word.Length == 0)
-                    continue;
-
-                if (emotes.IsKnownEmote(word))
+                var text = span.Slice(segment);
+                if (span.IsLink)
                 {
                     FlushPlain();
-                    DrawEmote(word, config, emotes, rightEdge, canInline);
-                    canInline = true; // a single small image/fallback token, never wraps
+                    canInline = DrawLink(text, config, rightEdge, canInline);
+                    continue;
                 }
-                else
+
+                foreach (var word in text.Split(' '))
                 {
-                    if (plain.Length > 0)
-                        plain.Append(' ');
-                    plain.Append(word);
+                    if (word.Length == 0)
+                        continue;
+
+                    if (emotes.IsKnownEmote(word))
+                    {
+                        FlushPlain();
+                        DrawEmote(word, config, emotes, rightEdge, canInline);
+                        canInline = true; // a single small image/fallback token, never wraps
+                    }
+                    else
+                    {
+                        if (plain.Length > 0)
+                            plain.Append(' ');
+                        plain.Append(word);
+                    }
                 }
             }
         }
+
+        if (payloadLinks.Count == 0)
+        {
+            ProcessSegment(body);
+            FlushPlain();
+            return;
+        }
+
+        // Map/item links take priority over URL detection/emote splitting - carve the body up around
+        // them first, running the normal link/emote handling above on whatever plain text falls
+        // between (and before/after) them.
+        var cursor = 0;
+        foreach (var link in payloadLinks)
+        {
+            if (link.Start < cursor || link.Start + link.Length > body.Length)
+                continue; // defensive - shouldn't happen, extraction always walks forward over this same body
+
+            if (link.Start > cursor)
+                ProcessSegment(body[cursor..link.Start]);
+
+            FlushPlain();
+            var linkText = body.Substring(link.Start, link.Length);
+            canInline = link is { Type: ChatPayloadLinkType.MapLink, MapLink: not null }
+                ? DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, canInline)
+                : DrawItemLink(linkText, rightEdge, canInline);
+
+            cursor = link.Start + link.Length;
+        }
+
+        if (cursor < body.Length)
+            ProcessSegment(body[cursor..]);
 
         FlushPlain();
     }
@@ -512,6 +554,61 @@ public static class ChatMessageRenderer
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
             Util.OpenLink(LinkDetector.NormalizeForBrowser(token));
+
+        return !needsWrap;
+    }
+
+    /// <summary>Draws a map/flag coordinate link - clicking opens the map at that location via
+    /// <see cref="Dalamud.Plugin.Services.IGameGui.OpenMapWithMapLink(MapLinkPayload)"/>, using the
+    /// original payload captured at message-receive time (see <see cref="ChatPayloadLink"/>) rather
+    /// than re-deriving territory/coordinates from the display text.</summary>
+    private static bool DrawMapLink(string text, MapLinkPayload payload, Action<MapLinkPayload> onOpenMapLink, float rightEdge, bool canInline) =>
+        DrawColoredLinkToken(text, MapLinkColor, "Open on the map", () => onOpenMapLink(payload), rightEdge, canInline);
+
+    /// <summary>Draws an item link - clicking copies the item's name to the clipboard. Doesn't try to
+    /// reproduce the game's own "open item detail" popup: that needs several undocumented
+    /// AgentItemDetail fields (DetailKind/TypeOrId/Flag1-3) set correctly first, which isn't something
+    /// worth guessing at without a way to verify it doesn't misbehave.</summary>
+    private static bool DrawItemLink(string text, float rightEdge, bool canInline) =>
+        DrawColoredLinkToken(text, ItemLinkColor, $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, canInline);
+
+    /// <summary>Shared wrap/inline/click plumbing behind <see cref="DrawMapLink"/> and
+    /// <see cref="DrawItemLink"/> - the same logic <see cref="DrawLink"/> uses, just parameterised by
+    /// colour/tooltip/click action instead of also being duplicated for each new link type. (DrawLink
+    /// itself is left as its own function, not rewritten on top of this, since it also has the "open
+    /// links on click" toggle wrinkle these two don't need.)</summary>
+    private static bool DrawColoredLinkToken(string text, Vector4 color, string tooltip, Action onClick, float rightEdge, bool canInline)
+    {
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var tokenWidth = ImGui.CalcTextSize(text).X;
+        if (canInline)
+        {
+            var prevRightX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+            if (prevRightX + spacing + tokenWidth <= rightEdge)
+                ImGui.SameLine(0, spacing);
+        }
+
+        var fullWidth = rightEdge - ImGui.GetCursorPosX();
+        var needsWrap = tokenWidth > fullWidth;
+        if (needsWrap)
+        {
+            ImGui.PushTextWrapPos(rightEdge);
+            ImGui.TextColored(color, text);
+            ImGui.PopTextWrapPos();
+        }
+        else
+        {
+            ImGui.TextColored(color, text);
+        }
+
+        if (ImGui.IsItemHovered())
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            ImGui.SetTooltip(tooltip);
+        }
+
+        if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+            onClick();
 
         return !needsWrap;
     }

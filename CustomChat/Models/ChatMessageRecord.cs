@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Game.Text;
 
 namespace CustomChat.Models;
@@ -27,4 +28,9 @@ public sealed class ChatMessageRecord
     /// <summary>Which history bucket this belongs to: a tab's <see cref="ChatTabConfig.Id"/> (as string) for
     /// regular tabs, or the whisper partner's "Name@World" key for PM history.</summary>
     public string RoutingKey { get; init; } = string.Empty;
+
+    /// <summary>Map/flag and item links found in <see cref="Body"/> at capture time - see
+    /// <see cref="ChatPayloadLink"/> for why this is session-only (empty for anything reloaded from
+    /// history).</summary>
+    public IReadOnlyList<ChatPayloadLink> PayloadLinks { get; init; } = Array.Empty<ChatPayloadLink>();
 }
