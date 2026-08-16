@@ -6,6 +6,7 @@ using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using CustomChat.Models;
 
 namespace CustomChat.Services;
@@ -33,14 +34,13 @@ public sealed unsafe class ChatSendService
     /// as-is: prefixing a tab's channel command in front of an already-explicit command would just
     /// produce an invalid double command (e.g. "/p /invite Name"), which is why typing any command
     /// used to only work from the one tab whose channel command happened to be empty (Log).</param>
-    /// <param name="attachments">Item links queued via <see cref="ItemLinkContextMenuService"/> (right-
-    /// click an item -> "Link (Custom Chat)"), appended after the typed text in order. These are
-    /// encoded straight to bytes via <see cref="SeStringBuilder.AddItemLink"/> and appended to the
-    /// outgoing buffer directly - never round-tripped through a C# string/UTF8 decode, since the raw
-    /// payload bytes that encode an item id aren't all valid/printable UTF-8 on their own and could be
-    /// corrupted by that trip (see <see cref="ItemLinkContextMenuService"/> for the full reasoning).
-    /// A message can be sent with only attachments and no typed text at all - e.g. just linking an
-    /// item and hitting Enter.</param>
+    /// <param name="attachments">Item links queued via <see cref="ItemLinkHookService"/> (right-click
+    /// an item -> "Link"), appended after the typed text in order. These are encoded straight to bytes
+    /// via <see cref="SeStringBuilder.AddItemLink"/> and appended to the outgoing buffer directly -
+    /// never round-tripped through a C# string/UTF8 decode, since the raw payload bytes that encode an
+    /// item id aren't all valid/printable UTF-8 on their own and could be corrupted by that trip (see
+    /// <see cref="ItemLinkHookService"/> for the full reasoning). A message can be sent with only
+    /// attachments and no typed text at all - e.g. just linking an item and hitting Enter.</param>
     public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null)
     {
         message ??= string.Empty;
@@ -54,8 +54,7 @@ public sealed unsafe class ChatSendService
             : message.Length > 0 ? $"{channelCommand} {message}" : channelCommand;
 
         using var buffer = new MemoryStream();
-        var textBytes = Encoding.UTF8.GetBytes(full);
-        buffer.Write(textBytes);
+        AppendWithFlagLinkExpansion(buffer, full);
 
         if (hasAttachments)
         {
@@ -103,5 +102,64 @@ public sealed unsafe class ChatSendService
     {
         var trimmed = message.TrimStart();
         return trimmed.Length > 1 && trimmed[0] == '/' && char.IsLetter(trimmed[1]);
+    }
+
+    private const string FlagPlaceholder = "<flag>";
+
+    /// <summary>Writes <paramref name="text"/> as UTF-8, expanding any literal "&lt;flag&gt;" in it into
+    /// a real map link for the currently-set map flag first. The native chatbox auto-expands "&lt;flag&gt;"
+    /// this same way, but only as part of its own submit handling *before* it ever reaches
+    /// <c>UIModule::ProcessChatBoxEntry</c> - since this plugin calls that entry point directly, bypassing
+    /// the native UI entirely, that expansion step never runs for us and the literal text would be sent
+    /// as-is. Reimplemented here instead of relying on the native pipeline, the same reasoning as item
+    /// link attachments: build the payload ourselves via <see cref="SeStringBuilder.AddMapLink"/> from
+    /// <c>AgentMap.FlagMapMarkers</c> (the exact same data the native expansion would read), and splice
+    /// its raw encoded bytes in place of the placeholder text directly, never through a C# string. If no
+    /// flag is currently set on the map, the placeholder is left as literal text (matches what the
+    /// native chatbox does too - there's nothing to expand it to).</summary>
+    private void AppendWithFlagLinkExpansion(MemoryStream buffer, string text)
+    {
+        if (!text.Contains(FlagPlaceholder, StringComparison.Ordinal))
+        {
+            buffer.Write(Encoding.UTF8.GetBytes(text));
+            return;
+        }
+
+        var flagLinkBytes = TryBuildFlagLinkBytes();
+        if (flagLinkBytes == null)
+        {
+            buffer.Write(Encoding.UTF8.GetBytes(text));
+            return;
+        }
+
+        var segments = text.Split(FlagPlaceholder);
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].Length > 0)
+                buffer.Write(Encoding.UTF8.GetBytes(segments[i]));
+            if (i < segments.Length - 1)
+                buffer.Write(flagLinkBytes);
+        }
+    }
+
+    private byte[]? TryBuildFlagLinkBytes()
+    {
+        try
+        {
+            var agentMap = AgentMap.Instance();
+            if (agentMap == null || agentMap->FlagMarkerCount == 0)
+                return null;
+
+            var marker = agentMap->FlagMapMarkers[0];
+            if (marker.TerritoryId == 0)
+                return null;
+
+            return new SeStringBuilder().AddMapLink(marker.TerritoryId, marker.MapId, marker.XFloat, marker.YFloat, 0f).Encode();
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to build a map link for the current flag");
+            return null;
+        }
     }
 }
