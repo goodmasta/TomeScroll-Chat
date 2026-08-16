@@ -307,6 +307,15 @@ public sealed class MainWindow : Window, IDisposable
             }
         }
 
+        // The Sidebar child above reserves the *same* bottomReserve as the Messages child in
+        // DrawContent - which is tall enough for both the destination-channel label and the compose
+        // box below it, since that's what's actually drawn there. This column only draws one widget
+        // (the button below) in that same reserved space, so without this spacer it renders flush at
+        // the top of the reservation - noticeably higher than the compose box, which sits *below* its
+        // own label. This dummy exactly matches that label's height, pushing the button down to line
+        // up with the actual input box instead.
+        ImGui.Dummy(new Vector2(0, ImGui.GetTextLineHeightWithSpacing()));
+
         var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
         using (ImRaii.Disabled(!hasPmTabs))
         {
@@ -581,26 +590,116 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
-    /// <summary>Marks a newline this same wrap logic inserted for purely visual purposes, as opposed to
-    /// a real one the player typed with Shift+Enter - always inserted immediately after the "\n" itself
-    /// (see both insertion sites below), so <see cref="StripWrapMarkers"/> can reliably tell the two
-    /// apart and undo only the visual ones before a message is actually sent, regardless of how the
-    /// text gets edited afterward (the marker travels with the buffer through any edit, unlike trying
-    /// to track "which newline was ours" by byte position, which arbitrary further edits would
-    /// invalidate). Zero Width Space - a standard Unicode character with no visible glyph in virtually
-    /// any font (used for exactly this "invisible line-break hint" purpose in real text), not a made-up
-    /// sentinel that could show up as visible tofu.</summary>
-    private const char WrapMarker = (char)0x200B;
+    /// <summary>Byte offsets (into the native UTF-8 compose-box buffer - see
+    /// <see cref="WrapComposeLineIfNeeded"/>) of every "\n" this project's own auto-wrap simulation
+    /// inserted, tagged with whether it replaced a space (soft break) or was inserted into nothing
+    /// (hard break) - see <see cref="StripWrapNewlines"/> for why this exists and
+    /// <see cref="ReconcileWrapNewlines"/> for how it survives further edits. An earlier version tried
+    /// tagging each wrap newline in the text itself with an "invisible" Unicode marker character
+    /// instead - reverted (2026-08-13) after it turned out not to actually be invisible in this game's
+    /// font (rendered as a visible "="), which also broke the marker-based strip-before-send logic that
+    /// depended on it. Tracking positions out-of-band like this needs no such assumption about font
+    /// glyph coverage.</summary>
+    private readonly List<(int Position, bool IsSoftBreak)> wrapNewlines = new();
+
+    /// <summary>The compose box's native UTF-8 buffer contents as of the end of the last
+    /// <see cref="WrapComposeLineIfNeeded"/> call - the baseline <see cref="ReconcileWrapNewlines"/>
+    /// diffs the current frame's buffer against to figure out what edit happened since then (typing,
+    /// backspace, a paste, an external mutation like <see cref="PrefillInput"/>/the emote picker, or
+    /// this same function's own wrap insertion) and shift <see cref="wrapNewlines"/> accordingly.</summary>
+    private byte[] lastWrapSnapshot = Array.Empty<byte>();
+
+    /// <summary>Shifts/drops tracked <see cref="wrapNewlines"/> positions for whatever single edit
+    /// happened to the compose box's buffer since the last time this ran (every frame, so normally just
+    /// one keystroke's worth) - found via simple common-prefix/common-suffix diffing against
+    /// <see cref="lastWrapSnapshot"/>, which correctly isolates any single contiguous edit region
+    /// (covers ordinary typing, backspace/delete, and inserting a character in the middle of existing
+    /// text - exactly the "fixing a typo by editing mid-string" case that a naive fixed-position
+    /// assumption would get wrong). A tracked position that falls *inside* the edited region is dropped
+    /// (the edit touched that wrap point directly, so it's no longer reliably "ours" to identify) rather
+    /// than guessed at; one that falls after it shifts by the edit's length delta; one before it is
+    /// left alone.</summary>
+    private void ReconcileWrapNewlines(ReadOnlySpan<byte> currentBytes)
+    {
+        var oldBytes = lastWrapSnapshot;
+        var minLen = Math.Min(oldBytes.Length, currentBytes.Length);
+
+        var prefix = 0;
+        while (prefix < minLen && oldBytes[prefix] == currentBytes[prefix])
+            prefix++;
+
+        var maxSuffix = minLen - prefix;
+        var suffix = 0;
+        while (suffix < maxSuffix && oldBytes[oldBytes.Length - 1 - suffix] == currentBytes[currentBytes.Length - 1 - suffix])
+            suffix++;
+
+        var oldChangeLen = oldBytes.Length - prefix - suffix;
+        var newChangeLen = currentBytes.Length - prefix - suffix;
+        if (oldChangeLen == 0 && newChangeLen == 0)
+            return; // nothing changed since last frame
+
+        var changeStart = prefix;
+        var changeEnd = changeStart + oldChangeLen;
+        var delta = newChangeLen - oldChangeLen;
+
+        for (var i = wrapNewlines.Count - 1; i >= 0; i--)
+        {
+            var (position, isSoftBreak) = wrapNewlines[i];
+            if (position >= changeStart && position < changeEnd)
+                wrapNewlines.RemoveAt(i);
+            else if (position >= changeEnd)
+                wrapNewlines[i] = (position + delta, isSoftBreak);
+        }
+    }
+
+    /// <summary>Converts a UTF-8 *byte* offset (as tracked in <see cref="wrapNewlines"/>) into the
+    /// matching .NET *character* index into <paramref name="text"/> - needed because <c>inputText</c>
+    /// (what's actually bound to the widget, and what <see cref="StripWrapNewlines"/> operates on) is a
+    /// plain C# string indexed by UTF-16 code unit, not the byte-indexed native buffer the callback
+    /// sees - they only agree for pure-ASCII text. Treats a surrogate pair as one indivisible unit so a
+    /// byte offset can never end up splitting one.</summary>
+    private static int ByteOffsetToCharIndex(string text, int byteOffset)
+    {
+        var bytes = 0;
+        var charIndex = 0;
+        while (charIndex < text.Length && bytes < byteOffset)
+        {
+            var charLen = char.IsHighSurrogate(text[charIndex]) && charIndex + 1 < text.Length ? 2 : 1;
+            bytes += Encoding.UTF8.GetByteCount(text, charIndex, charLen);
+            charIndex += charLen;
+        }
+
+        return charIndex;
+    }
 
     /// <summary>Undoes every visual-only wrap this project's own auto-wrap simulation ever inserted (see
-    /// <see cref="WrapComposeLineIfNeeded"/>) - called right before a message is actually sent, so what
-    /// goes out never depends on how narrow the compose box happened to be while it was typed. A
-    /// "\n" + <see cref="WrapMarker"/> pair (soft break, replaced a space) becomes a single space again;
-    /// a lone marker (hard break, inserted with nothing removed) is just dropped, rejoining the token it
-    /// split. A real Shift+Enter newline never has this marker following it, so it's untouched either
-    /// way.</summary>
-    private static string StripWrapMarkers(string text) =>
-        text.Replace("\n" + WrapMarker, " ").Replace(WrapMarker.ToString(), string.Empty);
+    /// <see cref="wrapNewlines"/>/<see cref="WrapComposeLineIfNeeded"/>) - called right before a message
+    /// is actually sent, so what goes out never depends on how narrow the compose box happened to be
+    /// while it was typed. Processes tracked positions from the end backward so removing a hard-break
+    /// newline (which shortens the string by one character) never invalidates an earlier, not-yet
+    /// processed position. Defensively re-checks that a tracked position still actually points at a
+    /// "\n" before touching it - <see cref="ReconcileWrapNewlines"/> is best-effort, not a mathematical
+    /// guarantee, for every conceivable edit sequence.</summary>
+    private string StripWrapNewlines(string text)
+    {
+        if (wrapNewlines.Count == 0)
+            return text;
+
+        var sb = new StringBuilder(text);
+        foreach (var (bytePosition, isSoftBreak) in wrapNewlines.OrderByDescending(w => w.Position))
+        {
+            var charIndex = ByteOffsetToCharIndex(text, bytePosition);
+            if (charIndex >= sb.Length || sb[charIndex] != '\n')
+                continue;
+
+            if (isSoftBreak)
+                sb[charIndex] = ' ';
+            else
+                sb.Remove(charIndex, 1);
+        }
+
+        return sb.ToString();
+    }
 
     /// <summary>Dear ImGui's InputTextMultiline has no built-in word-wrap - long lines just scroll
     /// horizontally. This simulates it by physically inserting a real newline once the line containing
@@ -610,13 +709,19 @@ public sealed class MainWindow : Window, IDisposable
     /// already-typed paragraph). If there's no space to break at (one long unbroken word/URL), it's
     /// left alone rather than risk a hard break landing mid-codepoint in multi-byte UTF-8 text -
     /// <see cref="ImGuiInputTextCallbackData.CursorPos"/> and friends are UTF-8 *byte* offsets, not
-    /// character offsets, which matters for Cyrillic (2 bytes/char) text. Every inserted newline is
-    /// tagged with <see cref="WrapMarker"/> so it can be told apart from a real one and undone before
-    /// sending (see <see cref="StripWrapMarkers"/>) - this simulation still isn't perfect (an edit made
-    /// while the cursor is elsewhere on a long paragraph can still misfire, e.g. re-wrapping mid-edit),
-    /// but the marker means a misfire is now only ever a cosmetic wrinkle while typing, never a
-    /// corrupted outgoing message.</summary>
-    private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    /// character offsets, which matters for Cyrillic (2 bytes/char) text. Every inserted newline's
+    /// position is tracked in <see cref="wrapNewlines"/> so it can be undone before sending (see
+    /// <see cref="StripWrapNewlines"/>) - this simulation still isn't perfect (an edit made while the
+    /// cursor is elsewhere on a long paragraph can still misfire, e.g. re-wrapping mid-edit), but a
+    /// misfire is now only ever a cosmetic wrinkle while typing, never a corrupted outgoing message.</summary>
+    private void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    {
+        ReconcileWrapNewlines(data.BufTextSpan);
+        DoWrapCheck(data, wrapWidth);
+        lastWrapSnapshot = data.BufTextSpan.ToArray();
+    }
+
+    private void DoWrapCheck(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
         var bytes = data.BufTextSpan;
         if (bytes.Length == 0 || wrapWidth <= 0)
@@ -653,7 +758,8 @@ public sealed class MainWindow : Window, IDisposable
         {
             var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
             data.DeleteChars(spaceByteOffset, 1);
-            data.InsertChars(spaceByteOffset, "\n" + WrapMarker);
+            data.InsertChars(spaceByteOffset, "\n");
+            wrapNewlines.Add((spaceByteOffset, true));
             return;
         }
 
@@ -665,13 +771,9 @@ public sealed class MainWindow : Window, IDisposable
         //
         // Short unbroken tokens (2026-08-13) are deliberately exempted from this, left to just overflow
         // the box horizontally a little instead: a hard break lands wherever the pixel-width threshold
-        // happens to fall, with zero awareness of what the token actually is - and for something like
-        // the native chat placeholder "<flag>", landing mid-token (e.g. "<flag" + real newline + ">")
-        // silently corrupts it into something ChatSendService's placeholder expansion no longer
-        // recognizes, so it goes out as broken literal text instead of a real link (reported as
-        // "sending <flag> does nothing"). A real long URL/unbroken word is normally tens of characters
-        // at minimum, far past this threshold, so this only ever changes behavior for genuinely short
-        // tokens where "slightly overflows the box" is a much smaller cost than "silently corrupted."
+        // happens to fall, with zero awareness of what the token actually is, and this hard-break path
+        // is more likely to misfire mid-edit than the soft-break one above (see wrapNewlines' own doc
+        // comment for why a misfire is at least no longer able to corrupt what's actually sent).
         if (line.Length <= 16)
             return;
 
@@ -681,7 +783,8 @@ public sealed class MainWindow : Window, IDisposable
                 continue;
 
             var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
-            data.InsertChars(breakByteOffset, "\n" + WrapMarker);
+            data.InsertChars(breakByteOffset, "\n");
+            wrapNewlines.Add((breakByteOffset, false));
             return;
         }
     }
@@ -836,9 +939,11 @@ public sealed class MainWindow : Window, IDisposable
 
         if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0))
         {
-            plugin.SendFromTab(tab, StripWrapMarkers(inputText), pendingItemLinks);
+            plugin.SendFromTab(tab, StripWrapNewlines(inputText), pendingItemLinks);
             inputText = string.Empty;
             pendingItemLinks.Clear();
+            wrapNewlines.Clear();
+            lastWrapSnapshot = Array.Empty<byte>();
         }
     }
 

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
@@ -28,6 +30,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
     private bool refocusInput;
+
+    /// <summary>Same wrap-newline position tracking as MainWindow - see its field comment for the full
+    /// reasoning (an earlier "invisible" Unicode marker character approach turned out not to actually
+    /// be invisible in this game's font).</summary>
+    private readonly List<(int Position, bool IsSoftBreak)> wrapNewlines = new();
+    private byte[] lastWrapSnapshot = Array.Empty<byte>();
 
     /// <summary>Same "force a fresh widget on send" trick as MainWindow - see its field comment for
     /// the reasoning.</summary>
@@ -68,19 +76,90 @@ public sealed class DetachedTabWindow : Window, IDisposable
         ImGui.TextDisabled($"Sending to: {target}");
     }
 
-    /// <summary>Same marker character MainWindow uses to tag a visual-only wrap newline (vs. a real
-    /// Shift+Enter one) - see its version for the full reasoning.</summary>
-    private const char WrapMarker = (char)0x200B;
+    /// <summary>Same reconciliation as MainWindow's version - see its doc comment for the full
+    /// reasoning.</summary>
+    private void ReconcileWrapNewlines(ReadOnlySpan<byte> currentBytes)
+    {
+        var oldBytes = lastWrapSnapshot;
+        var minLen = Math.Min(oldBytes.Length, currentBytes.Length);
+
+        var prefix = 0;
+        while (prefix < minLen && oldBytes[prefix] == currentBytes[prefix])
+            prefix++;
+
+        var maxSuffix = minLen - prefix;
+        var suffix = 0;
+        while (suffix < maxSuffix && oldBytes[oldBytes.Length - 1 - suffix] == currentBytes[currentBytes.Length - 1 - suffix])
+            suffix++;
+
+        var oldChangeLen = oldBytes.Length - prefix - suffix;
+        var newChangeLen = currentBytes.Length - prefix - suffix;
+        if (oldChangeLen == 0 && newChangeLen == 0)
+            return;
+
+        var changeStart = prefix;
+        var changeEnd = changeStart + oldChangeLen;
+        var delta = newChangeLen - oldChangeLen;
+
+        for (var i = wrapNewlines.Count - 1; i >= 0; i--)
+        {
+            var (position, isSoftBreak) = wrapNewlines[i];
+            if (position >= changeStart && position < changeEnd)
+                wrapNewlines.RemoveAt(i);
+            else if (position >= changeEnd)
+                wrapNewlines[i] = (position + delta, isSoftBreak);
+        }
+    }
 
     /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
-    private static string StripWrapMarkers(string text) =>
-        text.Replace("\n" + WrapMarker, " ").Replace(WrapMarker.ToString(), string.Empty);
+    private static int ByteOffsetToCharIndex(string text, int byteOffset)
+    {
+        var bytes = 0;
+        var charIndex = 0;
+        while (charIndex < text.Length && bytes < byteOffset)
+        {
+            var charLen = char.IsHighSurrogate(text[charIndex]) && charIndex + 1 < text.Length ? 2 : 1;
+            bytes += Encoding.UTF8.GetByteCount(text, charIndex, charLen);
+            charIndex += charLen;
+        }
+
+        return charIndex;
+    }
+
+    /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
+    private string StripWrapNewlines(string text)
+    {
+        if (wrapNewlines.Count == 0)
+            return text;
+
+        var sb = new StringBuilder(text);
+        foreach (var (bytePosition, isSoftBreak) in wrapNewlines.OrderByDescending(w => w.Position))
+        {
+            var charIndex = ByteOffsetToCharIndex(text, bytePosition);
+            if (charIndex >= sb.Length || sb[charIndex] != '\n')
+                continue;
+
+            if (isSoftBreak)
+                sb[charIndex] = ' ';
+            else
+                sb.Remove(charIndex, 1);
+        }
+
+        return sb.ToString();
+    }
 
     /// <summary>Same manual word-wrap simulation as MainWindow - see its version for the full
     /// reasoning (no built-in word-wrap in Dear ImGui's InputTextMultiline, byte-vs-character offset
-    /// care for multi-byte UTF-8 text, and why every inserted newline is tagged with
-    /// <see cref="WrapMarker"/>).</summary>
-    private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    /// care for multi-byte UTF-8 text, and why every inserted newline's position is tracked in
+    /// <see cref="wrapNewlines"/> instead of embedding a marker character in the text itself).</summary>
+    private void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
+    {
+        ReconcileWrapNewlines(data.BufTextSpan);
+        DoWrapCheck(data, wrapWidth);
+        lastWrapSnapshot = data.BufTextSpan.ToArray();
+    }
+
+    private void DoWrapCheck(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
         var bytes = data.BufTextSpan;
         if (bytes.Length == 0 || wrapWidth <= 0)
@@ -117,7 +196,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
             data.DeleteChars(spaceByteOffset, 1);
-            data.InsertChars(spaceByteOffset, "\n" + WrapMarker);
+            data.InsertChars(spaceByteOffset, "\n");
+            wrapNewlines.Add((spaceByteOffset, true));
             return;
         }
 
@@ -135,7 +215,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
                 continue;
 
             var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
-            data.InsertChars(breakByteOffset, "\n" + WrapMarker);
+            data.InsertChars(breakByteOffset, "\n");
+            wrapNewlines.Add((breakByteOffset, false));
             return;
         }
     }
@@ -413,8 +494,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         if (send && !string.IsNullOrWhiteSpace(inputText))
         {
-            plugin.SendFromTab(Tab, StripWrapMarkers(inputText));
+            plugin.SendFromTab(Tab, StripWrapNewlines(inputText));
             inputText = string.Empty;
+            wrapNewlines.Clear();
+            lastWrapSnapshot = Array.Empty<byte>();
         }
 
         ImGui.PopStyleVar();
