@@ -51,6 +51,9 @@ public static class ChatMessageRenderer
 
     private static readonly Vector4 DividerColor = new(1f, 0.35f, 0.35f, 1f);
 
+    /// <param name="onReply">Called with just the sender's first name (no last name/world) when the
+    /// user picks "Reply" - inserted into the compose box without clearing whatever's already typed,
+    /// same availability as <paramref name="onSendTell"/>.</param>
     /// <param name="onSendTell">Called with a "Name@World" key when the user picks "Send Tell" from a
     /// sender name's right-click menu. Only offered for messages with a resolvable player sender.</param>
     /// <param name="onPartyInvite">Called with a "Name@World" key for "Send Party Invite" - same
@@ -75,7 +78,7 @@ public static class ChatMessageRenderer
     /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -90,7 +93,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, itemTooltipService, itemContextService, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onReply, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, itemTooltipService, itemContextService, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -129,7 +132,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -272,6 +275,12 @@ public static class ChatMessageRenderer
                 ImGui.PopStyleColor();
                 ImGui.Separator();
             }
+
+            // Just the first name (FFXIV names are always "First Last") - inserted into the compose
+            // box without clearing whatever's already typed, same append behaviour as the emote picker/
+            // quick-<pos> button.
+            if (!isOwn && !string.IsNullOrEmpty(msg.SenderName) && ImGui.MenuItem("Reply"))
+                onReply(msg.SenderName.Split(' ', 2)[0]);
 
             if (ImGui.MenuItem("Copy message"))
                 ImGui.SetClipboardText(BuildCopyText(msg));

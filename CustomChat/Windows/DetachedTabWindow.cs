@@ -30,6 +30,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
     private bool refocusInput;
+    private string? pendingPrefillText;
 
     /// <summary>Same wrap-newline position tracking as MainWindow - see its field comment for the full
     /// reasoning (an earlier "invisible" Unicode marker character approach turned out not to actually
@@ -290,6 +291,19 @@ public sealed class DetachedTabWindow : Window, IDisposable
         pendingScrollToDivider = dividerIndex >= 0;
     }
 
+    /// <summary>Appends text to the compose box and queues a refocus - the "Reply" context-menu
+    /// action's target on this window specifically (unlike MainWindow.PrefillInput, nothing here also
+    /// needs to bring a whole separate window to front, since the player is already looking at this
+    /// exact window when they right-click a message in it). Deferred by a frame the same way
+    /// MainWindow's version is (see its own doc comment) - giving focus and already-non-empty text on
+    /// the same frame makes ImGui select the whole buffer, so the very next keystroke would overwrite
+    /// the reply target instead of continuing after it.</summary>
+    public void PrefillInput(string text)
+    {
+        pendingPrefillText = text;
+        refocusInput = true;
+    }
+
     /// <summary>Same fade-while-unfocused and body-matching-title-bar behaviour as MainWindow.PreDraw -
     /// see there for the reasoning.</summary>
     public override void PreDraw()
@@ -377,7 +391,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, plugin.OpenMapLink, plugin.ItemTooltipService, plugin.ItemContextService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, plugin.OpenMapLink, plugin.ItemTooltipService, plugin.ItemContextService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
                     if (!searchMode && lastVisible >= 0)
@@ -421,6 +435,15 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             ImGui.SetKeyboardFocusHere();
             refocusInput = false;
+        }
+        else if (pendingPrefillText != null)
+        {
+            // Deliberately one frame after the focus request above - see PrefillInput's own doc
+            // comment. Appended, not replacing outright, same as MainWindow's version.
+            if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+                inputText += " ";
+            inputText += pendingPrefillText;
+            pendingPrefillText = null;
         }
 
         if (pendingInputSplice != null)
