@@ -15,4 +15,26 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
+
+  <!-- Embeds the current git commit hash into the assembly via AssemblyMetadataAttribute, read back
+       by Plugin.PrintVersion ("/customchat version"). <Version> above is hand-set and rarely bumped
+       between commits, so on its own it can't answer "which commit is this build" - the commit hash
+       always can, since it changes on every commit regardless of whether Version was touched. Falls
+       back to "unknown" (not a build failure) if git isn't on PATH or this isn't a git checkout. -->
+  <Target Name="SetGitCommitHash" BeforeTargets="GenerateAssemblyInfo" AfterTargets="PrepareForBuild">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitHashOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="GitCommitHashExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <GitCommitHash Condition="'$(GitCommitHashExitCode)' == '0' AND '$(GitCommitHashOutput)' != ''">$(GitCommitHashOutput)</GitCommitHash>
+      <GitCommitHash Condition="'$(GitCommitHash)' == ''">unknown</GitCommitHash>
+    </PropertyGroup>
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+        <_Parameter1>GitCommitHash</_Parameter1>
+        <_Parameter2>$(GitCommitHash)</_Parameter2>
+      </AssemblyAttribute>
+    </ItemGroup>
+  </Target>
 </Project>

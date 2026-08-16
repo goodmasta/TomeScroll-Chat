@@ -490,16 +490,25 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>"/customchat version" - prints the loaded assembly's version *and* its on-disk build
     /// time to chat. The assembly's Version rarely changes between commits in this project (it's not
     /// bumped per-build), so on its own it can't answer "is this actually the build I just compiled" -
-    /// the file's last-write time can, since that changes on every rebuild. Prints straight to chat
-    /// (not just /xllog) so it's visible without needing to open the Dalamud log window at all.</summary>
+    /// the file's last-write time can, since that changes on every rebuild. Uses
+    /// <see cref="IDalamudPluginInterface.AssemblyLocation"/>, not <c>typeof(Plugin).Assembly.Location</c>
+    /// - Dalamud loads dev plugins from an in-memory byte array (so it can rebuild the DLL on disk
+    /// without holding a file lock on it), which leaves the CLR's own <c>Assembly.Location</c> empty;
+    /// <c>PluginInterface.AssemblyLocation</c> is the actual on-disk path/timestamp Dalamud loaded from,
+    /// independent of that. Also prints the exact git commit this build was compiled from (embedded at
+    /// build time by <c>CustomChat.csproj</c>'s <c>SetGitCommitHash</c> target as an
+    /// <see cref="AssemblyMetadataAttribute"/>) - the one piece of this that can't drift or be
+    /// mis-set by hand, since it's read straight from git. Prints straight to chat (not just /xllog)
+    /// so it's visible without needing to open the Dalamud log window at all.</summary>
     private void PrintVersion()
     {
         var assembly = typeof(Plugin).Assembly;
         var version = assembly.GetName().Version;
-        var buildTime = File.Exists(assembly.Location)
-            ? File.GetLastWriteTime(assembly.Location).ToString("yyyy-MM-dd HH:mm:ss")
-            : "unknown";
-        ChatGui.Print($"Custom Chat v{version}, built {buildTime}, loaded from {assembly.Location}");
+        var commitHash = assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .FirstOrDefault(a => a.Key == "GitCommitHash")?.Value ?? "unknown";
+        var file = PluginInterface.AssemblyLocation;
+        var buildTime = file.Exists ? file.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") : "unknown";
+        ChatGui.Print($"Custom Chat v{version} (commit {commitHash}), built {buildTime}, loaded from {file.FullName}");
     }
 
     private void ToggleConfigUi() => configWindow.Toggle();
