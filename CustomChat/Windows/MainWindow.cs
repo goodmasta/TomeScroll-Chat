@@ -57,17 +57,14 @@ public sealed class MainWindow : Window, IDisposable
         var textHeight = ImGui.GetTextLineHeight();
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
-        var height = textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
 
         // Same reasoning as the rest of this function's doc comment: DrawSidebar/DrawContent's
-        // bottom-reserve math reads this same value, so the pending-item-link chip row drawn above the
-        // input box (see DrawInputRow) has to be folded in here too, not sized independently - anything
-        // else risks the exact "reserved space doesn't match what's actually drawn" bug class this
-        // project has hit repeatedly with the input row before.
-        if (pendingItemLinks.Count > 0)
-            height += ImGui.GetFrameHeight() + itemSpacing;
-
-        return height;
+        // bottom-reserve math reads this same value, so the destination-channel label drawn above the
+        // input box (see DrawInputRow) has to be folded in here too, not sized independently - a plain
+        // Text widget's own height is exactly GetTextLineHeightWithSpacing() (no FramePadding involved,
+        // unlike the InputText box above), so unlike the compose box height this doesn't need any
+        // special-casing.
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1) + ImGui.GetTextLineHeightWithSpacing();
     }
 
     private readonly Plugin plugin;
@@ -77,9 +74,9 @@ public sealed class MainWindow : Window, IDisposable
     private bool refocusInput;
     private string? pendingPrefillText;
 
-    /// <summary>Item links queued via the inventory right-click "Link (Custom Chat)" entry (see
-    /// <see cref="Services.ItemLinkContextMenuService"/>), shown as removable chips above the compose
-    /// box and sent as an attachment on the next message - see <see cref="AttachItemLink"/>.</summary>
+    /// <summary>Item links queued via the native "Link" action (see
+    /// <see cref="Services.NativeItemLinkWatcher"/>), consumed in order by each "&lt;link&gt;"
+    /// placeholder in <see cref="inputText"/> at send time - see <see cref="AttachItemLink"/>.</summary>
     private readonly List<PendingItemLink> pendingItemLinks = new();
 
     // Bumped every time a message is sent, and folded into the input box's ImGui id (see
@@ -226,13 +223,28 @@ public sealed class MainWindow : Window, IDisposable
         refocusInput = true;
     }
 
-    /// <summary>Queues an item link as a compose-box attachment - the inventory right-click "Link
-    /// (Custom Chat)" handler (see <see cref="Services.ItemLinkContextMenuService"/>). Always lands on
-    /// the main window's shared compose state regardless of which tab/window last had focus, same
+    /// <summary>Placeholder text inserted into the compose box the moment an item gets linked via the
+    /// native "Link" action - swapped for the real link at send time (see <see cref="Services.ChatSendService"/>),
+    /// same approach ChatTwo uses for this. Kept in sync with <c>ChatSendService.LinkPlaceholder</c>.</summary>
+    private const string ItemLinkPlaceholder = "<link>";
+
+    /// <summary>Queues an item link and drops a "&lt;link&gt;" placeholder into the compose box - the
+    /// <see cref="Services.NativeItemLinkWatcher"/> handler for the native "Link" action. Always lands
+    /// on the main window's shared compose state regardless of which tab/window last had focus, same
     /// convention as <see cref="PrefillInput"/>. Doesn't steal focus the way PrefillInput does - linking
-    /// an item is an incidental action (usually done while browsing inventory, not actively typing),
-    /// so yanking focus back to the chat window every time would be more disruptive than helpful.</summary>
-    public void AttachItemLink(PendingItemLink link) => pendingItemLinks.Add(link);
+    /// an item is an incidental action (usually done while browsing inventory, not actively typing), so
+    /// yanking focus back to the chat window every time would be more disruptive than helpful. Appends
+    /// directly (not via a one-frame-deferred pending field like <see cref="PrefillInput"/> needs) -
+    /// the same direct-append the emote picker already does successfully, since nothing here also
+    /// grants keyboard focus on the same frame (the specific combination that trips up ImGui's
+    /// InputText, per <see cref="PrefillInput"/>'s own doc comment).</summary>
+    public void AttachItemLink(PendingItemLink link)
+    {
+        pendingItemLinks.Add(link);
+        if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+            inputText += " ";
+        inputText += ItemLinkPlaceholder;
+    }
 
     public override void Draw()
     {
@@ -643,6 +655,21 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
+    /// <summary>One dimmed line above the compose box naming exactly what sending will do - the tab's
+    /// <see cref="ChatTabConfig.OutgoingChannelCommand"/> as literally configured (e.g. "/p", "/fc",
+    /// "/tell Name@World"), or a note that it follows whatever channel the game's own UI last had
+    /// active when that's empty (built-in "Log" tab, or any custom tab left without one). Shown as the
+    /// raw command rather than translated to a friendly channel name - always exactly accurate for
+    /// custom tabs, which can have any outgoing command a player could type, not just the built-in
+    /// five this plugin ships with defaults for.</summary>
+    private void DrawOutgoingChannelLabel(ChatTabConfig tab)
+    {
+        var target = string.IsNullOrEmpty(tab.OutgoingChannelCommand)
+            ? "current in-game chat channel"
+            : tab.OutgoingChannelCommand;
+        ImGui.TextDisabled($"Sending to: {target}");
+    }
+
     /// <summary>The message input box - a multi-line box (see <see cref="GetComposeBoxHeight"/>) so
     /// Shift+Enter can insert an actual line break, Telegram/Discord-style - with a "jump to bottom"
     /// button (always visible, but only actually clickable while scrolled up from the bottom - see
@@ -653,8 +680,7 @@ public sealed class MainWindow : Window, IDisposable
     {
         var iconSize = ImGui.GetFrameHeight();
 
-        if (pendingItemLinks.Count > 0)
-            DrawPendingItemLinkChips(tab);
+        DrawOutgoingChannelLabel(tab);
 
         // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
         // "the very next widget") - doing it *after*, like before the icon buttons were added here,
@@ -782,28 +808,6 @@ public sealed class MainWindow : Window, IDisposable
             plugin.SendFromTab(tab, inputText, pendingItemLinks);
             inputText = string.Empty;
             pendingItemLinks.Clear();
-        }
-    }
-
-    /// <summary>One removable chip per queued item link (see <see cref="AttachItemLink"/>), drawn on
-    /// their own row above the compose box - clicking a chip removes that attachment without sending
-    /// it. Sized/reserved via the same <see cref="GetComposeBoxHeight"/> this row's height is folded
-    /// into, so the message area above never overlaps it.</summary>
-    private void DrawPendingItemLinkChips(ChatTabConfig tab)
-    {
-        for (var i = 0; i < pendingItemLinks.Count; i++)
-        {
-            if (i > 0)
-                ImGui.SameLine();
-
-            if (ImGui.Button($"{pendingItemLinks[i].DisplayName} ✕##pendingitem_{tab.Id}_{i}"))
-            {
-                pendingItemLinks.RemoveAt(i);
-                break; // mutated the list mid-loop - stop rather than iterate a now-stale one this frame
-            }
-
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Click to remove");
         }
     }
 

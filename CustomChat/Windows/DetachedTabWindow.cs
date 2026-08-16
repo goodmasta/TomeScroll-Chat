@@ -48,7 +48,19 @@ public sealed class DetachedTabWindow : Window, IDisposable
         var textHeight = ImGui.GetTextLineHeight();
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
-        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
+
+        // Folds in the destination-channel label drawn above the input box (see DrawInputRow) - same
+        // reasoning as MainWindow's version.
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1) + ImGui.GetTextLineHeightWithSpacing();
+    }
+
+    /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
+    private void DrawOutgoingChannelLabel()
+    {
+        var target = string.IsNullOrEmpty(Tab.OutgoingChannelCommand)
+            ? "current in-game chat channel"
+            : Tab.OutgoingChannelCommand;
+        ImGui.TextDisabled($"Sending to: {target}");
     }
 
     /// <summary>Same manual word-wrap simulation as MainWindow - see its version for the full
@@ -287,6 +299,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         var iconSize = ImGui.GetFrameHeight();
         var toolbarSpacing = ImGui.GetStyle().ItemSpacing.X;
+
+        DrawOutgoingChannelLabel();
 
         // Re-focus has to happen right before the input box (offset 0 = "the very next widget") rather
         // than after, since after now runs through the icon buttons/popup - an unpredictable number of

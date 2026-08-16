@@ -21,6 +21,9 @@ namespace CustomChat.Services;
 public sealed unsafe class ChatSendService
 {
     private const int MaxUtf8Bytes = 500;
+    private const string FlagPlaceholder = "<flag>";
+    private const string LinkPlaceholder = "<link>";
+
     private readonly IPluginLog log;
 
     public ChatSendService(IPluginLog log)
@@ -34,13 +37,10 @@ public sealed unsafe class ChatSendService
     /// as-is: prefixing a tab's channel command in front of an already-explicit command would just
     /// produce an invalid double command (e.g. "/p /invite Name"), which is why typing any command
     /// used to only work from the one tab whose channel command happened to be empty (Log).</param>
-    /// <param name="attachments">Item links queued via <see cref="ItemLinkHookService"/> (right-click
-    /// an item -> "Link"), appended after the typed text in order. These are encoded straight to bytes
-    /// via <see cref="SeStringBuilder.AddItemLink"/> and appended to the outgoing buffer directly -
-    /// never round-tripped through a C# string/UTF8 decode, since the raw payload bytes that encode an
-    /// item id aren't all valid/printable UTF-8 on their own and could be corrupted by that trip (see
-    /// <see cref="ItemLinkHookService"/> for the full reasoning). A message can be sent with only
-    /// attachments and no typed text at all - e.g. just linking an item and hitting Enter.</param>
+    /// <param name="attachments">Item links queued via <see cref="NativeItemLinkWatcher"/> (right-click
+    /// an item -> "Link"), consumed in order by each literal "&lt;link&gt;" placeholder found in
+    /// <paramref name="message"/> - see <see cref="AppendWithPlaceholderExpansion"/>. A message can be
+    /// sent with only a "&lt;link&gt;" and no other typed text at all.</param>
     public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null)
     {
         message ??= string.Empty;
@@ -54,19 +54,7 @@ public sealed unsafe class ChatSendService
             : message.Length > 0 ? $"{channelCommand} {message}" : channelCommand;
 
         using var buffer = new MemoryStream();
-        AppendWithFlagLinkExpansion(buffer, full);
-
-        if (hasAttachments)
-        {
-            foreach (var link in attachments!)
-            {
-                if (buffer.Length > 0)
-                    buffer.WriteByte((byte)' ');
-
-                var linkBytes = new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode();
-                buffer.Write(linkBytes);
-            }
-        }
+        AppendWithPlaceholderExpansion(buffer, full, attachments);
 
         if (buffer.Length > MaxUtf8Bytes)
         {
@@ -76,10 +64,6 @@ public sealed unsafe class ChatSendService
 
         buffer.WriteByte(0); // native string wants a trailing null terminator
         var bytes = buffer.ToArray();
-
-        // TEMPORARY diagnostic (2026-08-13) - matches the <flag>-expansion log above; confirms whether
-        // execution actually reaches the native call at all. Remove once confirmed working.
-        log.Warning("CustomChat: sending {Bytes} bytes via ProcessChatBoxEntry", bytes.Length);
 
         var utf8 = Utf8String.FromSequence(bytes);
         try
@@ -108,47 +92,63 @@ public sealed unsafe class ChatSendService
         return trimmed.Length > 1 && trimmed[0] == '/' && char.IsLetter(trimmed[1]);
     }
 
-    private const string FlagPlaceholder = "<flag>";
-
-    /// <summary>Writes <paramref name="text"/> as UTF-8, expanding any literal "&lt;flag&gt;" in it into
-    /// a real map link for the currently-set map flag first. The native chatbox auto-expands "&lt;flag&gt;"
-    /// this same way, but only as part of its own submit handling *before* it ever reaches
-    /// <c>UIModule::ProcessChatBoxEntry</c> - since this plugin calls that entry point directly, bypassing
-    /// the native UI entirely, that expansion step never runs for us and the literal text would be sent
-    /// as-is. Reimplemented here instead of relying on the native pipeline, the same reasoning as item
-    /// link attachments: build the payload ourselves via <see cref="SeStringBuilder.AddMapLink"/> from
-    /// <c>AgentMap.FlagMapMarkers</c> (the exact same data the native expansion would read), and splice
-    /// its raw encoded bytes in place of the placeholder text directly, never through a C# string. If no
-    /// flag is currently set on the map, the placeholder is left as literal text (matches what the
-    /// native chatbox does too - there's nothing to expand it to).</summary>
-    private void AppendWithFlagLinkExpansion(MemoryStream buffer, string text)
+    /// <summary>Writes <paramref name="text"/> as UTF-8, expanding two kinds of placeholder along the
+    /// way into real payload bytes instead of literal text: "&lt;flag&gt;" (the currently-set map flag,
+    /// read fresh from <c>AgentMap.FlagMapMarkers</c> - matches the native chatbox's own auto-expansion
+    /// of the same text) and "&lt;link&gt;" (consumed in order from <paramref name="attachments"/>, one
+    /// per occurrence - see <see cref="NativeItemLinkWatcher"/> for how those get queued). Both
+    /// placeholders are handled in one left-to-right pass so they can appear anywhere in the text,
+    /// mixed freely, in any order.
+    /// <para>Both expansions matter for the same reason: the native chatbox does its own placeholder
+    /// substitution (and its own translation of a linked item into a real payload) as part of its *own*
+    /// submit handling, before it ever calls <c>UIModule::ProcessChatBoxEntry</c> - since this plugin
+    /// calls that entry point directly, bypassing the native UI entirely, none of that ever runs for
+    /// us, so both have to be reimplemented here. The resulting payload bytes are always written
+    /// directly to the buffer, never round-tripped through a C# string/UTF8 decode - the raw bytes that
+    /// encode a map coordinate or an item id use arbitrary byte values, not just printable UTF-8, and
+    /// could be silently corrupted by that trip.</para></summary>
+    private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments)
     {
-        if (!text.Contains(FlagPlaceholder, StringComparison.Ordinal))
-        {
-            buffer.Write(Encoding.UTF8.GetBytes(text));
-            return;
-        }
+        var itemIndex = 0;
+        var pos = 0;
 
-        var flagLinkBytes = TryBuildFlagLinkBytes();
-        // TEMPORARY diagnostic (2026-08-13) - a report came in that a "<flag>" message doesn't send at
-        // all (not even as literal text), which this logic has no code path for on its own - logged to
-        // find out whether that's this method's fault (e.g. an oversized buffer silently dropped below)
-        // or something failing further up in Send. Remove once confirmed either way.
-        log.Warning("CustomChat: <flag> expansion - marker found={Found}, link bytes={Bytes}", flagLinkBytes != null, flagLinkBytes?.Length ?? -1);
-
-        if (flagLinkBytes == null)
+        while (pos < text.Length)
         {
-            buffer.Write(Encoding.UTF8.GetBytes(text));
-            return;
-        }
+            var flagIndex = text.IndexOf(FlagPlaceholder, pos, StringComparison.Ordinal);
+            var linkIndex = text.IndexOf(LinkPlaceholder, pos, StringComparison.Ordinal);
 
-        var segments = text.Split(FlagPlaceholder);
-        for (var i = 0; i < segments.Length; i++)
-        {
-            if (segments[i].Length > 0)
-                buffer.Write(Encoding.UTF8.GetBytes(segments[i]));
-            if (i < segments.Length - 1)
-                buffer.Write(flagLinkBytes);
+            var isFlag = flagIndex >= 0 && (linkIndex < 0 || flagIndex <= linkIndex);
+            var nextIndex = isFlag ? flagIndex : linkIndex;
+
+            if (nextIndex < 0)
+            {
+                buffer.Write(Encoding.UTF8.GetBytes(text[pos..]));
+                return;
+            }
+
+            if (nextIndex > pos)
+                buffer.Write(Encoding.UTF8.GetBytes(text[pos..nextIndex]));
+
+            if (isFlag)
+            {
+                var flagBytes = TryBuildFlagLinkBytes();
+                buffer.Write(flagBytes != null ? flagBytes : Encoding.UTF8.GetBytes(FlagPlaceholder));
+                pos = nextIndex + FlagPlaceholder.Length;
+            }
+            else
+            {
+                if (attachments != null && itemIndex < attachments.Count)
+                {
+                    var link = attachments[itemIndex++];
+                    buffer.Write(new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode());
+                }
+                else
+                {
+                    buffer.Write(Encoding.UTF8.GetBytes(LinkPlaceholder));
+                }
+
+                pos = nextIndex + LinkPlaceholder.Length;
+            }
         }
     }
 

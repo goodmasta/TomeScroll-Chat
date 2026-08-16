@@ -33,7 +33,6 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
-    [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
 
@@ -53,7 +52,7 @@ public sealed class Plugin : IDalamudPlugin
     public WindowsNotificationService WindowsNotificationService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
-    private readonly ItemLinkHookService itemLinkHookService;
+    private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
     private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
@@ -90,7 +89,7 @@ public sealed class Plugin : IDalamudPlugin
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
-        itemLinkHookService = new ItemLinkHookService(GameInteropProvider, Log, AttachItemLink);
+        nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, AttachItemLink);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -115,6 +114,11 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.DisableUserUiHide = true;
 
         RefreshEmotes();
+
+        // Logs the same info "/customchat version" prints to chat, once at startup - so which build is
+        // actually running is visible straight in /xllog, without needing to remember to run the
+        // command every time after a rebuild (this exact gap cost several debugging rounds earlier).
+        Log.Info(BuildVersionString());
     }
 
     private void OnMessageRouted(ChatTabConfig tab, ChatMessageRecord record)
@@ -460,7 +464,7 @@ public sealed class Plugin : IDalamudPlugin
 
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
-        itemLinkHookService.Dispose();
+        nativeItemLinkWatcher.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();
@@ -488,19 +492,22 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     /// <summary>"/customchat version" - prints the loaded assembly's version *and* its on-disk build
-    /// time to chat. The assembly's Version rarely changes between commits in this project (it's not
-    /// bumped per-build), so on its own it can't answer "is this actually the build I just compiled" -
-    /// the file's last-write time can, since that changes on every rebuild. Uses
-    /// <see cref="IDalamudPluginInterface.AssemblyLocation"/>, not <c>typeof(Plugin).Assembly.Location</c>
-    /// - Dalamud loads dev plugins from an in-memory byte array (so it can rebuild the DLL on disk
-    /// without holding a file lock on it), which leaves the CLR's own <c>Assembly.Location</c> empty;
-    /// <c>PluginInterface.AssemblyLocation</c> is the actual on-disk path/timestamp Dalamud loaded from,
-    /// independent of that. Also prints the exact git commit this build was compiled from (embedded at
-    /// build time by <c>CustomChat.csproj</c>'s <c>SetGitCommitHash</c> target as an
-    /// <see cref="AssemblyMetadataAttribute"/>) - the one piece of this that can't drift or be
-    /// mis-set by hand, since it's read straight from git. Prints straight to chat (not just /xllog)
-    /// so it's visible without needing to open the Dalamud log window at all.</summary>
-    private void PrintVersion()
+    /// time to chat. Same string also gets logged once at startup (see the constructor) so which build
+    /// is actually running is visible in /xllog without needing to run this command at all.</summary>
+    private void PrintVersion() => ChatGui.Print(BuildVersionString());
+
+    /// <summary>Builds the "/customchat version" string. The assembly's Version rarely changes between
+    /// commits in this project (it's not bumped per-build), so on its own it can't answer "is this
+    /// actually the build I just compiled" - the file's last-write time can, since that changes on
+    /// every rebuild. Uses <see cref="IDalamudPluginInterface.AssemblyLocation"/>, not
+    /// <c>typeof(Plugin).Assembly.Location</c> - Dalamud loads dev plugins from an in-memory byte array
+    /// (so it can rebuild the DLL on disk without holding a file lock on it), which leaves the CLR's
+    /// own <c>Assembly.Location</c> empty; <c>PluginInterface.AssemblyLocation</c> is the actual
+    /// on-disk path/timestamp Dalamud loaded from, independent of that. Also includes the exact git
+    /// commit this build was compiled from (embedded at build time by <c>CustomChat.csproj</c>'s
+    /// <c>SetGitCommitHash</c> target as an <see cref="AssemblyMetadataAttribute"/>) - the one piece of
+    /// this that can't drift or be mis-set by hand, since it's read straight from git.</summary>
+    private static string BuildVersionString()
     {
         var assembly = typeof(Plugin).Assembly;
         var version = assembly.GetName().Version;
@@ -508,7 +515,7 @@ public sealed class Plugin : IDalamudPlugin
             .FirstOrDefault(a => a.Key == "GitCommitHash")?.Value ?? "unknown";
         var file = PluginInterface.AssemblyLocation;
         var buildTime = file.Exists ? file.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss") : "unknown";
-        ChatGui.Print($"Custom Chat v{version} (commit {commitHash}), built {buildTime}, loaded from {file.FullName}");
+        return $"Custom Chat v{version} (commit {commitHash}), built {buildTime}, loaded from {file.FullName}";
     }
 
     private void ToggleConfigUi() => configWindow.Toggle();
