@@ -54,6 +54,19 @@ public class Configuration : IPluginConfiguration
     /// always notify) - one shared setting rather than split blink/count like regular tabs.</summary>
     public Vector4 WhisperNotifyColor { get; set; } = DefaultNotifyRed;
 
+    /// <summary>Per-player sidebar tab colour presets, keyed by "Name@World" - see
+    /// <see cref="ChatTabConfig.TabColorOverride"/> for how this combines with a tab's own explicit
+    /// override. Settable from Settings > Players or a message's right-click menu ("Set Tab Colour").
+    /// User data like <see cref="Tabs"/>, not a preference - deliberately left alone by
+    /// <see cref="ResetToDefaults"/>.</summary>
+    public Dictionary<string, Vector4> PlayerTabColors { get; set; } = new();
+
+    /// <summary>Per-player nickname colour overrides, keyed by "Name@World" - takes priority over the
+    /// auto-generated hash colour from <see cref="Utility.PlayerColorPalette"/>. Settable from
+    /// Settings > Players or a message's right-click menu ("Set Message Colour"). User data, not a
+    /// preference - deliberately left alone by <see cref="ResetToDefaults"/>.</summary>
+    public Dictionary<string, Vector4> PlayerMessageColors { get; set; } = new();
+
     /// <summary>Whether friends get the emoji marker prefix in chat at all.</summary>
     public bool FriendMarkerEnabled { get; set; } = true;
 

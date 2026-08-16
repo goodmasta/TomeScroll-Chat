@@ -4,6 +4,7 @@ using System.Linq;
 using System.Numerics;
 using System.Text;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Utility;
@@ -184,7 +185,9 @@ public static class ChatMessageRenderer
             // normal per-channel colour, same as before. Own messages use the local player's own key so
             // "You" gets one consistent colour everywhere, rather than an outgoing tell's target's colour.
             var colorKey = isOwn ? localPlayerKey : msg.SenderKey;
-            senderColor = !string.IsNullOrEmpty(colorKey) ? PlayerColorPalette.GetColor(colorKey) : channelColor;
+            senderColor = !string.IsNullOrEmpty(colorKey)
+                ? (config.PlayerMessageColors.TryGetValue(colorKey, out var customSenderColor) ? customSenderColor : PlayerColorPalette.GetColor(colorKey))
+                : channelColor;
             ImGui.PushStyleColor(ImGuiCol.Text, senderColor);
             ImGui.TextUnformatted($"{sender}:");
             ImGui.PopStyleColor();
@@ -307,6 +310,53 @@ public static class ChatMessageRenderer
             // Also only works when the player is actually nearby - see AdventurerPlateService.
             if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("View Adventurer Plate"))
                 onViewPlate(msg.SenderKey);
+
+            // Both write straight to Configuration (also editable in bulk from Settings > Players),
+            // keyed by "Name@World" - a whisper tab picks up its colour live from the same dictionary
+            // (see MainWindow.DrawTabRow), so there's nothing else to push this into here.
+            if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.BeginMenu("Set Tab Colour"))
+            {
+                var hasTabColor = config.PlayerTabColors.TryGetValue(msg.SenderKey, out var tabColor);
+                var editedTabColor = hasTabColor ? tabColor : PlayerColorPalette.GetColor(msg.SenderKey);
+                if (ImGui.ColorEdit4("##settabcolor", ref editedTabColor))
+                {
+                    config.PlayerTabColors[msg.SenderKey] = editedTabColor;
+                    config.Save();
+                }
+
+                using (ImRaii.Disabled(!hasTabColor))
+                {
+                    if (ImGui.MenuItem("Use default"))
+                    {
+                        config.PlayerTabColors.Remove(msg.SenderKey);
+                        config.Save();
+                    }
+                }
+
+                ImGui.EndMenu();
+            }
+
+            if (!isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.BeginMenu("Set Message Colour"))
+            {
+                var hasMsgColor = config.PlayerMessageColors.TryGetValue(msg.SenderKey, out var msgColor);
+                var editedMsgColor = hasMsgColor ? msgColor : PlayerColorPalette.GetColor(msg.SenderKey);
+                if (ImGui.ColorEdit4("##setmsgcolor", ref editedMsgColor))
+                {
+                    config.PlayerMessageColors[msg.SenderKey] = editedMsgColor;
+                    config.Save();
+                }
+
+                using (ImRaii.Disabled(!hasMsgColor))
+                {
+                    if (ImGui.MenuItem("Use default"))
+                    {
+                        config.PlayerMessageColors.Remove(msg.SenderKey);
+                        config.Save();
+                    }
+                }
+
+                ImGui.EndMenu();
+            }
 
             var links = LinkDetector.Split(msg.Body).Where(s => s.IsLink).Select(s => s.Slice(msg.Body)).Distinct().ToList();
             if (links.Count == 1)

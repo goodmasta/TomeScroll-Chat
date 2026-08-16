@@ -331,7 +331,15 @@ public sealed class MainWindow : Window, IDisposable
         // drift apart despite both columns reserving the same total height).
         var itemSpacing = ImGui.GetStyle().ItemSpacing;
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(itemSpacing.X, TightRowSpacing));
-        ImGui.Dummy(new Vector2(0, ImGui.GetTextLineHeight()));
+
+        // Fills the same one-line spacer slot the alignment math above already reserves (see the
+        // comment above) - a plain Text widget is exactly GetTextLineHeight() tall, same as the Dummy
+        // it replaces, so this doesn't need its own reserve math.
+        var allTabs = plugin.TabManager.Tabs;
+        var totalTabCount = allTabs.Count;
+        var pmTabCount = allTabs.Count(t => t.IsPmTab);
+        var unreadTotal = allTabs.Sum(t => t.UnreadCount);
+        ImGui.TextDisabled($"{totalTabCount} tabs, {pmTabCount} PM, {unreadTotal} unread");
 
         var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
         using (ImRaii.Disabled(!hasPmTabs))
@@ -374,10 +382,18 @@ public sealed class MainWindow : Window, IDisposable
         var blinkColor = tab.BlinkColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelBlinkColor);
         var countColor = tab.UnreadCountColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor);
 
+        // Tab's own explicit colour (Settings > Tabs) first, then - for whisper tabs only - the
+        // partner's by-nickname preset (Settings > Players, or "Set Tab Colour" on their messages),
+        // so a colour picked before this exact tab existed still applies once it's (re)created.
+        var restColor = tab.TabColorOverride ??
+                         (tab.IsPmTab && !string.IsNullOrEmpty(tab.PmPartnerKey) && config.PlayerTabColors.TryGetValue(tab.PmPartnerKey, out var playerTabColor)
+                             ? playerTabColor
+                             : BlinkBase);
+
         var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
         var nameColor = isBlinking
-            ? Vector4.Lerp(BlinkBase, blinkColor, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
-            : BlinkBase;
+            ? Vector4.Lerp(restColor, blinkColor, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
+            : restColor;
 
         var textX = itemMin.X + 4;
 

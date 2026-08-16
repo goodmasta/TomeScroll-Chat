@@ -17,6 +17,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private string newTabName = string.Empty;
     private string friendMarkerSearch = string.Empty;
     private string tabIconSearch = string.Empty;
+    private string playerColorNicknameInput = string.Empty;
 
     public ConfigWindow(Plugin plugin)
         : base("Custom Chat Settings###CustomChatConfigWindow")
@@ -50,6 +51,12 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (tabsTab.Success)
                 DrawTabsEditor();
+        }
+
+        using (var players = ImRaii.TabItem("Players"))
+        {
+            if (players.Success)
+                DrawPlayerColors();
         }
 
         using (var emotes = ImRaii.TabItem("Emotes"))
@@ -374,6 +381,27 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
+        ImGui.TextUnformatted("Sidebar name colour (this tab)");
+
+        var tabColor = tab.TabColorOverride ?? Vector4.One;
+        if (ImGui.ColorEdit4($"Tab colour##tabcolor_{tab.Id}", ref tabColor))
+        {
+            tab.TabColorOverride = tabColor;
+            plugin.TabManager.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!tab.TabColorOverride.HasValue))
+        {
+            if (ImGui.SmallButton($"Use default##tabcolorreset_{tab.Id}"))
+            {
+                tab.TabColorOverride = null;
+                plugin.TabManager.Save();
+            }
+        }
+        if (tab.IsPmTab)
+            ImGui.TextDisabled("Overrides the by-nickname colour set in Settings > Players, if any.");
+
+        ImGui.Spacing();
         ImGui.TextUnformatted("Notification colours (this tab)");
 
         var defaultBlink = tab.IsPmTab ? configuration.WhisperNotifyColor : configuration.ChannelBlinkColor;
@@ -533,6 +561,79 @@ public sealed class ConfigWindow : Window, IDisposable
         {
             if (ImGui.Button($"Delete##delete_{tab.Id}"))
                 plugin.TabManager.RemoveTab(tab);
+        }
+    }
+
+    /// <summary>Same by-nickname colour presets a message's right-click menu writes to (see
+    /// <see cref="ChatMessageRenderer"/>'s "Set Tab Colour"/"Set Message Colour"), editable here
+    /// directly by typing a "Name@World" - lets a colour be set for someone before they've ever sent
+    /// a message, e.g. planning ahead for an FC member.</summary>
+    private void DrawPlayerColors()
+    {
+        ImGui.TextDisabled("Set a sidebar tab colour and/or chat name colour for a player by nickname - the same thing a message's right-click menu does for whoever sent it.");
+        ImGui.Spacing();
+
+        ImGui.SetNextItemWidth(250);
+        ImGui.InputTextWithHint("##playerColorNickname", "Name@World", ref playerColorNicknameInput, 64);
+
+        var key = playerColorNicknameInput.Trim();
+        var hasNickname = key.Length > 0;
+        using (ImRaii.Disabled(!hasNickname))
+        {
+            var tabColor = (hasNickname && configuration.PlayerTabColors.TryGetValue(key, out var existingTabColor)) ? existingTabColor : Vector4.One;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.ColorEdit4("Tab colour##newplayertab", ref tabColor) && hasNickname)
+            {
+                configuration.PlayerTabColors[key] = tabColor;
+                configuration.Save();
+            }
+
+            var msgColor = (hasNickname && configuration.PlayerMessageColors.TryGetValue(key, out var existingMsgColor)) ? existingMsgColor : Vector4.One;
+            ImGui.SetNextItemWidth(200);
+            if (ImGui.ColorEdit4("Message colour##newplayermsg", ref msgColor) && hasNickname)
+            {
+                configuration.PlayerMessageColors[key] = msgColor;
+                configuration.Save();
+            }
+        }
+
+        ImGui.Separator();
+
+        var keys = configuration.PlayerTabColors.Keys.Concat(configuration.PlayerMessageColors.Keys).Distinct().OrderBy(k => k).ToList();
+        ImGui.TextUnformatted($"Configured players ({keys.Count})");
+        using (var child = ImRaii.Child("PlayerColorsList", new Vector2(0, 220), true))
+        {
+            if (child.Success)
+            {
+                foreach (var playerKey in keys)
+                {
+                    ImGui.TextUnformatted(playerKey);
+
+                    if (configuration.PlayerTabColors.TryGetValue(playerKey, out var tc))
+                    {
+                        ImGui.SameLine();
+                        ImGui.ColorButton($"##tabswatch_{playerKey}", tc, ImGuiColorEditFlags.NoTooltip, new Vector2(16, 16));
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Clear tab colour##cleartab_{playerKey}"))
+                        {
+                            configuration.PlayerTabColors.Remove(playerKey);
+                            configuration.Save();
+                        }
+                    }
+
+                    if (configuration.PlayerMessageColors.TryGetValue(playerKey, out var mc))
+                    {
+                        ImGui.SameLine();
+                        ImGui.ColorButton($"##msgswatch_{playerKey}", mc, ImGuiColorEditFlags.NoTooltip, new Vector2(16, 16));
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Clear message colour##clearmsg_{playerKey}"))
+                        {
+                            configuration.PlayerMessageColors.Remove(playerKey);
+                            configuration.Save();
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -60,6 +60,12 @@ public sealed class ChatTabConfig
     /// (or <see cref="Configuration.WhisperNotifyColor"/> for whisper tabs).</summary>
     public Vector4? UnreadCountColorOverride { get; set; }
 
+    /// <summary>Per-tab override for the sidebar name's resting (non-blinking) colour. Null = plain
+    /// white, or - for a whisper tab - the partner's <see cref="Configuration.PlayerTabColors"/> entry
+    /// if one's been set (by nickname, so it follows the player even into a whisper tab recreated
+    /// later), falling back to white if neither is set.</summary>
+    public Vector4? TabColorOverride { get; set; }
+
     /// <summary>Whether new messages make this tab blink and show a red unread count in the sidebar.
     /// Whisper tabs always behave this way regardless of this flag (see
     /// <see cref="ChatTabConfig.ShouldNotify"/>) - this only matters for regular tabs, where it's an
