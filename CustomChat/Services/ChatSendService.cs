@@ -132,7 +132,12 @@ public sealed unsafe class ChatSendService
             if (attachments != null && itemIndex < attachments.Count)
             {
                 var link = attachments[itemIndex++];
-                buffer.Write(new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode());
+                // Prefer the game's own captured bytes (see PendingItemLink.RawPayloadBytes) over
+                // reconstructing the payload ourselves - a self-built one (SeStringBuilder.AddItemLink)
+                // displayed correctly when sent but silently lost its ItemPayload on the round trip
+                // through the server/client, becoming plain text. The captured bytes are the game's own
+                // encoding of the same link, so there's nothing for that mismatch to apply to.
+                buffer.Write(link.RawPayloadBytes ?? new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode());
             }
             else
             {

@@ -91,7 +91,7 @@ public sealed class Plugin : IDalamudPlugin
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
-        nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, AttachItemLink);
+        nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, GameGui, Log, AttachItemLink);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -149,16 +149,18 @@ public sealed class Plugin : IDalamudPlugin
         ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments);
     }
 
-    /// <summary>Queues an item link as a compose-box attachment - the inventory right-click "Link
-    /// (Custom Chat)" handler (see <see cref="ItemLinkContextMenuService"/>). Resolves a display name
-    /// from the Item sheet purely for the chip UI/link text; if that ever fails for some reason (e.g. a
-    /// row id from an unusually new patch not yet in the local sheet), falls back to a generic label
-    /// rather than dropping the link - the actual outgoing payload only needs the id/HQ flag, not the
-    /// name, to be a valid, clickable link.</summary>
-    private void AttachItemLink(uint itemId, bool isHq)
+    /// <summary>Queues an item link and inserts a "&lt;link&gt;" placeholder into the compose box -
+    /// the native "Link" action's handler (see <see cref="NativeItemLinkWatcher"/>). Resolves a
+    /// display name from the Item sheet purely for the placeholder's own click-to-copy text; if that
+    /// ever fails for some reason (e.g. a row id from an unusually new patch not yet in the local
+    /// sheet), falls back to a generic label rather than dropping the link - the actual outgoing
+    /// payload doesn't depend on this name at all when <paramref name="rawPayloadBytes"/> is present
+    /// (the game's own captured bytes are used as-is; the name would only matter for the
+    /// SeStringBuilder-reconstructed fallback).</summary>
+    private void AttachItemLink(uint itemId, bool isHq, byte[]? rawPayloadBytes)
     {
         var name = ResolveItemName(itemId) ?? $"Item #{itemId}";
-        mainWindow.AttachItemLink(new PendingItemLink(itemId, isHq, name));
+        mainWindow.AttachItemLink(new PendingItemLink(itemId, isHq, name, rawPayloadBytes));
     }
 
     private static string? ResolveItemName(uint itemId)
