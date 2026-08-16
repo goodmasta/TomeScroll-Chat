@@ -51,6 +51,7 @@ public sealed class Plugin : IDalamudPlugin
     public AdventurerPlateService AdventurerPlateService { get; }
     public WindowsNotificationService WindowsNotificationService { get; }
     public ItemTooltipService ItemTooltipService { get; }
+    public ItemContextService ItemContextService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
@@ -80,6 +81,7 @@ public sealed class Plugin : IDalamudPlugin
         AdventurerPlateService = new AdventurerPlateService(ObjectTable, FriendListService);
         WindowsNotificationService = new WindowsNotificationService(Log) { Enabled = Configuration.NotifyWhisperInWindows };
         ItemTooltipService = new ItemTooltipService(GameGui, Log);
+        ItemContextService = new ItemContextService(Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
