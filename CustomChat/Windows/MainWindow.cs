@@ -875,12 +875,52 @@ public sealed class MainWindow : Window, IDisposable
     /// raw command rather than translated to a friendly channel name - always exactly accurate for
     /// custom tabs, which can have any outgoing command a player could type, not just the built-in
     /// five this plugin ships with defaults for.</summary>
+    /// <summary>Plain <see cref="ImGui.TextDisabled"/> either way - deliberately never a taller widget
+    /// like a Combo, even when the picker below is offered, since this label's height is baked into
+    /// <see cref="GetInputRowReserve"/> as exactly <see cref="ImGui.GetTextLineHeight"/> (see that
+    /// method's own comment for the alignment history this would otherwise break). The picker is a
+    /// popup instead - popups float over everything and don't consume any layout space of their own,
+    /// so the label's drawn size never changes regardless of whether one is offered.</summary>
     private void DrawOutgoingChannelLabel(ChatTabConfig tab)
     {
         var target = string.IsNullOrEmpty(tab.OutgoingChannelCommand)
             ? "current in-game chat channel"
             : tab.OutgoingChannelCommand;
-        ImGui.TextDisabled($"Sending to: {target}");
+
+        // Only offered once there's an actual choice to make - a tab with 0 or 1 sendable channels
+        // (most tabs, including every PM tab) just shows the plain label as before.
+        var sendable = ChatChannelCatalog.SendableChannels.Where(c => tab.Channels.Contains(c.Type)).ToList();
+        if (sendable.Count <= 1)
+        {
+            ImGui.TextDisabled($"Sending to: {target}");
+            return;
+        }
+
+        ImGui.TextDisabled($"Sending to: {target} (click to change)");
+        if (ImGui.IsItemClicked())
+            ImGui.OpenPopup($"OutgoingChannelPicker_{tab.Id}");
+
+        if (ImGui.BeginPopup($"OutgoingChannelPicker_{tab.Id}"))
+        {
+            var isDefault = string.IsNullOrEmpty(tab.OutgoingChannelCommand);
+            if (ImGui.MenuItem((isDefault ? "> " : "  ") + "Default (game's current channel)"))
+            {
+                tab.OutgoingChannelCommand = string.Empty;
+                plugin.TabManager.Save();
+            }
+
+            foreach (var channel in sendable)
+            {
+                var isSelected = tab.OutgoingChannelCommand == channel.Command;
+                if (ImGui.MenuItem((isSelected ? "> " : "  ") + channel.Label))
+                {
+                    tab.OutgoingChannelCommand = channel.Command;
+                    plugin.TabManager.Save();
+                }
+            }
+
+            ImGui.EndPopup();
+        }
     }
 
     /// <summary>The message input box - a multi-line box (see <see cref="GetComposeBoxHeight"/>) so

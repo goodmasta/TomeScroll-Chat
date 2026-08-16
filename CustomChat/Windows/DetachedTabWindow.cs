@@ -74,12 +74,47 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeight() + TightRowSpacing;
 
     /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
+    /// <summary>Same picker as MainWindow's version - see its doc comment for why this stays a plain
+    /// TextDisabled either way (a popup, not a taller widget, so the reserved label height never
+    /// changes) and why it's only offered once a tab has more than one sendable channel.</summary>
     private void DrawOutgoingChannelLabel()
     {
         var target = string.IsNullOrEmpty(Tab.OutgoingChannelCommand)
             ? "current in-game chat channel"
             : Tab.OutgoingChannelCommand;
-        ImGui.TextDisabled($"Sending to: {target}");
+
+        var sendable = ChatChannelCatalog.SendableChannels.Where(c => Tab.Channels.Contains(c.Type)).ToList();
+        if (sendable.Count <= 1)
+        {
+            ImGui.TextDisabled($"Sending to: {target}");
+            return;
+        }
+
+        ImGui.TextDisabled($"Sending to: {target} (click to change)");
+        if (ImGui.IsItemClicked())
+            ImGui.OpenPopup($"OutgoingChannelPicker_{Tab.Id}");
+
+        if (ImGui.BeginPopup($"OutgoingChannelPicker_{Tab.Id}"))
+        {
+            var isDefault = string.IsNullOrEmpty(Tab.OutgoingChannelCommand);
+            if (ImGui.MenuItem((isDefault ? "> " : "  ") + "Default (game's current channel)"))
+            {
+                Tab.OutgoingChannelCommand = string.Empty;
+                plugin.TabManager.Save();
+            }
+
+            foreach (var channel in sendable)
+            {
+                var isSelected = Tab.OutgoingChannelCommand == channel.Command;
+                if (ImGui.MenuItem((isSelected ? "> " : "  ") + channel.Label))
+                {
+                    Tab.OutgoingChannelCommand = channel.Command;
+                    plugin.TabManager.Save();
+                }
+            }
+
+            ImGui.EndPopup();
+        }
     }
 
     /// <summary>Same reconciliation as MainWindow's version - see its doc comment for the full
