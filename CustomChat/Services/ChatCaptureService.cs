@@ -124,17 +124,46 @@ public sealed class ChatCaptureService : IDisposable
     /// where their auto-generated display text lands in the flattened <c>TextValue</c> string (see
     /// <see cref="ChatPayloadLink"/>). <c>TextValue</c> only concatenates <see cref="TextPayload.Text"/>
     /// from <see cref="TextPayload"/> instances - every other payload (formatting, the link markers
-    /// themselves) contributes zero characters - so the display text for a link is whatever
-    /// <see cref="TextPayload"/> immediately follows its marker payload, which is how the game itself
-    /// always structures these (a couple of formatting payloads, the link marker, one text payload
-    /// with the visible name/coordinates, then formatting payloads closing it back out).</summary>
+    /// themselves) contributes zero characters.
+    /// <para>The display text isn't always a single <see cref="TextPayload"/> immediately after the
+    /// marker - confirmed via a real received map link (2026-08-13) to actually look like
+    /// <c>MapLinkPayload, UIForegroundPayload, UIGlowPayload, TextPayload, UIGlowPayload,
+    /// UIForegroundPayload, TextPayload, RawPayload</c>: an icon-glyph <see cref="TextPayload"/> inside
+    /// the glow/colour span, then a second <see cref="TextPayload"/> *outside* it (the actual readable
+    /// "Place Name (X, Y)" text) before the closing <see cref="RawPayload"/>. The original version of
+    /// this method only captured the first <see cref="TextPayload"/> (just the icon glyph) and stopped,
+    /// leaving the actual coordinate text plain and unclickable - reported as "other players'
+    /// coordinates aren't clickable in chat". Fixed by accumulating every consecutive
+    /// <see cref="TextPayload"/> into one combined span, only ending it at the first payload that
+    /// isn't text or the two "safe" formatting types (<see cref="UIForegroundPayload"/>/
+    /// <see cref="UIGlowPayload"/>) that appear between them here.</para></summary>
     private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message, IPluginLog log)
     {
         var links = new List<ChatPayloadLink>();
         var cursor = 0;
         ChatPayloadLinkType? pendingType = null;
         MapLinkPayload? pendingMapLink = null;
+        var pendingStart = 0;
+        var pendingLength = 0;
         var hasMarker = false;
+
+        void CommitPending()
+        {
+            if (pendingType != null && pendingLength > 0)
+            {
+                links.Add(new ChatPayloadLink
+                {
+                    Type = pendingType.Value,
+                    Start = pendingStart,
+                    Length = pendingLength,
+                    MapLink = pendingMapLink,
+                });
+            }
+
+            pendingType = null;
+            pendingMapLink = null;
+            pendingLength = 0;
+        }
 
         foreach (var payload in message.Payloads)
         {
@@ -143,40 +172,40 @@ public sealed class ChatCaptureService : IDisposable
                 var text = textPayload.Text ?? string.Empty;
                 if (pendingType != null && text.Length > 0)
                 {
-                    links.Add(new ChatPayloadLink
-                    {
-                        Type = pendingType.Value,
-                        Start = cursor,
-                        Length = text.Length,
-                        MapLink = pendingMapLink,
-                    });
-                    pendingType = null;
-                    pendingMapLink = null;
+                    if (pendingLength == 0)
+                        pendingStart = cursor;
+                    pendingLength += text.Length;
                 }
 
                 cursor += text.Length;
             }
             else if (payload is MapLinkPayload mapLink)
             {
+                CommitPending();
                 hasMarker = true;
                 pendingType = ChatPayloadLinkType.MapLink;
                 pendingMapLink = mapLink;
             }
             else if (payload is ItemPayload)
             {
+                CommitPending();
                 hasMarker = true;
                 pendingType = ChatPayloadLinkType.Item;
-                pendingMapLink = null;
+            }
+            else if (payload is not (UIForegroundPayload or UIGlowPayload))
+            {
+                // Anything else (a RawPayload closing marker, another unrelated payload, ...) ends the
+                // current link's span - only text and these two "safe" formatting toggles extend it.
+                CommitPending();
             }
         }
 
-        // TEMPORARY diagnostic (2026-08-13) - a report came in that received map/item links aren't
-        // rendering as clickable, and this extraction has never actually been verified against a real
-        // received message (only ever exercised by messages this plugin itself composed). Logs the full
-        // payload type sequence whenever a marker payload was seen at all, so the next real report can
-        // confirm or rule out whether the "marker is immediately followed by exactly one TextPayload"
-        // assumption this is built on actually holds for messages from other players. Remove once
-        // confirmed either way.
+        CommitPending();
+
+        // TEMPORARY diagnostic (2026-08-13) - keeps logging the payload sequence whenever a marker was
+        // seen, so a future report of a *differently*-shaped link (e.g. an item link, which hasn't been
+        // confirmed against a real received message yet either) can be checked the same way this map
+        // link one was. Remove once both link types are confirmed working from real received messages.
         if (hasMarker)
         {
             var payloadTypes = string.Join(", ", message.Payloads.Select(p => p.GetType().Name));
