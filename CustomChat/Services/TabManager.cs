@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.Text;
 using CustomChat.Models;
 
 namespace CustomChat.Services;
@@ -97,6 +98,79 @@ public sealed class TabManager
         configuration.Save();
         TabAdded?.Invoke(tab);
         return tab;
+    }
+
+    private static readonly XivChatType[] LinkshellChatTypes =
+    {
+        XivChatType.Ls1, XivChatType.Ls2, XivChatType.Ls3, XivChatType.Ls4,
+        XivChatType.Ls5, XivChatType.Ls6, XivChatType.Ls7, XivChatType.Ls8,
+    };
+
+    private static readonly XivChatType[] CrossWorldLinkshellChatTypes =
+    {
+        XivChatType.CrossLinkShell1, XivChatType.CrossLinkShell2, XivChatType.CrossLinkShell3, XivChatType.CrossLinkShell4,
+        XivChatType.CrossLinkShell5, XivChatType.CrossLinkShell6, XivChatType.CrossLinkShell7, XivChatType.CrossLinkShell8,
+    };
+
+    /// <summary>Called by <see cref="LinkshellWatcherService"/> with a fresh membership snapshot (8
+    /// slots each, null = not currently a member of that slot) - creates/renames/removes the matching
+    /// <see cref="ChatTabConfig.IsAutoLinkshellTab"/> tabs to match. Idempotent: calling again with an
+    /// unchanged snapshot does nothing; calling with all-null snapshots (e.g. right after the feature
+    /// is turned off) removes every remaining auto tab - see <see cref="RemoveAllAutoLinkshellTabs"/>
+    /// for the more direct way to do just that.</summary>
+    public void SyncAutoLinkshellTabs(IReadOnlyList<string?> linkshellNames, IReadOnlyList<string?> crossWorldNames)
+    {
+        SyncAutoLinkshellGroup(linkshellNames, LinkshellChatTypes, crossWorld: false, commandPrefix: "/linkshell");
+        SyncAutoLinkshellGroup(crossWorldNames, CrossWorldLinkshellChatTypes, crossWorld: true, commandPrefix: "/cwlinkshell");
+    }
+
+    private void SyncAutoLinkshellGroup(IReadOnlyList<string?> names, XivChatType[] chatTypes, bool crossWorld, string commandPrefix)
+    {
+        for (var i = 0; i < names.Count && i < chatTypes.Length; i++)
+        {
+            var existing = configuration.Tabs.FirstOrDefault(t => t.IsAutoLinkshellTab && t.IsCrossWorldLinkshell == crossWorld && t.LinkshellIndex == i);
+            var name = names[i];
+
+            if (string.IsNullOrEmpty(name))
+            {
+                if (existing != null)
+                    RemoveTab(existing);
+                continue;
+            }
+
+            if (existing == null)
+            {
+                var tab = new ChatTabConfig
+                {
+                    Name = name,
+                    Channels = new HashSet<XivChatType> { chatTypes[i] },
+                    OutgoingChannelCommand = $"{commandPrefix}{i + 1}",
+                    IsAutoLinkshellTab = true,
+                    IsCrossWorldLinkshell = crossWorld,
+                    LinkshellIndex = i,
+                };
+                configuration.Tabs.Add(tab);
+                configuration.Save();
+                TabAdded?.Invoke(tab);
+            }
+            else if (existing.Name != name)
+            {
+                // Someone with rename permissions on the shell changed its name in-game - keep the
+                // tab's own name (which the player may since have customized further) from silently
+                // going stale relative to what the native UI now shows.
+                existing.Name = name;
+                configuration.Save();
+            }
+        }
+    }
+
+    /// <summary>Immediately removes every auto-created linkshell tab regardless of current membership -
+    /// the "Auto-create linkshell tabs" setting's own off-switch calls this directly rather than
+    /// waiting for the next <see cref="SyncAutoLinkshellTabs"/> poll to notice the setting changed.</summary>
+    public void RemoveAllAutoLinkshellTabs()
+    {
+        foreach (var tab in configuration.Tabs.Where(t => t.IsAutoLinkshellTab).ToList())
+            RemoveTab(tab);
     }
 
     public void Save() => configuration.Save();

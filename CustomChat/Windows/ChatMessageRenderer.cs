@@ -201,7 +201,11 @@ public static class ChatMessageRenderer
         var indentWidth = ImGui.GetCursorPosX() - ImGui.GetWindowContentRegionMin().X;
         ImGui.Indent(indentWidth);
 
-        ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
+        // A tab-wide override (Settings > Tabs) always wins over the per-channel colour - this is a
+        // separate, coarser knob than the per-channel ColorOverrides buried in the channel list, for
+        // "just make every message body in this tab one colour" instead of tuning each channel.
+        var bodyColor = tab.MessageTextColorOverride ?? channelColor;
+        ImGui.PushStyleColor(ImGuiCol.Text, bodyColor);
         DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, itemTooltipService, itemContextService, index);
         ImGui.PopStyleColor();
 

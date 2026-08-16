@@ -66,6 +66,28 @@ public sealed class ChatTabConfig
     /// later), falling back to white if neither is set.</summary>
     public Vector4? TabColorOverride { get; set; }
 
+    /// <summary>Per-tab override for message body text colour, applied on top of (takes priority
+    /// over) the per-channel <see cref="ColorOverrides"/> - a single coarse "make every message in
+    /// this tab this colour" knob rather than tuning each channel individually. Null = use the
+    /// per-channel colour as before.</summary>
+    public Vector4? MessageTextColorOverride { get; set; }
+
+    /// <summary>True for a tab auto-created for one joined linkshell/cross-world linkshell (see
+    /// <see cref="Services.LinkshellWatcherService"/>/<see cref="Services.TabManager.SyncAutoLinkshellTabs"/>) -
+    /// created the moment membership is detected, removed the moment it isn't (left/kicked), same
+    /// self-healing lifecycle as a whisper tab, and only exists at all while
+    /// <see cref="Configuration.AutoLinkshellTabs"/> is on.</summary>
+    public bool IsAutoLinkshellTab { get; set; }
+
+    /// <summary>True if <see cref="IsAutoLinkshellTab"/> tracks a cross-world linkshell (CWLS1-8)
+    /// rather than a regular one (LS1-8) - which of the two 8-slot native lists
+    /// <see cref="LinkshellIndex"/> is an index into.</summary>
+    public bool IsCrossWorldLinkshell { get; set; }
+
+    /// <summary>0-7 slot index within the native LS1-8/CWLS1-8 list this auto-tab tracks - meaningless
+    /// unless <see cref="IsAutoLinkshellTab"/>.</summary>
+    public int LinkshellIndex { get; set; }
+
     /// <summary>Whether new messages make this tab blink and show a red unread count in the sidebar.
     /// Whisper tabs always behave this way regardless of this flag (see
     /// <see cref="ChatTabConfig.ShouldNotify"/>) - this only matters for regular tabs, where it's an

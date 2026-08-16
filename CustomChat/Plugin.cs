@@ -55,6 +55,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
+    private readonly LinkshellWatcherService linkshellWatcherService;
     private readonly EnterToChatService enterToChatService;
 
     public readonly WindowSystem WindowSystem = new("CustomChat");
@@ -68,6 +69,11 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
         TabManager = new TabManager(Configuration);
+        // Cleans up a popped-out floating window for any tab removed from anywhere, including paths
+        // that don't already do this inline themselves (SetTabDetached/CloseAllWhisperTabs do, so
+        // this is a harmless no-op for those) - added specifically for SyncAutoLinkshellTabs removing
+        // a linkshell tab out from under the player while it happens to be detached.
+        TabManager.TabRemoved += OnTabRemoved;
         ChatHistoryService = new ChatHistoryService(PluginInterface.ConfigDirectory.FullName, Configuration.MaxHistoryBytes, Log);
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, TabManager, ChatHistoryService);
         ChatSendService = new ChatSendService(Log);
@@ -94,6 +100,7 @@ public sealed class Plugin : IDalamudPlugin
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
         nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, GameGui, Log, AttachItemLink);
+        linkshellWatcherService = new LinkshellWatcherService(Framework, Log, Configuration, TabManager);
 
         foreach (var tab in TabManager.Tabs)
         {
@@ -369,6 +376,21 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    /// <summary>Cleans up a popped-out floating window for any tab removed from anywhere. Existing
+    /// removal call sites that already handle this inline (<see cref="SetTabDetached"/>,
+    /// <see cref="CloseAllWhisperTabs"/>) end up removing the window from <c>detachedWindows</c>
+    /// before this ever runs, so it's a harmless no-op for those - it's here specifically for removal
+    /// paths that don't already do it themselves, like <see cref="TabManager.SyncAutoLinkshellTabs"/>
+    /// removing a linkshell tab out from under the player while it happens to be detached.</summary>
+    private void OnTabRemoved(ChatTabConfig tab)
+    {
+        if (detachedWindows.Remove(tab.Id, out var window))
+        {
+            WindowSystem.RemoveWindow(window);
+            window.Dispose();
+        }
+    }
+
     private void CreateDetachedWindow(ChatTabConfig tab)
     {
         if (detachedWindows.ContainsKey(tab.Id))
@@ -408,6 +430,7 @@ public sealed class Plugin : IDalamudPlugin
     public void ResetSettingsToDefaults()
     {
         Configuration.ResetToDefaults();
+        Configuration.ResetTabColors();
         Configuration.Save();
 
         ApplyNativeChatHidden();
@@ -480,9 +503,12 @@ public sealed class Plugin : IDalamudPlugin
         foreach (var window in detachedWindows.Values)
             window.Dispose();
 
+        TabManager.TabRemoved -= OnTabRemoved;
+
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
         nativeItemLinkWatcher.Dispose();
+        linkshellWatcherService.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();

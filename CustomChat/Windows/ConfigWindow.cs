@@ -90,6 +90,16 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
+        var autoLinkshellTabs = configuration.AutoLinkshellTabs;
+        if (ImGui.Checkbox("Auto-create a tab per joined linkshell/cross-world linkshell", ref autoLinkshellTabs))
+        {
+            configuration.AutoLinkshellTabs = autoLinkshellTabs;
+            configuration.Save();
+            if (!autoLinkshellTabs)
+                plugin.TabManager.RemoveAllAutoLinkshellTabs();
+        }
+        ImGui.TextDisabled("A tab appears the moment you join one, disappears the moment you leave/get kicked. Turning this off removes them immediately.");
+
         var fadeInactive = configuration.FadeWindowWhenInactive;
         if (ImGui.Checkbox("Fade the chat window when it's not focused", ref fadeInactive))
         {
@@ -339,6 +349,9 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void DrawTabEditor(ChatTabConfig tab)
     {
+        if (tab.IsAutoLinkshellTab)
+            ImGui.TextDisabled($"Auto-managed ({(tab.IsCrossWorldLinkshell ? "cross-world linkshell" : "linkshell")} - see Settings > General). Colours below are still yours to customize.");
+
         var name = tab.Name;
         ImGui.SetNextItemWidth(250);
         if (ImGui.InputText($"Name##name_{tab.Id}", ref name, 64))
@@ -400,6 +413,23 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         if (tab.IsPmTab)
             ImGui.TextDisabled("Overrides the by-nickname colour set in Settings > Players, if any.");
+
+        var bodyColor = tab.MessageTextColorOverride ?? Vector4.One;
+        if (ImGui.ColorEdit4($"Message text colour##bodycolor_{tab.Id}", ref bodyColor))
+        {
+            tab.MessageTextColorOverride = bodyColor;
+            plugin.TabManager.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!tab.MessageTextColorOverride.HasValue))
+        {
+            if (ImGui.SmallButton($"Use default##bodycolorreset_{tab.Id}"))
+            {
+                tab.MessageTextColorOverride = null;
+                plugin.TabManager.Save();
+            }
+        }
+        ImGui.TextDisabled("Overrides the per-channel colours below for every message body in this tab.");
 
         ImGui.Spacing();
         ImGui.TextUnformatted("Notification colours (this tab)");
@@ -556,6 +586,13 @@ public sealed class ConfigWindow : Window, IDisposable
             // deletes any messages - it just hides the tab until the next message reopens it.
             if (ImGui.Button($"Close chat##close_{tab.Id}"))
                 plugin.TabManager.RemoveTab(tab);
+        }
+        else if (tab.IsAutoLinkshellTab)
+        {
+            // Deleting here would just reappear within ~1s (SyncAutoLinkshellTabs still sees the
+            // player as a member) - the real "delete" is leaving the shell in-game, or turning the
+            // whole feature off in Settings > General.
+            ImGui.TextDisabled("Leave the linkshell in-game to remove this tab.");
         }
         else
         {

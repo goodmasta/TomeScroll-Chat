@@ -105,11 +105,21 @@ public class Configuration : IPluginConfiguration
     /// balloon tips need a visible icon to attach to).</summary>
     public bool NotifyWhisperInWindows { get; set; } = true;
 
+    /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
+    /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
+    /// one. Turning this off removes every such tab immediately (see
+    /// <see cref="Services.TabManager.RemoveAllAutoLinkshellTabs"/>) - manually created linkshell tabs
+    /// (added the normal way, via "Add tab") are untouched either way, only ones this feature itself
+    /// created.</summary>
+    public bool AutoLinkshellTabs { get; set; } = true;
+
     /// <summary>Resets every *setting* below to its default value - deliberately leaves
-    /// <see cref="Tabs"/> alone, since that's the user's own custom tab setup (channels, colours,
-    /// filters, icons), not a preference to reset. Doesn't call <see cref="Save"/> itself, and some
-    /// of these have side effects elsewhere that need reapplying - see
-    /// <see cref="Plugin.ResetSettingsToDefaults"/>, the actual "Reset settings to defaults" handler.
+    /// <see cref="Tabs"/> itself alone (channels, filters, icons, name - the user's own custom tab
+    /// setup, not a preference to reset). Per-tab *colour* overrides are still cleared, just via the
+    /// separate <see cref="ResetTabColors"/> (see <see cref="Plugin.ResetSettingsToDefaults"/>, which
+    /// calls both) - colours were explicitly requested to reset along with everything else, unlike a
+    /// tab's actual existence/channel setup. Doesn't call <see cref="Save"/> itself, and some of these
+    /// have side effects elsewhere that need reapplying - see <see cref="Plugin.ResetSettingsToDefaults"/>.
     /// Field list has to be kept in sync by hand whenever a new setting is added.</summary>
     public void ResetToDefaults()
     {
@@ -136,6 +146,26 @@ public class Configuration : IPluginConfiguration
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyWhisperInWindows = defaults.NotifyWhisperInWindows;
+        AutoLinkshellTabs = defaults.AutoLinkshellTabs;
+    }
+
+    /// <summary>Clears every per-tab colour override (<see cref="ChatTabConfig.ColorOverrides"/>,
+    /// <see cref="ChatTabConfig.TabColorOverride"/>, <see cref="ChatTabConfig.BlinkColorOverride"/>,
+    /// <see cref="ChatTabConfig.UnreadCountColorOverride"/>,
+    /// <see cref="ChatTabConfig.MessageTextColorOverride"/>) on every tab, back to falling through to
+    /// the global defaults above - unlike <see cref="ResetToDefaults"/>, this only touches colours,
+    /// not the tabs' channels/filters/name/existence. Split out separately since it iterates
+    /// <see cref="Tabs"/>, which <see cref="ResetToDefaults"/> otherwise never touches.</summary>
+    public void ResetTabColors()
+    {
+        foreach (var tab in Tabs)
+        {
+            tab.ColorOverrides.Clear();
+            tab.TabColorOverride = null;
+            tab.BlinkColorOverride = null;
+            tab.UnreadCountColorOverride = null;
+            tab.MessageTextColorOverride = null;
+        }
     }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
