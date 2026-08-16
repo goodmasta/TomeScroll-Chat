@@ -85,6 +85,12 @@ public sealed class MainWindow : Window, IDisposable
     private string emoteSearch = string.Empty;
     private bool refocusInput;
     private string? pendingPrefillText;
+    /// <summary>Set alongside consuming <see cref="pendingPrefillText"/> - forces the cursor to land
+    /// right after the inserted text on that same frame (see the callback in <see cref="DrawInputRow"/>)
+    /// instead of wherever ImGui's own default focus/text-change placement happens to put it, which
+    /// isn't reliably "the end" (reported for "Reply" specifically, but applies to every PrefillInput
+    /// use - a native "/" leak redirect benefits from the same "keep typing right after" behaviour).</summary>
+    private bool pendingPrefillCursorToEnd;
 
     /// <summary>Item links queued via the native "Link" action (see
     /// <see cref="Services.NativeItemLinkWatcher"/>), consumed in order by each "&lt;link&gt;"
@@ -910,6 +916,7 @@ public sealed class MainWindow : Window, IDisposable
                 inputText += " ";
             inputText += pendingPrefillText;
             pendingPrefillText = null;
+            pendingPrefillCursorToEnd = true;
         }
 
         if (pendingInputSplice != null)
@@ -939,6 +946,15 @@ public sealed class MainWindow : Window, IDisposable
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
+
+            if (pendingPrefillCursorToEnd)
+            {
+                data.CursorPos = data.BufTextLen;
+                data.SelectionStart = data.BufTextLen;
+                data.SelectionEnd = data.BufTextLen;
+                pendingPrefillCursorToEnd = false;
+            }
+
             WrapComposeLineIfNeeded(data, wrapWidth);
             return 0;
         });

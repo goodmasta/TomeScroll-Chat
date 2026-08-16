@@ -31,6 +31,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private string emoteSearch = string.Empty;
     private bool refocusInput;
     private string? pendingPrefillText;
+    /// <summary>Same "force cursor to the end" fix as MainWindow - see its field comment for the
+    /// reasoning.</summary>
+    private bool pendingPrefillCursorToEnd;
 
     /// <summary>Same wrap-newline position tracking as MainWindow - see its field comment for the full
     /// reasoning (an earlier "invisible" Unicode marker character approach turned out not to actually
@@ -444,6 +447,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
                 inputText += " ";
             inputText += pendingPrefillText;
             pendingPrefillText = null;
+            pendingPrefillCursorToEnd = true;
         }
 
         if (pendingInputSplice != null)
@@ -470,6 +474,15 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             inputSelectionStart = data.SelectionStart;
             inputSelectionEnd = data.SelectionEnd;
+
+            if (pendingPrefillCursorToEnd)
+            {
+                data.CursorPos = data.BufTextLen;
+                data.SelectionStart = data.BufTextLen;
+                data.SelectionEnd = data.BufTextLen;
+                pendingPrefillCursorToEnd = false;
+            }
+
             WrapComposeLineIfNeeded(data, wrapWidth);
             return 0;
         });
