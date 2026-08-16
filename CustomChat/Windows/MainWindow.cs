@@ -880,35 +880,46 @@ public sealed class MainWindow : Window, IDisposable
     /// <see cref="GetInputRowReserve"/> as exactly <see cref="ImGui.GetTextLineHeight"/> (see that
     /// method's own comment for the alignment history this would otherwise break). The picker is a
     /// popup instead - popups float over everything and don't consume any layout space of their own,
-    /// so the label's drawn size never changes regardless of whether one is offered.</summary>
+    /// so the label's drawn size never changes regardless of whether one is offered.
+    ///
+    /// <para>No "use whatever the game's current default channel is" option any more (removed per
+    /// explicit request) - a blank <see cref="ChatTabConfig.OutgoingChannelCommand"/> is now only ever
+    /// a transient state, healed below to the tab's first sendable channel the moment there is one.
+    /// A tab with none at all (e.g. the built-in "Log" tab) has nothing to default to, so
+    /// <see cref="DrawInputRow"/> disables the compose controls entirely for it instead - see there.</para>
+    /// </summary>
     private void DrawOutgoingChannelLabel(ChatTabConfig tab)
     {
-        var target = string.IsNullOrEmpty(tab.OutgoingChannelCommand)
-            ? "current in-game chat channel"
-            : tab.OutgoingChannelCommand;
-
-        // Only offered once there's an actual choice to make - a tab with 0 or 1 sendable channels
-        // (most tabs, including every PM tab) just shows the plain label as before.
         var sendable = ChatChannelCatalog.SendableChannels.Where(c => tab.Channels.Contains(c.Type)).ToList();
-        if (sendable.Count <= 1)
+
+        // Self-limiting - only fires the one frame the command is still actually blank, so it's safe
+        // to just check this every draw rather than as a one-time migration pass.
+        if (sendable.Count > 0 && string.IsNullOrEmpty(tab.OutgoingChannelCommand))
         {
-            ImGui.TextDisabled($"Sending to: {target}");
+            tab.OutgoingChannelCommand = sendable[0].Command;
+            plugin.TabManager.Save();
+        }
+
+        if (string.IsNullOrEmpty(tab.OutgoingChannelCommand))
+        {
+            ImGui.TextDisabled("No writable channel in this tab - nothing to send to.");
             return;
         }
 
-        ImGui.TextDisabled($"Sending to: {target} (click to change)");
+        // Only offered once there's an actual choice to make - a tab with only 1 sendable channel
+        // (or a PM tab, pinned to its "/tell Name@World") just shows the plain label.
+        if (sendable.Count <= 1)
+        {
+            ImGui.TextDisabled($"Sending to: {tab.OutgoingChannelCommand}");
+            return;
+        }
+
+        ImGui.TextDisabled($"Sending to: {tab.OutgoingChannelCommand} (click to change)");
         if (ImGui.IsItemClicked())
             ImGui.OpenPopup($"OutgoingChannelPicker_{tab.Id}");
 
         if (ImGui.BeginPopup($"OutgoingChannelPicker_{tab.Id}"))
         {
-            var isDefault = string.IsNullOrEmpty(tab.OutgoingChannelCommand);
-            if (ImGui.MenuItem((isDefault ? "> " : "  ") + "Default (game's current channel)"))
-            {
-                tab.OutgoingChannelCommand = string.Empty;
-                plugin.TabManager.Save();
-            }
-
             foreach (var channel in sendable)
             {
                 var isSelected = tab.OutgoingChannelCommand == channel.Command;
@@ -934,6 +945,12 @@ public sealed class MainWindow : Window, IDisposable
         var iconSize = ImGui.GetFrameHeight();
 
         DrawOutgoingChannelLabel(tab);
+
+        // Resolved *after* the label above, which is what actually heals a blank command to the
+        // tab's first sendable channel this same frame - a tab still blank at this point genuinely
+        // has nowhere to send to (e.g. the built-in "Log" tab), so composing is disabled outright
+        // rather than silently falling back to whatever the game's ambient channel happens to be.
+        var canWrite = tab.IsPmTab || !string.IsNullOrEmpty(tab.OutgoingChannelCommand);
 
         // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
         // "the very next widget") - doing it *after*, like before the icon buttons were added here,
@@ -982,22 +999,25 @@ public sealed class MainWindow : Window, IDisposable
         // flickering frame to frame from sub-pixel rounding.
         var wrapWidth = boxWidth - ImGui.GetStyle().FramePadding.X * 2f - 4f;
 
-        ImGui.InputTextMultiline($"##input_{tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
+        using (ImRaii.Disabled(!canWrite))
         {
-            inputSelectionStart = data.SelectionStart;
-            inputSelectionEnd = data.SelectionEnd;
-
-            if (pendingPrefillCursorToEnd)
+            ImGui.InputTextMultiline($"##input_{tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
             {
-                data.CursorPos = data.BufTextLen;
-                data.SelectionStart = data.BufTextLen;
-                data.SelectionEnd = data.BufTextLen;
-                pendingPrefillCursorToEnd = false;
-            }
+                inputSelectionStart = data.SelectionStart;
+                inputSelectionEnd = data.SelectionEnd;
 
-            WrapComposeLineIfNeeded(data, wrapWidth);
-            return 0;
-        });
+                if (pendingPrefillCursorToEnd)
+                {
+                    data.CursorPos = data.BufTextLen;
+                    data.SelectionStart = data.BufTextLen;
+                    data.SelectionEnd = data.BufTextLen;
+                    pendingPrefillCursorToEnd = false;
+                }
+
+                WrapComposeLineIfNeeded(data, wrapWidth);
+                return 0;
+            });
+        }
 
         // A multi-line InputText has no "Enter submits" concept of its own - by default Enter (with
         // or without Shift) always just inserts a newline, which is exactly what's wanted for
@@ -1056,6 +1076,7 @@ public sealed class MainWindow : Window, IDisposable
         // unreadably small/glitchy (reported), and mixed a plain-text "P" glyph's font/baseline with
         // the icon-font buttons around it in a space too cramped for either to render cleanly.
         bool quickPosClicked;
+        using (ImRaii.Disabled(!canWrite))
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             quickPosClicked = ImGui.Button($"{FontAwesomeIcon.MapMarkerAlt.ToIconString()}##quickpos_{tab.Id}", new Vector2(iconSize, iconSize));
         if (ImGui.IsItemHovered())
@@ -1070,6 +1091,7 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.SameLine(0, 0);
         bool emoteClicked;
+        using (ImRaii.Disabled(!canWrite))
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{tab.Id}", new Vector2(iconSize, iconSize));
         if (emoteClicked)

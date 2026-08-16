@@ -73,36 +73,36 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// ItemSpacing.Y, not the tightened spacing actually pushed around the input row further down).</summary>
     private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeight() + TightRowSpacing;
 
-    /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
-    /// <summary>Same picker as MainWindow's version - see its doc comment for why this stays a plain
-    /// TextDisabled either way (a popup, not a taller widget, so the reserved label height never
-    /// changes) and why it's only offered once a tab has more than one sendable channel.</summary>
+    /// <summary>Same picker/auto-heal/no-channel handling as MainWindow's version - see its doc
+    /// comment for the full reasoning.</summary>
     private void DrawOutgoingChannelLabel()
     {
-        var target = string.IsNullOrEmpty(Tab.OutgoingChannelCommand)
-            ? "current in-game chat channel"
-            : Tab.OutgoingChannelCommand;
-
         var sendable = ChatChannelCatalog.SendableChannels.Where(c => Tab.Channels.Contains(c.Type)).ToList();
-        if (sendable.Count <= 1)
+
+        if (sendable.Count > 0 && string.IsNullOrEmpty(Tab.OutgoingChannelCommand))
         {
-            ImGui.TextDisabled($"Sending to: {target}");
+            Tab.OutgoingChannelCommand = sendable[0].Command;
+            plugin.TabManager.Save();
+        }
+
+        if (string.IsNullOrEmpty(Tab.OutgoingChannelCommand))
+        {
+            ImGui.TextDisabled("No writable channel in this tab - nothing to send to.");
             return;
         }
 
-        ImGui.TextDisabled($"Sending to: {target} (click to change)");
+        if (sendable.Count <= 1)
+        {
+            ImGui.TextDisabled($"Sending to: {Tab.OutgoingChannelCommand}");
+            return;
+        }
+
+        ImGui.TextDisabled($"Sending to: {Tab.OutgoingChannelCommand} (click to change)");
         if (ImGui.IsItemClicked())
             ImGui.OpenPopup($"OutgoingChannelPicker_{Tab.Id}");
 
         if (ImGui.BeginPopup($"OutgoingChannelPicker_{Tab.Id}"))
         {
-            var isDefault = string.IsNullOrEmpty(Tab.OutgoingChannelCommand);
-            if (ImGui.MenuItem((isDefault ? "> " : "  ") + "Default (game's current channel)"))
-            {
-                Tab.OutgoingChannelCommand = string.Empty;
-                plugin.TabManager.Save();
-            }
-
             foreach (var channel in sendable)
             {
                 var isSelected = Tab.OutgoingChannelCommand == channel.Command;
@@ -466,6 +466,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         DrawOutgoingChannelLabel();
 
+        // Resolved after the label above (which is what heals a blank command to the tab's first
+        // sendable channel this same frame) - see MainWindow's version for the full reasoning.
+        var canWrite = Tab.IsPmTab || !string.IsNullOrEmpty(Tab.OutgoingChannelCommand);
+
         // Re-focus has to happen right before the input box (offset 0 = "the very next widget") rather
         // than after, since after now runs through the icon buttons/popup - an unpredictable number of
         // widgets depending on whether the emote popup happens to be open that frame.
@@ -505,22 +509,25 @@ public sealed class DetachedTabWindow : Window, IDisposable
         var boxSize = new Vector2(boxWidth, GetComposeBoxHeight());
         var wrapWidth = boxWidth - ImGui.GetStyle().FramePadding.X * 2f - 4f;
 
-        ImGui.InputTextMultiline($"##input_{Tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
+        using (ImRaii.Disabled(!canWrite))
         {
-            inputSelectionStart = data.SelectionStart;
-            inputSelectionEnd = data.SelectionEnd;
-
-            if (pendingPrefillCursorToEnd)
+            ImGui.InputTextMultiline($"##input_{Tab.Id}_{inputGeneration}", ref inputText, 500, boxSize, ImGuiInputTextFlags.CallbackAlways, data =>
             {
-                data.CursorPos = data.BufTextLen;
-                data.SelectionStart = data.BufTextLen;
-                data.SelectionEnd = data.BufTextLen;
-                pendingPrefillCursorToEnd = false;
-            }
+                inputSelectionStart = data.SelectionStart;
+                inputSelectionEnd = data.SelectionEnd;
 
-            WrapComposeLineIfNeeded(data, wrapWidth);
-            return 0;
-        });
+                if (pendingPrefillCursorToEnd)
+                {
+                    data.CursorPos = data.BufTextLen;
+                    data.SelectionStart = data.BufTextLen;
+                    data.SelectionEnd = data.BufTextLen;
+                    pendingPrefillCursorToEnd = false;
+                }
+
+                WrapComposeLineIfNeeded(data, wrapWidth);
+                return 0;
+            });
+        }
 
         var send = false;
         if (ImGui.IsItemFocused() && !ImGui.GetIO().KeyShift && (ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
@@ -569,6 +576,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
         // A full-size 4th icon column, not the half-height stack tried first - see MainWindow's
         // mirror of this for why (rendered unreadably small/glitchy, reported).
         bool quickPosClicked;
+        using (ImRaii.Disabled(!canWrite))
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             quickPosClicked = ImGui.Button($"{FontAwesomeIcon.MapMarkerAlt.ToIconString()}##quickpos_{Tab.Id}", new Vector2(iconSize, iconSize));
         if (ImGui.IsItemHovered())
@@ -583,6 +591,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         ImGui.SameLine(0, 0);
         bool emoteClicked;
+        using (ImRaii.Disabled(!canWrite))
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{Tab.Id}", new Vector2(iconSize, iconSize));
         if (emoteClicked)

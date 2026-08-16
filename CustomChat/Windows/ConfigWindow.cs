@@ -550,7 +550,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 tab.OutgoingChannelCommand = outgoing;
                 plugin.TabManager.Save();
             }
-            ImGui.TextDisabled("e.g. /p, /fc, /s - what messages typed in this tab are sent as. Empty = plain text (uses the game's current default channel).");
+            ImGui.TextDisabled("e.g. /p, /fc, /s - what messages typed in this tab are sent as. Left empty, it auto-fills with the first channel checked below the moment there is one (or the compose box is disabled if this tab has none you can write to) - same picker as the \"Sending to\" label above the compose box.");
 
             var notify = tab.NotifyOnNewMessage;
             if (ImGui.Checkbox($"Blink + red unread count on new messages##notify_{tab.Id}", ref notify))
