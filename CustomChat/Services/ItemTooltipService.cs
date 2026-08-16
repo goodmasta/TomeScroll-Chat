@@ -96,6 +96,16 @@ public sealed unsafe class ItemTooltipService
             AtkStage.Instance()->TooltipManager.TooltipType |= 2;
             addon->Show(false, 15);
 
+            // Best-effort attempt at fixing the tooltip rendering *behind* this plugin's own ImGui
+            // window (reported 2026-08-13): a real native tooltip attached via AtkTooltipManager gets
+            // drawn through a dedicated always-on-top tooltip pass, but this addon is only opened
+            // through the normal window-layer path (Show() above), since attaching a real tooltip needs
+            // a target AtkResNode this plugin's ImGui-drawn text doesn't have one of. DepthLayer only
+            // orders this addon relative to *other native addons*, not relative to Dalamud's ImGui
+            // overlay, so this is a low-confidence try, not a verified fix - if it doesn't help, this
+            // native-vs-ImGui compositing order likely isn't something a plugin can control at all.
+            addon->SetDepthLayer(15);
+
             openRawItemId = rawItemId;
             UpdatePosition();
         }
@@ -105,13 +115,17 @@ public sealed unsafe class ItemTooltipService
         }
     }
 
-    /// <summary>Positions the tooltip addon at the mouse cursor, offset down-right the same way the
-    /// game's own native tooltips are (appearing centred/under the cursor would make it awkward to read
-    /// while also obscuring the item link itself). Native item-detail addons aren't automatically
-    /// mouse-following the way this same window is when opened by hovering a real inventory slot - that
-    /// positioning is driven by <c>AtkTooltipManager</c> being attached to the slot's own
-    /// <c>AtkResNode</c>, which chat text drawn by this plugin's own ImGui doesn't have one of, so this
-    /// has to be done by hand instead.</summary>
+    /// <summary>Positions the tooltip addon just above the mouse cursor (per explicit request - keeps
+    /// it clear of the item link text itself and the cursor, and above rather than below reads more
+    /// like a normal tooltip anyway). Native item-detail addons aren't automatically mouse-following
+    /// the way this same window is when opened by hovering a real inventory slot - that positioning is
+    /// driven by <c>AtkTooltipManager</c> being attached to the slot's own <c>AtkResNode</c>, which chat
+    /// text drawn by this plugin's own ImGui doesn't have one of, so this has to be done by hand
+    /// instead. Uses the addon's own actual rendered height (<c>GetScaledHeight</c>), not a guessed
+    /// fixed offset, so it sits flush above the cursor regardless of how tall a given item's tooltip
+    /// turns out to be - on the very first frame it opens the height may still reflect the previously
+    /// shown item (or be 0 for the first tooltip ever shown this session), self-correcting within a
+    /// frame or two as this runs again every frame the same item stays hovered.</summary>
     private void UpdatePosition()
     {
         try
@@ -121,7 +135,9 @@ public sealed unsafe class ItemTooltipService
                 return;
 
             var mouse = ImGui.GetMousePos();
-            addon->SetPosition((short)(mouse.X + 20), (short)(mouse.Y + 20));
+            const float margin = 12f;
+            var height = addon->GetScaledHeight(true);
+            addon->SetPosition((short)(mouse.X + 16), (short)(mouse.Y - height - margin));
         }
         catch (Exception ex)
         {
