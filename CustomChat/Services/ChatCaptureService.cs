@@ -69,17 +69,29 @@ public sealed class ChatCaptureService : IDisposable
         // a live chat capture that's effectively the same instant anyway.
         var timestamp = DateTime.UtcNow;
 
+        // TEMPORARY diagnostic (2026-08-13) - a report came in that a sent "<flag>" message doesn't
+        // appear in this plugin's chat at all, even though ChatSendService confirmed the native
+        // ProcessChatBoxEntry call happened without throwing. This logs every message this event
+        // actually captures (including the local player's own outgoing echo, which should normally
+        // come back through this same event) unconditionally, so the next test can show whether the
+        // echo reaches this handler at all - and if it does, whether it just isn't matching any tab
+        // (see the routedCount log below) rather than never being captured in the first place. Remove
+        // once the actual gap is found.
+        log.Warning("CustomChat: captured message - type={ChatType}, body=\"{Body}\"", chatType, Truncate(body));
+
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
             HandleTell(chatType, senderText, senderKey, body, payloadLinks, timestamp);
             return;
         }
 
+        var routedCount = 0;
         foreach (var tab in tabManager.Tabs)
         {
             if (tab.IsPmTab || !tab.Channels.Contains(chatType) || !MatchesFilter(tab, body))
                 continue;
 
+            routedCount++;
             var record = new ChatMessageRecord
             {
                 TimestampUtc = timestamp,
@@ -93,7 +105,13 @@ public sealed class ChatCaptureService : IDisposable
             historyService.Enqueue(record);
             MessageRouted?.Invoke(tab, record);
         }
+
+        // TEMPORARY diagnostic (2026-08-13) - see the matching comment above.
+        if (routedCount == 0)
+            log.Warning("CustomChat: message type={ChatType} matched no tab - won't appear anywhere in this plugin's UI", chatType);
     }
+
+    private static string Truncate(string body) => body.Length > 80 ? body[..80] + "..." : body;
 
     private void HandleTell(XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
