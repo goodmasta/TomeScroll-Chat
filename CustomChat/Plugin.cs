@@ -50,6 +50,7 @@ public sealed class Plugin : IDalamudPlugin
     public FriendRequestService FriendRequestService { get; }
     public AdventurerPlateService AdventurerPlateService { get; }
     public WindowsNotificationService WindowsNotificationService { get; }
+    public ItemTooltipService ItemTooltipService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
@@ -78,6 +79,7 @@ public sealed class Plugin : IDalamudPlugin
         FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
         AdventurerPlateService = new AdventurerPlateService(ObjectTable, FriendListService);
         WindowsNotificationService = new WindowsNotificationService(Log) { Enabled = Configuration.NotifyWhisperInWindows };
+        ItemTooltipService = new ItemTooltipService(GameGui, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -103,7 +105,7 @@ public sealed class Plugin : IDalamudPlugin
         };
         CommandManager.AddHandler(CommandName, commandInfo);
 
-        PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
+        PluginInterface.UiBuilder.Draw += DrawAll;
         PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
 
@@ -441,6 +443,18 @@ public sealed class Plugin : IDalamudPlugin
         }
     }
 
+    /// <summary>Wraps <see cref="WindowSystem.Draw"/> so <see cref="ItemTooltipService"/> can track
+    /// item-link hovers across every window that draws messages this frame (main window plus any
+    /// number of detached whisper windows) as one unit, rather than each window's own message-drawing
+    /// call opening/closing the tooltip independently - which could flicker it shut between windows
+    /// even while an item link is continuously hovered in just one of them.</summary>
+    private void DrawAll()
+    {
+        ItemTooltipService.BeginFrame();
+        WindowSystem.Draw();
+        ItemTooltipService.EndFrame();
+    }
+
     public void Dispose()
     {
         // Persist final unread counts (see ChatTabConfig.UnreadCount) - they aren't saved on every
@@ -448,7 +462,7 @@ public sealed class Plugin : IDalamudPlugin
         // actions, so a clean unload/reload doesn't lose them.
         TabManager.Save();
 
-        PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
+        PluginInterface.UiBuilder.Draw -= DrawAll;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 

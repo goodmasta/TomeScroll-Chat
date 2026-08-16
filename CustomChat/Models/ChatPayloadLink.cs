@@ -33,4 +33,9 @@ public sealed class ChatPayloadLink
     /// straight to <see cref="Dalamud.Plugin.Services.IGameGui.OpenMapWithMapLink(MapLinkPayload)"/>
     /// on click, no need to re-derive territory/map/coordinates by hand.</summary>
     public MapLinkPayload? MapLink { get; init; }
+
+    /// <summary>Set when <see cref="Type"/> is <see cref="ChatPayloadLinkType.Item"/> - its
+    /// <c>RawItemId</c>/<c>Kind</c> are passed to <see cref="Services.ItemTooltipService"/> on hover to
+    /// open the real native item tooltip, no need to re-derive the HQ/collectible id offset by hand.</summary>
+    public ItemPayload? Item { get; init; }
 }

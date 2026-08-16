@@ -161,6 +161,7 @@ public sealed class ChatCaptureService : IDisposable
         var cursor = 0;
         ChatPayloadLinkType? pendingType = null;
         MapLinkPayload? pendingMapLink = null;
+        ItemPayload? pendingItemLink = null;
         var pendingStart = 0;
         var pendingLength = 0;
         var hasMarker = false;
@@ -175,11 +176,13 @@ public sealed class ChatCaptureService : IDisposable
                     Start = pendingStart,
                     Length = pendingLength,
                     MapLink = pendingMapLink,
+                    Item = pendingItemLink,
                 });
             }
 
             pendingType = null;
             pendingMapLink = null;
+            pendingItemLink = null;
             pendingLength = 0;
         }
 
@@ -204,11 +207,12 @@ public sealed class ChatCaptureService : IDisposable
                 pendingType = ChatPayloadLinkType.MapLink;
                 pendingMapLink = mapLink;
             }
-            else if (payload is ItemPayload)
+            else if (payload is ItemPayload itemLink)
             {
                 CommitPending();
                 hasMarker = true;
                 pendingType = ChatPayloadLinkType.Item;
+                pendingItemLink = itemLink;
             }
             else if (payload is not (UIForegroundPayload or UIGlowPayload))
             {

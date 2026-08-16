@@ -60,6 +60,8 @@ public static class ChatMessageRenderer
     /// availability as <paramref name="onSendTell"/>.</param>
     /// <param name="onOpenMapLink">Called when a map/flag coordinate link in a message is clicked -
     /// see <see cref="ChatPayloadLink"/>.</param>
+    /// <param name="itemTooltipService">Opens the native item detail window while an item link is
+    /// hovered - see <see cref="Services.ItemTooltipService"/>.</param>
     /// <param name="localPlayerKey">The local character's own "Name@World" (see
     /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
     /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
@@ -70,7 +72,7 @@ public static class ChatMessageRenderer
     /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -85,7 +87,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, itemTooltipService, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -124,7 +126,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -195,7 +197,7 @@ public static class ChatMessageRenderer
         ImGui.Indent(indentWidth);
 
         ImGui.PushStyleColor(ImGuiCol.Text, channelColor);
-        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink);
+        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, itemTooltipService);
         ImGui.PopStyleColor();
 
         // Drawn under the same hanging indent as the body above it, on its own line - "Translate"
@@ -370,7 +372,7 @@ public static class ChatMessageRenderer
     /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
     /// single-token placement.
     /// </summary>
-    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink)
+    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink, ItemTooltipService itemTooltipService)
     {
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
@@ -483,7 +485,7 @@ public static class ChatMessageRenderer
             var linkText = body.Substring(link.Start, link.Length);
             canInline = link is { Type: ChatPayloadLinkType.MapLink, MapLink: not null }
                 ? DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, canInline)
-                : DrawItemLink(linkText, rightEdge, canInline);
+                : DrawItemLink(linkText, link.Item, itemTooltipService, rightEdge, canInline);
 
             cursor = link.Start + link.Length;
         }
@@ -565,19 +567,25 @@ public static class ChatMessageRenderer
     private static bool DrawMapLink(string text, MapLinkPayload payload, Action<MapLinkPayload> onOpenMapLink, float rightEdge, bool canInline) =>
         DrawColoredLinkToken(text, MapLinkColor, "Open on the map", () => onOpenMapLink(payload), rightEdge, canInline);
 
-    /// <summary>Draws an item link - clicking copies the item's name to the clipboard. Doesn't try to
-    /// reproduce the game's own "open item detail" popup: that needs several undocumented
-    /// AgentItemDetail fields (DetailKind/TypeOrId/Flag1-3) set correctly first, which isn't something
-    /// worth guessing at without a way to verify it doesn't misbehave.</summary>
-    private static bool DrawItemLink(string text, float rightEdge, bool canInline) =>
-        DrawColoredLinkToken(text, ItemLinkColor, $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, canInline);
+    /// <summary>Draws an item link - hovering it opens the real native item detail/tooltip window
+    /// (see <see cref="Services.ItemTooltipService"/>), clicking still copies the item's name to the
+    /// clipboard as a bonus. <paramref name="payload"/> is null if extraction somehow didn't capture
+    /// one for this span (shouldn't normally happen) - falls back to the old "no native tooltip"
+    /// behaviour rather than risk calling into the tooltip service with nothing to show.</summary>
+    private static bool DrawItemLink(string text, ItemPayload? payload, ItemTooltipService itemTooltipService, float rightEdge, bool canInline) =>
+        DrawColoredLinkToken(text, ItemLinkColor, payload != null ? null : $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, canInline,
+            onHover: payload != null ? () => itemTooltipService.NotifyHovered(payload.RawItemId, payload.Kind) : null);
 
     /// <summary>Shared wrap/inline/click plumbing behind <see cref="DrawMapLink"/> and
     /// <see cref="DrawItemLink"/> - the same logic <see cref="DrawLink"/> uses, just parameterised by
     /// colour/tooltip/click action instead of also being duplicated for each new link type. (DrawLink
     /// itself is left as its own function, not rewritten on top of this, since it also has the "open
-    /// links on click" toggle wrinkle these two don't need.)</summary>
-    private static bool DrawColoredLinkToken(string text, Vector4 color, string tooltip, Action onClick, float rightEdge, bool canInline)
+    /// links on click" toggle wrinkle these two don't need.) <paramref name="tooltip"/> is optional -
+    /// <see cref="DrawItemLink"/> skips the plain ImGui tooltip when the real native one is already
+    /// covering the same information, so there's no confusing double-tooltip stack.
+    /// <paramref name="onHover"/> is invoked every frame the token is hovered, in addition to (not
+    /// instead of) the built-in hand-cursor/tooltip behaviour.</summary>
+    private static bool DrawColoredLinkToken(string text, Vector4 color, string? tooltip, Action onClick, float rightEdge, bool canInline, Action? onHover = null)
     {
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var tokenWidth = ImGui.CalcTextSize(text).X;
@@ -604,7 +612,9 @@ public static class ChatMessageRenderer
         if (ImGui.IsItemHovered())
         {
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-            ImGui.SetTooltip(tooltip);
+            onHover?.Invoke();
+            if (tooltip != null)
+                ImGui.SetTooltip(tooltip);
         }
 
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
