@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Dalamud.Game.Command;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
@@ -99,7 +100,7 @@ public sealed class Plugin : IDalamudPlugin
 
         commandInfo = new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the Custom Chat window. Use '/customchat config' for settings.",
+            HelpMessage = "Open the Custom Chat window. Use '/customchat config' for settings, '/customchat version' to check the loaded build.",
         };
         CommandManager.AddHandler(CommandName, commandInfo);
 
@@ -114,13 +115,6 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.DisableUserUiHide = true;
 
         RefreshEmotes();
-
-        // TEMPORARY build-verification marker (2026-08-13) - moved here (end of the constructor,
-        // after ChatCaptureService's subscription is registered above) from the very top, where it
-        // silently never got captured by our own ChatCaptureService (registered later) even though the
-        // print itself worked fine - explains why it appeared to do nothing in the first test. Remove
-        // once the actual /xllog-visibility question (still open) is resolved.
-        ChatGui.Print("CustomChat: plugin build loaded (diagnostic marker, remove me)");
     }
 
     private void OnMessageRouted(ChatTabConfig tab, ChatMessageRecord record)
@@ -477,13 +471,35 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
-        if (args.Trim().Equals("config", StringComparison.OrdinalIgnoreCase))
+        var trimmed = args.Trim();
+        if (trimmed.Equals("config", StringComparison.OrdinalIgnoreCase))
         {
             ToggleConfigUi();
             return;
         }
 
+        if (trimmed.Equals("version", StringComparison.OrdinalIgnoreCase))
+        {
+            PrintVersion();
+            return;
+        }
+
         ToggleMainUi();
+    }
+
+    /// <summary>"/customchat version" - prints the loaded assembly's version *and* its on-disk build
+    /// time to chat. The assembly's Version rarely changes between commits in this project (it's not
+    /// bumped per-build), so on its own it can't answer "is this actually the build I just compiled" -
+    /// the file's last-write time can, since that changes on every rebuild. Prints straight to chat
+    /// (not just /xllog) so it's visible without needing to open the Dalamud log window at all.</summary>
+    private void PrintVersion()
+    {
+        var assembly = typeof(Plugin).Assembly;
+        var version = assembly.GetName().Version;
+        var buildTime = File.Exists(assembly.Location)
+            ? File.GetLastWriteTime(assembly.Location).ToString("yyyy-MM-dd HH:mm:ss")
+            : "unknown";
+        ChatGui.Print($"Custom Chat v{version}, built {buildTime}, loaded from {assembly.Location}");
     }
 
     private void ToggleConfigUi() => configWindow.Toggle();
