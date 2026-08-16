@@ -466,7 +466,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
         // MainWindow.DrawInputRow for the full reasoning behind the send-detection logic below.
         // Explicit absolute width (not the usual negative-size trick) so it can double as the wrap
         // width passed to WrapComposeLineIfNeeded - see MainWindow's own version for the full reasoning.
-        var boxWidth = ImGui.GetContentRegionAvail().X - (iconSize * 3 + toolbarSpacing);
+        var boxWidth = ImGui.GetContentRegionAvail().X - (iconSize * 4 + toolbarSpacing);
         var boxSize = new Vector2(boxWidth, GetComposeBoxHeight());
         var wrapWidth = boxWidth - ImGui.GetStyle().FramePadding.X * 2f - 4f;
 
@@ -531,28 +531,24 @@ public sealed class DetachedTabWindow : Window, IDisposable
             ImGui.SetTooltip(selectionMode ? "Back to normal chat view" : "Select & copy text");
 
         ImGui.SameLine(0, 0);
-        // Same column as the emote button below, split into two stacked half-height buttons rather
-        // than a 4th column - see MainWindow's mirror of this for why (keeps this icon group's total
-        // height exactly iconSize, so the surrounding bottomReserve alignment math needs no changes).
-        using (var quickInsertGroup = ImRaii.Group())
+        // A full-size 4th icon column, not the half-height stack tried first - see MainWindow's
+        // mirror of this for why (rendered unreadably small/glitchy, reported).
+        bool quickPosClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            quickPosClicked = ImGui.Button($"{FontAwesomeIcon.MapMarkerAlt.ToIconString()}##quickpos_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Insert <pos> - the game expands this to your current position when sent, same as typing it into the native chatbox.");
+        if (quickPosClicked)
+            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + "<pos>";
+
+        ImGui.SameLine(0, 0);
+        bool emoteClicked;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{Tab.Id}", new Vector2(iconSize, iconSize));
+        if (emoteClicked)
         {
-            var topHeight = MathF.Max(1f, (iconSize - TightRowSpacing) / 2f);
-            var bottomHeight = iconSize - TightRowSpacing - topHeight;
-
-            var quickPosClicked = ImGui.Button($"P##quickpos_{Tab.Id}", new Vector2(iconSize, topHeight));
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Insert <pos> - the game expands this to your current position when sent, same as typing it into the native chatbox.");
-            if (quickPosClicked)
-                inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + "<pos>";
-
-            bool emoteClicked;
-            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-                emoteClicked = ImGui.Button($"{FontAwesomeIcon.Smile.ToIconString()}##emotebtn_{Tab.Id}", new Vector2(iconSize, bottomHeight));
-            if (emoteClicked)
-            {
-                emoteSearch = string.Empty;
-                ImGui.OpenPopup($"EmotePicker_{Tab.Id}");
-            }
+            emoteSearch = string.Empty;
+            ImGui.OpenPopup($"EmotePicker_{Tab.Id}");
         }
 
         EmotePicker.Draw($"EmotePicker_{Tab.Id}", plugin.EmoteService, ref emoteSearch, code =>
