@@ -77,6 +77,10 @@ public sealed unsafe class ChatSendService
         buffer.WriteByte(0); // native string wants a trailing null terminator
         var bytes = buffer.ToArray();
 
+        // TEMPORARY diagnostic (2026-08-13) - matches the <flag>-expansion log above; confirms whether
+        // execution actually reaches the native call at all. Remove once confirmed working.
+        log.Warning("CustomChat: sending {Bytes} bytes via ProcessChatBoxEntry", bytes.Length);
+
         var utf8 = Utf8String.FromSequence(bytes);
         try
         {
@@ -126,6 +130,12 @@ public sealed unsafe class ChatSendService
         }
 
         var flagLinkBytes = TryBuildFlagLinkBytes();
+        // TEMPORARY diagnostic (2026-08-13) - a report came in that a "<flag>" message doesn't send at
+        // all (not even as literal text), which this logic has no code path for on its own - logged to
+        // find out whether that's this method's fault (e.g. an oversized buffer silently dropped below)
+        // or something failing further up in Send. Remove once confirmed either way.
+        log.Warning("CustomChat: <flag> expansion - marker found={Found}, link bytes={Bytes}", flagLinkBytes != null, flagLinkBytes?.Length ?? -1);
+
         if (flagLinkBytes == null)
         {
             buffer.Write(Encoding.UTF8.GetBytes(text));

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Dalamud.Game.Chat;
 using Dalamud.Game.Text;
@@ -61,7 +62,7 @@ public sealed class ChatCaptureService : IDisposable
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
         var body = message.Message.TextValue;
-        var payloadLinks = ExtractPayloadLinks(message.Message);
+        var payloadLinks = ExtractPayloadLinks(message.Message, log);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
         // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
         // so this uses wall-clock time at the moment the message is actually handled instead - for
@@ -127,12 +128,13 @@ public sealed class ChatCaptureService : IDisposable
     /// <see cref="TextPayload"/> immediately follows its marker payload, which is how the game itself
     /// always structures these (a couple of formatting payloads, the link marker, one text payload
     /// with the visible name/coordinates, then formatting payloads closing it back out).</summary>
-    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message)
+    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message, IPluginLog log)
     {
         var links = new List<ChatPayloadLink>();
         var cursor = 0;
         ChatPayloadLinkType? pendingType = null;
         MapLinkPayload? pendingMapLink = null;
+        var hasMarker = false;
 
         foreach (var payload in message.Payloads)
         {
@@ -156,14 +158,29 @@ public sealed class ChatCaptureService : IDisposable
             }
             else if (payload is MapLinkPayload mapLink)
             {
+                hasMarker = true;
                 pendingType = ChatPayloadLinkType.MapLink;
                 pendingMapLink = mapLink;
             }
             else if (payload is ItemPayload)
             {
+                hasMarker = true;
                 pendingType = ChatPayloadLinkType.Item;
                 pendingMapLink = null;
             }
+        }
+
+        // TEMPORARY diagnostic (2026-08-13) - a report came in that received map/item links aren't
+        // rendering as clickable, and this extraction has never actually been verified against a real
+        // received message (only ever exercised by messages this plugin itself composed). Logs the full
+        // payload type sequence whenever a marker payload was seen at all, so the next real report can
+        // confirm or rule out whether the "marker is immediately followed by exactly one TextPayload"
+        // assumption this is built on actually holds for messages from other players. Remove once
+        // confirmed either way.
+        if (hasMarker)
+        {
+            var payloadTypes = string.Join(", ", message.Payloads.Select(p => p.GetType().Name));
+            log.Warning("CustomChat: payload-link extraction saw a marker - found {Count} link(s); payload sequence: [{Payloads}]", links.Count, payloadTypes);
         }
 
         return links;
