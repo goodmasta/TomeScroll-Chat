@@ -193,6 +193,11 @@ public sealed class MainWindow : Window, IDisposable
                 isChatHidden = !isChatHidden;
                 if (!isChatHidden)
                     inactiveSeconds = 0f; // don't let a stale timer immediately re-trigger auto-hide
+
+                // Temporary breadcrumb while diagnosing a report that clicking this doesn't visibly
+                // hide the chat - confirms the click is even reaching this handler and what value it
+                // computed, without needing to guess blind. Safe to remove once confirmed working.
+                Plugin.Log.Info($"CustomChat: hide-chat button clicked, isChatHidden is now {isChatHidden}");
             },
         };
         if (Plugin.Configuration.ShowHideChatButton)
