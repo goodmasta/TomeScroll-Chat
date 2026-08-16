@@ -6,7 +6,6 @@ using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
-using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using CustomChat.Models;
 
 namespace CustomChat.Services;
@@ -21,7 +20,6 @@ namespace CustomChat.Services;
 public sealed unsafe class ChatSendService
 {
     private const int MaxUtf8Bytes = 500;
-    private const string FlagPlaceholder = "<flag>";
     private const string LinkPlaceholder = "<link>";
 
     private readonly IPluginLog log;
@@ -36,7 +34,10 @@ public sealed unsafe class ChatSendService
     /// command the player typed (e.g. "/who", "/invite Name"), in which case it's sent completely
     /// as-is: prefixing a tab's channel command in front of an already-explicit command would just
     /// produce an invalid double command (e.g. "/p /invite Name"), which is why typing any command
-    /// used to only work from the one tab whose channel command happened to be empty (Log).</param>
+    /// used to only work from the one tab whose channel command happened to be empty (Log). A literal
+    /// "&lt;flag&gt;" is sent as-is, plain text, same as any other placeholder this plugin doesn't
+    /// specifically recognize (e.g. "&lt;pos&gt;") - see <see cref="AppendWithPlaceholderExpansion"/>'s
+    /// doc comment for why an earlier attempt at expanding it into a real map link was reverted.</param>
     /// <param name="attachments">Item links queued via <see cref="NativeItemLinkWatcher"/> (right-click
     /// an item -> "Link"), consumed in order by each literal "&lt;link&gt;" placeholder found in
     /// <paramref name="message"/> - see <see cref="AppendWithPlaceholderExpansion"/>. A message can be
@@ -92,21 +93,25 @@ public sealed unsafe class ChatSendService
         return trimmed.Length > 1 && trimmed[0] == '/' && char.IsLetter(trimmed[1]);
     }
 
-    /// <summary>Writes <paramref name="text"/> as UTF-8, expanding two kinds of placeholder along the
-    /// way into real payload bytes instead of literal text: "&lt;flag&gt;" (the currently-set map flag,
-    /// read fresh from <c>AgentMap.FlagMapMarkers</c> - matches the native chatbox's own auto-expansion
-    /// of the same text) and "&lt;link&gt;" (consumed in order from <paramref name="attachments"/>, one
-    /// per occurrence - see <see cref="NativeItemLinkWatcher"/> for how those get queued). Both
-    /// placeholders are handled in one left-to-right pass so they can appear anywhere in the text,
-    /// mixed freely, in any order.
-    /// <para>Both expansions matter for the same reason: the native chatbox does its own placeholder
-    /// substitution (and its own translation of a linked item into a real payload) as part of its *own*
-    /// submit handling, before it ever calls <c>UIModule::ProcessChatBoxEntry</c> - since this plugin
-    /// calls that entry point directly, bypassing the native UI entirely, none of that ever runs for
-    /// us, so both have to be reimplemented here. The resulting payload bytes are always written
-    /// directly to the buffer, never round-tripped through a C# string/UTF8 decode - the raw bytes that
-    /// encode a map coordinate or an item id use arbitrary byte values, not just printable UTF-8, and
-    /// could be silently corrupted by that trip.</para></summary>
+    /// <summary>Writes <paramref name="text"/> as UTF-8, expanding literal "&lt;link&gt;" placeholders
+    /// into real item link payload bytes, consumed in order from <paramref name="attachments"/> - see
+    /// <see cref="NativeItemLinkWatcher"/> for how those get queued. The payload bytes are written
+    /// directly to the buffer, never round-tripped through a C# string/UTF8 decode, since the raw bytes
+    /// that encode an item id use arbitrary byte values, not just printable UTF-8, and could be
+    /// silently corrupted by that trip.
+    /// <para>An earlier version also expanded "&lt;flag&gt;" into a live-built map link the same way
+    /// (the native chatbox does this same substitution itself, but only as part of its own submit
+    /// handling *before* it ever calls <c>UIModule::ProcessChatBoxEntry</c> - since this plugin calls
+    /// that entry point directly, bypassing the native UI, that expansion never ran for us either way).
+    /// **Reverted** (2026-08-13): sending "&lt;flag&gt;" through that path made the whole message vanish
+    /// - no error, nothing sent, nothing echoed back - while plain literal text (e.g. "&lt;pos&gt;",
+    /// which isn't recognized at all) sent and displayed correctly every time. The exact cause was never
+    /// pinned down (never got a diagnostic build in front of the failure - the log lines that would have
+    /// shown *why* were accidentally dropped in the same rewrite that unified this with "&lt;link&gt;"
+    /// handling). "&lt;flag&gt;" is deliberately left unhandled now, sent as ordinary plain text like any
+    /// other unrecognized token - reliability over the feature, given repeated failures trying to build
+    /// this specific payload live. If revisiting, add logging *before* re-attempting the expansion, not
+    /// after - this was debugged blind for too many rounds already.</para></summary>
     private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments)
     {
         var itemIndex = 0;
@@ -114,62 +119,27 @@ public sealed unsafe class ChatSendService
 
         while (pos < text.Length)
         {
-            var flagIndex = text.IndexOf(FlagPlaceholder, pos, StringComparison.Ordinal);
             var linkIndex = text.IndexOf(LinkPlaceholder, pos, StringComparison.Ordinal);
-
-            var isFlag = flagIndex >= 0 && (linkIndex < 0 || flagIndex <= linkIndex);
-            var nextIndex = isFlag ? flagIndex : linkIndex;
-
-            if (nextIndex < 0)
+            if (linkIndex < 0)
             {
                 buffer.Write(Encoding.UTF8.GetBytes(text[pos..]));
                 return;
             }
 
-            if (nextIndex > pos)
-                buffer.Write(Encoding.UTF8.GetBytes(text[pos..nextIndex]));
+            if (linkIndex > pos)
+                buffer.Write(Encoding.UTF8.GetBytes(text[pos..linkIndex]));
 
-            if (isFlag)
+            if (attachments != null && itemIndex < attachments.Count)
             {
-                var flagBytes = TryBuildFlagLinkBytes();
-                buffer.Write(flagBytes != null ? flagBytes : Encoding.UTF8.GetBytes(FlagPlaceholder));
-                pos = nextIndex + FlagPlaceholder.Length;
+                var link = attachments[itemIndex++];
+                buffer.Write(new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode());
             }
             else
             {
-                if (attachments != null && itemIndex < attachments.Count)
-                {
-                    var link = attachments[itemIndex++];
-                    buffer.Write(new SeStringBuilder().AddItemLink(link.ItemId, link.IsHq, link.DisplayName).Encode());
-                }
-                else
-                {
-                    buffer.Write(Encoding.UTF8.GetBytes(LinkPlaceholder));
-                }
-
-                pos = nextIndex + LinkPlaceholder.Length;
+                buffer.Write(Encoding.UTF8.GetBytes(LinkPlaceholder));
             }
-        }
-    }
 
-    private byte[]? TryBuildFlagLinkBytes()
-    {
-        try
-        {
-            var agentMap = AgentMap.Instance();
-            if (agentMap == null || agentMap->FlagMarkerCount == 0)
-                return null;
-
-            var marker = agentMap->FlagMapMarkers[0];
-            if (marker.TerritoryId == 0)
-                return null;
-
-            return new SeStringBuilder().AddMapLink(marker.TerritoryId, marker.MapId, marker.XFloat, marker.YFloat, 0f).Encode();
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "CustomChat: failed to build a map link for the current flag");
-            return null;
+            pos = linkIndex + LinkPlaceholder.Length;
         }
     }
 }
