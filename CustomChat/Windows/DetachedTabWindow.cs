@@ -156,9 +156,24 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// <see cref="wrapNewlines"/> instead of embedding a marker character in the text itself).</summary>
     private void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
+        RemoveJustInsertedEnterNewline(data);
         ReconcileWrapNewlines(data.BufTextSpan);
         DoWrapCheck(data, wrapWidth);
         lastWrapSnapshot = data.BufTextSpan.ToArray();
+    }
+
+    /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning (nothing to
+    /// do with <see cref="wrapNewlines"/> at all, despite the visible symptom looking just like a
+    /// wrap-corruption bug).</summary>
+    private static void RemoveJustInsertedEnterNewline(ImGuiInputTextCallbackDataPtr data)
+    {
+        if (ImGui.GetIO().KeyShift || !(ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
+            return;
+
+        var bytes = data.BufTextSpan;
+        var cursorByte = Math.Clamp(data.CursorPos, 0, bytes.Length);
+        if (cursorByte > 0 && bytes[cursorByte - 1] == (byte)'\n')
+            data.DeleteChars(cursorByte - 1, 1);
     }
 
     private void DoWrapCheck(ImGuiInputTextCallbackDataPtr data, float wrapWidth)

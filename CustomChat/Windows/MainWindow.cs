@@ -735,9 +735,36 @@ public sealed class MainWindow : Window, IDisposable
     /// misfire is now only ever a cosmetic wrinkle while typing, never a corrupted outgoing message.</summary>
     private void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
+        RemoveJustInsertedEnterNewline(data);
         ReconcileWrapNewlines(data.BufTextSpan);
         DoWrapCheck(data, wrapWidth);
         lastWrapSnapshot = data.BufTextSpan.ToArray();
+    }
+
+    /// <summary>Plain Enter (no Shift) triggers "send" (see <see cref="DrawInputRow"/>), but Dear
+    /// ImGui's own default behaviour for *any* Enter keypress in a multiline InputText is to insert a
+    /// real newline at the cursor first, unconditionally, regardless of what this plugin's own code
+    /// does with the text afterward. <see cref="DrawInputRow"/>'s own cleanup
+    /// (<c>if (inputText.EndsWith('\n')) ...</c>) only catches this when the cursor happened to already
+    /// be at the very end of the text - if the player had navigated back into the middle of the
+    /// message (e.g. to fix a typo, like inserting the missing "o" in "&lt;ps&gt;" to get "&lt;pos&gt;")
+    /// and pressed Enter without moving back to the end first, ImGui's own newline lands wherever the
+    /// cursor was instead, splitting the text there (reported as "&lt;pos&gt;" being sent as
+    /// "&lt;po" + a real newline + "s&gt;" - nothing to do with <see cref="wrapNewlines"/> at all, despite
+    /// the visible symptom looking just like a wrap-corruption bug). Removed here instead, in byte
+    /// space (matching this whole file's established care around byte vs. character offsets for this
+    /// callback), by deleting the byte immediately before the cursor if it's a "\n" - ImGui
+    /// inserts-and-advances, so that's always where its own newline would land, the instant after it
+    /// did that.</summary>
+    private static void RemoveJustInsertedEnterNewline(ImGuiInputTextCallbackDataPtr data)
+    {
+        if (ImGui.GetIO().KeyShift || !(ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
+            return;
+
+        var bytes = data.BufTextSpan;
+        var cursorByte = Math.Clamp(data.CursorPos, 0, bytes.Length);
+        if (cursorByte > 0 && bytes[cursorByte - 1] == (byte)'\n')
+            data.DeleteChars(cursorByte - 1, 1);
     }
 
     private void DoWrapCheck(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
