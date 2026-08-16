@@ -1,6 +1,5 @@
 using System;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace CustomChat.Services;
@@ -61,22 +60,16 @@ public sealed unsafe class NativeChatHider : IDisposable
                 addon->IsVisible = visible;
         }
 
-        // On top of the raw IsVisible flip above (which only the panel addons have, and which past
-        // reports showed isn't fully reliable on its own - the native "Send Tell" text input stayed
-        // interactive despite ChatLog's IsVisible being force-false every frame, see
-        // NativeChatInputWatcher's history), also drive AgentChatLog's own ShowAddon/HideAddon - the
-        // "real" show/hide toggle the game itself uses (every AtkUnitBase-backed agent has this same
-        // pair), which is more likely to also suppress input hit-testing, not just rendering. Purely
-        // additive/best-effort: if the agent isn't ready yet this frame this just no-ops, and nothing
-        // else here depends on it succeeding.
-        var agent = AgentChatLog.Instance();
-        if (agent == null || !agent->IsAddonReady())
-            return;
-
-        if (visible && agent->IsAddonHidden())
-            agent->ShowAddon();
-        else if (!visible && agent->IsAddonShown())
-            agent->HideAddon();
+        // Previously also drove AgentChatLog.ShowAddon()/HideAddon() here on top of the raw IsVisible
+        // flip, on the theory that it would suppress input hit-testing more thoroughly - reverted
+        // (2026-08-13) as the prime suspect for the native "Link" item-link hook (ItemLinkHookService)
+        // never firing despite installing cleanly: the game's own "Link" handling may itself check
+        // whether the chat log addon/agent is shown before it ever gets to the point of calling
+        // AgentChatLog.LinkItem, so aggressively hiding it here could have been suppressing the
+        // native action before it ever reached the hooked function. If this turns out not to be the
+        // actual cause, this is where to look again for a stronger suppression - see the memory file
+        // for the theory this note is based on, and re-add only behind clear evidence it doesn't
+        // regress the same native-Link path a second time.
     }
 
     public void Dispose()
