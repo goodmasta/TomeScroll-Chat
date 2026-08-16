@@ -64,8 +64,10 @@ public sealed class DetachedTabWindow : Window, IDisposable
     }
 
     /// <summary>Total space to reserve below the messages area for the whole input row - see
-    /// MainWindow's version for the full reasoning.</summary>
-    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeightWithSpacing();
+    /// MainWindow's version for the full reasoning, including why this uses GetTextLineHeight() +
+    /// TightRowSpacing rather than GetTextLineHeightWithSpacing() (which bakes in the theme's default
+    /// ItemSpacing.Y, not the tightened spacing actually pushed around the input row further down).</summary>
+    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeight() + TightRowSpacing;
 
     /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
     private void DrawOutgoingChannelLabel()

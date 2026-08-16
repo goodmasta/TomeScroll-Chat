@@ -68,9 +68,15 @@ public sealed class MainWindow : Window, IDisposable
     /// box itself (see <see cref="GetComposeBoxHeight"/>) *plus* the destination-channel label drawn
     /// above it (see <see cref="DrawInputRow"/>/<see cref="DrawOutgoingChannelLabel"/>), which is a
     /// separate, normally-laid-out widget with its own height, not part of the input box's own size.
-    /// A plain Text widget's own height is exactly <c>GetTextLineHeightWithSpacing()</c> (no
-    /// FramePadding involved, unlike the InputText box), so no special-casing needed there.</summary>
-    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeightWithSpacing();
+    /// Uses <see cref="TightRowSpacing"/> for the gap after the label, not the theme's default
+    /// <c>ItemSpacing.Y</c> (i.e. not <c>GetTextLineHeightWithSpacing()</c>) - <see cref="DrawInputRow"/>
+    /// pushes that same tightened spacing for everything it draws, including the label, so using the
+    /// theme default here would over-reserve relative to what's actually drawn (2026-08-13: this
+    /// mismatch, compounded by the sidebar's "Close All PM" spacer not using the same tightened spacing
+    /// either, is what caused the button and the compose box to visibly drift out of alignment despite
+    /// both columns reserving the exact same total height - matching *totals* isn't enough if the
+    /// individual gaps inside that total don't also match).</summary>
+    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeight() + TightRowSpacing;
 
     private readonly Plugin plugin;
     private Guid? selectedTabId;
@@ -310,11 +316,22 @@ public sealed class MainWindow : Window, IDisposable
         // The Sidebar child above reserves the *same* bottomReserve as the Messages child in
         // DrawContent - which is tall enough for both the destination-channel label and the compose
         // box below it, since that's what's actually drawn there. This column only draws one widget
-        // (the button below) in that same reserved space, so without this spacer it renders flush at
-        // the top of the reservation - noticeably higher than the compose box, which sits *below* its
-        // own label. This dummy exactly matches that label's height, pushing the button down to line
-        // up with the actual input box instead.
-        ImGui.Dummy(new Vector2(0, ImGui.GetTextLineHeightWithSpacing()));
+        // (the button below) in that same reserved space, so without a spacer matching the label's own
+        // height it renders flush at the top of the reservation - noticeably higher than the compose
+        // box, which sits *below* its own label.
+        //
+        // Two things have to match DrawContent exactly, not just the *total* reserved height: the
+        // spacer's own size must be GetTextLineHeight() alone (the label's actual glyph height, no
+        // spacing baked in) - using GetTextLineHeightWithSpacing() here double-counts, since ImGui
+        // *also* applies its own automatic gap after the Dummy on top of whatever size it's given, the
+        // same as after any other widget, including the label. And that automatic gap has to be the
+        // same TightRowSpacing DrawInputRow pushes for its own label-to-input-box gap, not the theme's
+        // wider default - pushed here too for exactly that reason (2026-08-13: matching totals while
+        // these two gaps individually disagreed is what caused the button and compose box to visibly
+        // drift apart despite both columns reserving the same total height).
+        var itemSpacing = ImGui.GetStyle().ItemSpacing;
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(itemSpacing.X, TightRowSpacing));
+        ImGui.Dummy(new Vector2(0, ImGui.GetTextLineHeight()));
 
         var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
         using (ImRaii.Disabled(!hasPmTabs))
@@ -326,6 +343,8 @@ public sealed class MainWindow : Window, IDisposable
                     selectedTabId = null;
             }
         }
+
+        ImGui.PopStyleVar();
     }
 
     /// <summary>
