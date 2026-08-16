@@ -537,9 +537,14 @@ public sealed class DetachedTabWindow : Window, IDisposable
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             quickPosClicked = ImGui.Button($"{FontAwesomeIcon.MapMarkerAlt.ToIconString()}##quickpos_{Tab.Id}", new Vector2(iconSize, iconSize));
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Insert <pos> - the game expands this to your current position when sent, same as typing it into the native chatbox.");
+            ImGui.SetTooltip("Insert <pos> - the game expands this to your current position when sent, same as typing it into the native chatbox.\nCtrl+Click: send it immediately without touching what you've typed.");
         if (quickPosClicked)
-            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + "<pos>";
+        {
+            if (ImGui.GetIO().KeyCtrl)
+                plugin.SendFromTab(Tab, "<pos>"); // deliberately bypasses inputText/pendingItemLinks entirely - nothing typed is touched
+            else
+                inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + "<pos>";
+        }
 
         ImGui.SameLine(0, 0);
         bool emoteClicked;
