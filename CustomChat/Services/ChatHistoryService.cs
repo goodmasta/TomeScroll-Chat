@@ -5,8 +5,11 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Dalamud.Game.Text;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Plugin.Services;
+using Dalamud.Utility;
 using Microsoft.Data.Sqlite;
+using Newtonsoft.Json;
 using CustomChat.Models;
 
 namespace CustomChat.Services;
@@ -82,20 +85,50 @@ public sealed class ChatHistoryService : IDisposable
 
     private static void InitializeSchema(SqliteConnection connection)
     {
-        using var cmd = connection.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                routing_key TEXT NOT NULL,
-                timestamp_utc INTEGER NOT NULL,
-                chat_type INTEGER NOT NULL,
-                sender_name TEXT NOT NULL,
-                sender_key TEXT NOT NULL,
-                body TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_routing ON messages(routing_key, id);
-            """;
-        cmd.ExecuteNonQuery();
+        using (var cmd = connection.CreateCommand())
+        {
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    routing_key TEXT NOT NULL,
+                    timestamp_utc INTEGER NOT NULL,
+                    chat_type INTEGER NOT NULL,
+                    sender_name TEXT NOT NULL,
+                    sender_key TEXT NOT NULL,
+                    body TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_messages_routing ON messages(routing_key, id);
+                """;
+            cmd.ExecuteNonQuery();
+        }
+
+        // payload_links wasn't part of the original schema - added later (2026-08-13) so map/item
+        // links survive a plugin restart instead of losing their clickability. CREATE TABLE IF NOT
+        // EXISTS above only matters for a brand new database file; an already-existing one needs an
+        // explicit migration, and SQLite has no "ADD COLUMN IF NOT EXISTS", so check first.
+        using (var checkCmd = connection.CreateCommand())
+        {
+            checkCmd.CommandText = "PRAGMA table_info(messages);";
+            var hasColumn = false;
+            using (var reader = checkCmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    if (string.Equals(reader.GetString(1), "payload_links", StringComparison.Ordinal))
+                    {
+                        hasColumn = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasColumn)
+            {
+                using var alterCmd = connection.CreateCommand();
+                alterCmd.CommandText = "ALTER TABLE messages ADD COLUMN payload_links TEXT;";
+                alterCmd.ExecuteNonQuery();
+            }
+        }
     }
 
     /// <summary>Enqueues a message for background persistence. Non-blocking.</summary>
@@ -142,8 +175,8 @@ public sealed class ChatHistoryService : IDisposable
         using var cmd = writerConnection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = """
-            INSERT INTO messages (routing_key, timestamp_utc, chat_type, sender_name, sender_key, body)
-            VALUES ($routingKey, $timestamp, $chatType, $senderName, $senderKey, $body);
+            INSERT INTO messages (routing_key, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links)
+            VALUES ($routingKey, $timestamp, $chatType, $senderName, $senderKey, $body, $payloadLinks);
             """;
         var pRouting = cmd.CreateParameter(); pRouting.ParameterName = "$routingKey"; cmd.Parameters.Add(pRouting);
         var pTimestamp = cmd.CreateParameter(); pTimestamp.ParameterName = "$timestamp"; cmd.Parameters.Add(pTimestamp);
@@ -151,6 +184,7 @@ public sealed class ChatHistoryService : IDisposable
         var pSenderName = cmd.CreateParameter(); pSenderName.ParameterName = "$senderName"; cmd.Parameters.Add(pSenderName);
         var pSenderKey = cmd.CreateParameter(); pSenderKey.ParameterName = "$senderKey"; cmd.Parameters.Add(pSenderKey);
         var pBody = cmd.CreateParameter(); pBody.ParameterName = "$body"; cmd.Parameters.Add(pBody);
+        var pPayloadLinks = cmd.CreateParameter(); pPayloadLinks.ParameterName = "$payloadLinks"; cmd.Parameters.Add(pPayloadLinks);
 
         foreach (var record in batch)
         {
@@ -160,10 +194,113 @@ public sealed class ChatHistoryService : IDisposable
             pSenderName.Value = record.SenderName;
             pSenderKey.Value = record.SenderKey;
             pBody.Value = record.Body;
+            pPayloadLinks.Value = (object?)SerializePayloadLinks(record.PayloadLinks) ?? DBNull.Value;
             cmd.ExecuteNonQuery();
         }
 
         transaction.Commit();
+    }
+
+    /// <summary>A link's <see cref="MapLinkPayload"/>/<see cref="ItemPayload"/> object itself isn't
+    /// something SQLite (or Newtonsoft, given the SDK types' other properties like <c>RowRef&lt;T&gt;</c>)
+    /// can round-trip directly - stored instead as this minimal DTO with just enough raw data
+    /// (territory/map ids + raw X/Y for a map link; item id + <see cref="ItemKind"/> for an item link)
+    /// to reconstruct an equivalent payload object via the same constructors used elsewhere in this
+    /// project to build one from scratch (see <see cref="ChatSendService"/>/<see cref="ItemTooltipService"/>).</summary>
+    private sealed class StoredPayloadLink
+    {
+        public int Start { get; set; }
+        public int Length { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public uint TerritoryTypeId { get; set; }
+        public uint MapId { get; set; }
+        public int RawX { get; set; }
+        public int RawY { get; set; }
+        public uint ItemId { get; set; }
+        public int ItemKind { get; set; }
+    }
+
+    private static string? SerializePayloadLinks(IReadOnlyList<ChatPayloadLink> links)
+    {
+        if (links.Count == 0)
+            return null;
+
+        var stored = new List<StoredPayloadLink>(links.Count);
+        foreach (var link in links)
+        {
+            switch (link)
+            {
+                case { Type: ChatPayloadLinkType.MapLink, MapLink: { } mapLink }:
+                    stored.Add(new StoredPayloadLink
+                    {
+                        Start = link.Start,
+                        Length = link.Length,
+                        Type = nameof(ChatPayloadLinkType.MapLink),
+                        TerritoryTypeId = mapLink.TerritoryType.RowId,
+                        MapId = mapLink.Map.RowId,
+                        RawX = mapLink.RawX,
+                        RawY = mapLink.RawY,
+                    });
+                    break;
+                case { Type: ChatPayloadLinkType.Item, Item: { } item }:
+                    stored.Add(new StoredPayloadLink
+                    {
+                        Start = link.Start,
+                        Length = link.Length,
+                        Type = nameof(ChatPayloadLinkType.Item),
+                        ItemId = item.ItemId,
+                        ItemKind = (int)item.Kind,
+                    });
+                    break;
+            }
+        }
+
+        return stored.Count == 0 ? null : JsonConvert.SerializeObject(stored);
+    }
+
+    private List<ChatPayloadLink> DeserializePayloadLinks(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+            return new List<ChatPayloadLink>();
+
+        try
+        {
+            var stored = JsonConvert.DeserializeObject<List<StoredPayloadLink>>(json);
+            if (stored == null || stored.Count == 0)
+                return new List<ChatPayloadLink>();
+
+            var links = new List<ChatPayloadLink>(stored.Count);
+            foreach (var s in stored)
+            {
+                if (s.Type == nameof(ChatPayloadLinkType.MapLink))
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Start = s.Start,
+                        Length = s.Length,
+                        Type = ChatPayloadLinkType.MapLink,
+                        MapLink = new MapLinkPayload(s.TerritoryTypeId, s.MapId, s.RawX, s.RawY),
+                    });
+                }
+                else if (s.Type == nameof(ChatPayloadLinkType.Item))
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Start = s.Start,
+                        Length = s.Length,
+                        Type = ChatPayloadLinkType.Item,
+                        Item = new ItemPayload(s.ItemId, (ItemKind)s.ItemKind, null),
+                    });
+                }
+            }
+
+            return links;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to restore stored payload links from history");
+            return new List<ChatPayloadLink>();
+        }
     }
 
     /// <summary>Loads the most recent <paramref name="limit"/> messages for a routing key, oldest first.</summary>
@@ -179,7 +316,7 @@ public sealed class ChatHistoryService : IDisposable
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body
+            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links
             FROM messages
             WHERE routing_key = $routingKey
             ORDER BY id DESC
@@ -200,6 +337,7 @@ public sealed class ChatHistoryService : IDisposable
                 SenderKey = reader.GetString(4),
                 Body = reader.GetString(5),
                 RoutingKey = routingKey,
+                PayloadLinks = DeserializePayloadLinks(reader.IsDBNull(6) ? null : reader.GetString(6)),
             });
         }
 

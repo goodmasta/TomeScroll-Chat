@@ -14,9 +14,11 @@ public enum ChatPayloadLinkType
 /// clickable widget instead of plain text. <see cref="ChatMessageRecord.Body"/> is already flattened
 /// plain text (<c>SeString.TextValue</c>, which only concatenates <c>TextPayload</c> text - every
 /// other payload type, map/item links included, contributes zero characters) by the time it's
-/// captured, so this is the only place that structure survives - not persisted to disk (the SQLite
-/// history schema stores plain text only), so links reloaded from history won't be clickable, only
-/// ones received this session.
+/// captured, so this is the only place that structure survives. <see cref="MapLink"/>/<see cref="Item"/>
+/// themselves aren't directly persisted (Dalamud's SDK payload types don't round-trip through
+/// SQLite/JSON as-is) - <see cref="Services.ChatHistoryService"/> stores just enough raw data
+/// (territory/map ids + raw X/Y, or item id + kind) to reconstruct an equivalent payload object on
+/// reload via the same constructors used to build one from scratch elsewhere in this project.
 /// </summary>
 public sealed class ChatPayloadLink
 {

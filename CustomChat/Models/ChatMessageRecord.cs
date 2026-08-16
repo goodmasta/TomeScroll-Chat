@@ -30,7 +30,7 @@ public sealed class ChatMessageRecord
     public string RoutingKey { get; init; } = string.Empty;
 
     /// <summary>Map/flag and item links found in <see cref="Body"/> at capture time - see
-    /// <see cref="ChatPayloadLink"/> for why this is session-only (empty for anything reloaded from
-    /// history).</summary>
+    /// <see cref="ChatPayloadLink"/>. Persisted to (and restored from) history as of 2026-08-13, so
+    /// links stay clickable across a plugin restart, not just for the session that received them.</summary>
     public IReadOnlyList<ChatPayloadLink> PayloadLinks { get; init; } = Array.Empty<ChatPayloadLink>();
 }
