@@ -118,6 +118,33 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
 
+        var showHideButton = configuration.ShowHideChatButton;
+        if (ImGui.Checkbox("Show a hide-chat (eye) button in the title bar", ref showHideButton))
+        {
+            configuration.ShowHideChatButton = showHideButton;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Collapses the chat down to just the title bar - stronger than the fade above. The button stays visible while collapsed, so it's always how to bring it back.");
+
+        var autoHide = configuration.AutoHideChatWhenInactive;
+        if (ImGui.Checkbox("Automatically hide the chat after being inactive", ref autoHide))
+        {
+            configuration.AutoHideChatWhenInactive = autoHide;
+            configuration.Save();
+        }
+
+        using (ImRaii.Disabled(!configuration.AutoHideChatWhenInactive))
+        {
+            var autoHideSeconds = configuration.AutoHideChatSeconds;
+            ImGui.SetNextItemWidth(150);
+            if (ImGui.InputFloat("Seconds of inactivity", ref autoHideSeconds, 1f, 10f, "%.0f"))
+            {
+                configuration.AutoHideChatSeconds = Math.Clamp(autoHideSeconds, 1f, 3600f);
+                configuration.Save();
+            }
+        }
+        ImGui.TextDisabled("Off by default. \"Inactive\" means the chat window itself isn't focused, regardless of what else you're doing in-game.");
+
         var openLinks = configuration.OpenLinksOnClick;
         if (ImGui.Checkbox("Open links in the browser on click", ref openLinks))
         {

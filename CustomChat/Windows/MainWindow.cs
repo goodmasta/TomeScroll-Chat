@@ -137,6 +137,13 @@ public sealed class MainWindow : Window, IDisposable
     private string searchQuery = string.Empty;
     private bool focusSearchInput;
 
+    // Eye-button/auto-hide state (see PreDraw) - collapses the window down to just the title bar
+    // rather than actually closing it, since nothing is allowed to close this window (see the
+    // constructor). Not persisted - always starts visible on a fresh plugin load.
+    private bool isChatHidden;
+    private float inactiveSeconds;
+    private readonly TitleBarButton hideChatButton;
+
     public MainWindow(Plugin plugin)
         : base("Custom Chat###CustomChatMainWindow")
     {
@@ -171,6 +178,25 @@ public sealed class MainWindow : Window, IDisposable
             ShowTooltip = () => ImGui.SetTooltip("Custom Chat settings"),
             Click = _ => plugin.OpenSettings(),
         });
+
+        // Kept as a field (rather than only ever living inside TitleBarButtons) so PreDraw can add/
+        // remove this *one* button by reference as Configuration.ShowHideChatButton is toggled live,
+        // without touching the Cog button above. Icon is updated live in PreDraw too (Eye/EyeSlash) -
+        // this button stays visible even while the window is collapsed, since it's the only way back.
+        hideChatButton = new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.Eye,
+            IconOffset = new Vector2(2, 1),
+            ShowTooltip = () => ImGui.SetTooltip(isChatHidden ? "Show chat" : "Hide chat"),
+            Click = _ =>
+            {
+                isChatHidden = !isChatHidden;
+                if (!isChatHidden)
+                    inactiveSeconds = 0f; // don't let a stale timer immediately re-trigger auto-hide
+            },
+        };
+        if (Plugin.Configuration.ShowHideChatButton)
+            TitleBarButtons.Add(hideChatButton);
     }
 
     /// <summary>Nothing is allowed to close the main chat window - it stays open for the whole session.</summary>
@@ -188,6 +214,35 @@ public sealed class MainWindow : Window, IDisposable
     /// lag for a fade.</summary>
     public override void PreDraw()
     {
+        // Live-synced every frame rather than only in the constructor, since Configuration.ShowHideChatButton
+        // can change any time from Settings while this window is already running.
+        var showButton = Plugin.Configuration.ShowHideChatButton;
+        var buttonPresent = TitleBarButtons.Contains(hideChatButton);
+        if (showButton && !buttonPresent)
+            TitleBarButtons.Add(hideChatButton);
+        else if (!showButton && buttonPresent)
+            TitleBarButtons.Remove(hideChatButton);
+        hideChatButton.Icon = isChatHidden ? FontAwesomeIcon.EyeSlash : FontAwesomeIcon.Eye;
+
+        // Auto-hide timer - resets the instant the window is genuinely focused, accumulates
+        // otherwise. Only the eye button (manual, see its Click handler) ever un-hides once this
+        // trips - just refocusing the (still-collapsed) title bar resets the timer but deliberately
+        // doesn't un-collapse on its own, so a stray click near it can't silently undo an intentional
+        // auto-hide.
+        if (IsFocused)
+            inactiveSeconds = 0f;
+        else
+            inactiveSeconds += ImGui.GetIO().DeltaTime;
+
+        if (Plugin.Configuration.AutoHideChatWhenInactive && inactiveSeconds >= Plugin.Configuration.AutoHideChatSeconds)
+            isChatHidden = true;
+
+        // Forces this exact state every frame (unconditionally overriding anything else, including
+        // ImGui's own internal collapse tracking) - safe since NoCollapse (see the constructor)
+        // already means nothing but this code can ever change it.
+        Collapsed = isChatHidden;
+        CollapsedCondition = ImGuiCond.Always;
+
         var fading = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive;
         BgAlpha = fading ? Plugin.Configuration.InactiveWindowAlpha : null;
 

@@ -113,6 +113,22 @@ public class Configuration : IPluginConfiguration
     /// created.</summary>
     public bool AutoLinkshellTabs { get; set; } = true;
 
+    /// <summary>Shows an eye icon in the main chat window's title bar that collapses it down to just
+    /// the title bar (stronger than <see cref="FadeWindowWhenInactive"/>'s dimming - the body isn't
+    /// drawn at all). The button itself stays visible while collapsed, so clicking it again is always
+    /// how to bring the chat back - see <see cref="Windows.MainWindow"/>.</summary>
+    public bool ShowHideChatButton { get; set; } = true;
+
+    /// <summary>Off by default (explicit opt-in) - automatically triggers the same collapse the eye
+    /// button does after the main chat window has gone <see cref="AutoHideChatSeconds"/> without being
+    /// focused. Only the eye button (not merely refocusing the window) un-collapses it again - see
+    /// <see cref="Windows.MainWindow.PreDraw"/>.</summary>
+    public bool AutoHideChatWhenInactive { get; set; }
+
+    /// <summary>Seconds of the main chat window not being focused before <see cref="AutoHideChatWhenInactive"/>
+    /// triggers.</summary>
+    public float AutoHideChatSeconds { get; set; } = 60f;
+
     /// <summary>Resets every *setting* below to its default value - deliberately leaves
     /// <see cref="Tabs"/> itself alone (channels, filters, icons, name - the user's own custom tab
     /// setup, not a preference to reset). Per-tab *colour* overrides are still cleared, just via the
@@ -147,6 +163,9 @@ public class Configuration : IPluginConfiguration
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyWhisperInWindows = defaults.NotifyWhisperInWindows;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
+        ShowHideChatButton = defaults.ShowHideChatButton;
+        AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;
+        AutoHideChatSeconds = defaults.AutoHideChatSeconds;
     }
 
     /// <summary>Clears every per-tab colour override (<see cref="ChatTabConfig.ColorOverrides"/>,
