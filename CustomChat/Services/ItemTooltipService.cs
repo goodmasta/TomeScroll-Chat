@@ -1,4 +1,5 @@
 using System;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Enums;
@@ -53,17 +54,25 @@ public sealed unsafe class ItemTooltipService
     /// draws (see <c>Plugin</c>'s <c>UiBuilder.Draw</c> wrapper).</summary>
     public void BeginFrame() => hoveredRawItemId = 0;
 
-    /// <summary>Opens/closes/switches the native tooltip based on whatever was hovered this frame -
-    /// called once per real frame, after every window has drawn.</summary>
+    /// <summary>Opens/closes/switches the native tooltip based on whatever was hovered this frame, and
+    /// keeps it following the mouse cursor while it stays open - called once per real frame, after
+    /// every window has drawn.</summary>
     public void EndFrame()
     {
-        if (hoveredRawItemId == openRawItemId)
-            return;
-
-        if (hoveredRawItemId == 0)
-            Close();
-        else
-            Open(hoveredRawItemId, hoveredKind);
+        if (hoveredRawItemId != openRawItemId)
+        {
+            if (hoveredRawItemId == 0)
+                Close();
+            else
+                Open(hoveredRawItemId, hoveredKind);
+        }
+        else if (hoveredRawItemId != 0)
+        {
+            // Same item still hovered as last frame - Open() already positioned it once, but a real
+            // tooltip has to keep tracking the cursor as it moves, not just where it happened to be the
+            // instant the item was first hovered.
+            UpdatePosition();
+        }
     }
 
     private void Open(uint rawItemId, ItemKind kind)
@@ -88,10 +97,35 @@ public sealed unsafe class ItemTooltipService
             addon->Show(false, 15);
 
             openRawItemId = rawItemId;
+            UpdatePosition();
         }
         catch (Exception ex)
         {
             log.Warning(ex, "CustomChat: failed to open the native item tooltip for item {ItemId}", rawItemId);
+        }
+    }
+
+    /// <summary>Positions the tooltip addon at the mouse cursor, offset down-right the same way the
+    /// game's own native tooltips are (appearing centred/under the cursor would make it awkward to read
+    /// while also obscuring the item link itself). Native item-detail addons aren't automatically
+    /// mouse-following the way this same window is when opened by hovering a real inventory slot - that
+    /// positioning is driven by <c>AtkTooltipManager</c> being attached to the slot's own
+    /// <c>AtkResNode</c>, which chat text drawn by this plugin's own ImGui doesn't have one of, so this
+    /// has to be done by hand instead.</summary>
+    private void UpdatePosition()
+    {
+        try
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(AddonName);
+            if (addon == null)
+                return;
+
+            var mouse = ImGui.GetMousePos();
+            addon->SetPosition((short)(mouse.X + 20), (short)(mouse.Y + 20));
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to reposition the native item tooltip");
         }
     }
 
