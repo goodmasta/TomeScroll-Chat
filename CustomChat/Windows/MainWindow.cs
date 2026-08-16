@@ -619,6 +619,19 @@ public sealed class MainWindow : Window, IDisposable
         // never wrapped at all in that case. Hard-break instead: scan backward by .NET *character*
         // index (never a raw byte count, which could land mid-codepoint for multi-byte UTF-8 like
         // Cyrillic) for the longest prefix that still fits, and break right after it.
+        //
+        // Short unbroken tokens (2026-08-13) are deliberately exempted from this, left to just overflow
+        // the box horizontally a little instead: a hard break lands wherever the pixel-width threshold
+        // happens to fall, with zero awareness of what the token actually is - and for something like
+        // the native chat placeholder "<flag>", landing mid-token (e.g. "<flag" + real newline + ">")
+        // silently corrupts it into something ChatSendService's placeholder expansion no longer
+        // recognizes, so it goes out as broken literal text instead of a real link (reported as
+        // "sending <flag> does nothing"). A real long URL/unbroken word is normally tens of characters
+        // at minimum, far past this threshold, so this only ever changes behavior for genuinely short
+        // tokens where "slightly overflows the box" is a much smaller cost than "silently corrupted."
+        if (line.Length <= 16)
+            return;
+
         for (var i = line.Length - 1; i > 0; i--)
         {
             if (ImGui.CalcTextSize(line[..i]).X > wrapWidth)

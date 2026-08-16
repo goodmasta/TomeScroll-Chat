@@ -95,9 +95,14 @@ public sealed class DetachedTabWindow : Window, IDisposable
             return;
         }
 
-        // No space anywhere in the line - see MainWindow's version for the full reasoning. Hard-break
+        // No space anywhere in the line - see MainWindow's version for the full reasoning, including
+        // why short tokens (<=16 chars, e.g. the native "<flag>" placeholder) are exempted from the
+        // hard break below rather than risk landing mid-token and silently corrupting it. Hard-break
         // by scanning backward per .NET character index (never a raw byte count) for the longest
         // prefix that still fits.
+        if (line.Length <= 16)
+            return;
+
         for (var i = line.Length - 1; i > 0; i--)
         {
             if (ImGui.CalcTextSize(line[..i]).X > wrapWidth)
