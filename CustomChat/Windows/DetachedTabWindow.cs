@@ -34,7 +34,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
     private int inputGeneration;
 
     /// <summary>Same "GetFrameHeight()-for-one-line" formula as MainWindow - see its field comment for
-    /// why GetTextLineHeightWithSpacing() * n (tried first) caused per-keystroke height jitter.</summary>
+    /// why GetTextLineHeightWithSpacing() * n (tried first) caused per-keystroke height jitter. Sizes
+    /// only the compose box widget itself - see <see cref="GetInputRowReserve"/> for the reserved space
+    /// below the messages area, which also has to account for the destination-channel label drawn
+    /// above this box (folding the label's height into *this* function once made it leak into the
+    /// input box's own size too, inflating the actual text box by a whole line).</summary>
     private float GetComposeBoxHeight()
     {
         var lines = 1;
@@ -48,11 +52,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
         var textHeight = ImGui.GetTextLineHeight();
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
-
-        // Folds in the destination-channel label drawn above the input box (see DrawInputRow) - same
-        // reasoning as MainWindow's version.
-        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1) + ImGui.GetTextLineHeightWithSpacing();
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
     }
+
+    /// <summary>Total space to reserve below the messages area for the whole input row - see
+    /// MainWindow's version for the full reasoning.</summary>
+    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeightWithSpacing();
 
     /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
     private void DrawOutgoingChannelLabel()
@@ -63,9 +68,18 @@ public sealed class DetachedTabWindow : Window, IDisposable
         ImGui.TextDisabled($"Sending to: {target}");
     }
 
+    /// <summary>Same marker character MainWindow uses to tag a visual-only wrap newline (vs. a real
+    /// Shift+Enter one) - see its version for the full reasoning.</summary>
+    private const char WrapMarker = (char)0x200B;
+
+    /// <summary>Same as MainWindow's version - see its doc comment for the full reasoning.</summary>
+    private static string StripWrapMarkers(string text) =>
+        text.Replace("\n" + WrapMarker, " ").Replace(WrapMarker.ToString(), string.Empty);
+
     /// <summary>Same manual word-wrap simulation as MainWindow - see its version for the full
     /// reasoning (no built-in word-wrap in Dear ImGui's InputTextMultiline, byte-vs-character offset
-    /// care for multi-byte UTF-8 text).</summary>
+    /// care for multi-byte UTF-8 text, and why every inserted newline is tagged with
+    /// <see cref="WrapMarker"/>).</summary>
     private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
         var bytes = data.BufTextSpan;
@@ -103,7 +117,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
         {
             var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
             data.DeleteChars(spaceByteOffset, 1);
-            data.InsertChars(spaceByteOffset, "\n");
+            data.InsertChars(spaceByteOffset, "\n" + WrapMarker);
             return;
         }
 
@@ -121,7 +135,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
                 continue;
 
             var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
-            data.InsertChars(breakByteOffset, "\n");
+            data.InsertChars(breakByteOffset, "\n" + WrapMarker);
             return;
         }
     }
@@ -235,9 +249,9 @@ public sealed class DetachedTabWindow : Window, IDisposable
         // Leave room for the input row below (the "jump to bottom" button now lives flush against it,
         // see the input row further down, rather than a separate row of its own) - see MainWindow's
         // own bottomReserve comment for why this uses TightRowSpacing rather than the theme's default
-        // ItemSpacing.Y, and GetComposeBoxHeight() rather than a single frame height now that the input
+        // ItemSpacing.Y, and GetInputRowReserve() rather than a single frame height now that the input
         // is a multi-line, auto-growing box (see the input row further down).
-        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
+        var bottomReserve = GetInputRowReserve() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -399,7 +413,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         if (send && !string.IsNullOrWhiteSpace(inputText))
         {
-            plugin.SendFromTab(Tab, inputText);
+            plugin.SendFromTab(Tab, StripWrapMarkers(inputText));
             inputText = string.Empty;
         }
 

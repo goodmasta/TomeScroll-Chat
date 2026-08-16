@@ -32,9 +32,13 @@ public sealed class MainWindow : Window, IDisposable
     /// more than this many, even if the message has more line breaks than that (it just scrolls).</summary>
     private const int MaxComposeBoxLines = 3;
 
-    /// <summary>Current height for the compose box, based on <see cref="inputText"/>'s line count -
-    /// also used by <see cref="DrawSidebar"/>'s and <see cref="DrawContent"/>'s bottom-reserve math so
-    /// the sidebar/message-area height stays in sync with the input row as it grows/shrinks.</summary>
+    /// <summary>Current height for the compose box *widget itself*, based on <see cref="inputText"/>'s
+    /// line count - used to size the actual <c>InputTextMultiline</c> call in <see cref="DrawInputRow"/>.
+    /// For the *reserved* space below the messages area (which also has to account for the destination-
+    /// channel label drawn above this box), see <see cref="GetInputRowReserve"/> instead - folding the
+    /// label's height into *this* function once made it leak into the input box's own size too (it's
+    /// the single value <c>DrawInputRow</c> passes as the widget's height), inflating the actual text
+    /// box by one whole line and visibly misaligning the messages area above it.</summary>
     private float GetComposeBoxHeight()
     {
         var lines = 1;
@@ -57,15 +61,16 @@ public sealed class MainWindow : Window, IDisposable
         var textHeight = ImGui.GetTextLineHeight();
         var framePadding = ImGui.GetStyle().FramePadding.Y;
         var itemSpacing = ImGui.GetStyle().ItemSpacing.Y;
-
-        // Same reasoning as the rest of this function's doc comment: DrawSidebar/DrawContent's
-        // bottom-reserve math reads this same value, so the destination-channel label drawn above the
-        // input box (see DrawInputRow) has to be folded in here too, not sized independently - a plain
-        // Text widget's own height is exactly GetTextLineHeightWithSpacing() (no FramePadding involved,
-        // unlike the InputText box above), so unlike the compose box height this doesn't need any
-        // special-casing.
-        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1) + ImGui.GetTextLineHeightWithSpacing();
+        return textHeight * n + framePadding * 2f + itemSpacing * (n - 1);
     }
+
+    /// <summary>Total space to reserve below the messages area for the whole input row - the compose
+    /// box itself (see <see cref="GetComposeBoxHeight"/>) *plus* the destination-channel label drawn
+    /// above it (see <see cref="DrawInputRow"/>/<see cref="DrawOutgoingChannelLabel"/>), which is a
+    /// separate, normally-laid-out widget with its own height, not part of the input box's own size.
+    /// A plain Text widget's own height is exactly <c>GetTextLineHeightWithSpacing()</c> (no
+    /// FramePadding involved, unlike the InputText box), so no special-casing needed there.</summary>
+    private float GetInputRowReserve() => GetComposeBoxHeight() + ImGui.GetTextLineHeightWithSpacing();
 
     private readonly Plugin plugin;
     private Guid? selectedTabId;
@@ -269,9 +274,9 @@ public sealed class MainWindow : Window, IDisposable
         // sidebar and message area end up exactly the same height, and "Close All PM" lines up evenly
         // with the input row instead of sitting at a slightly different Y from one hardcoded pixel
         // count and the other computed from the current font/frame size. Uses the same
-        // GetComposeBoxHeight() as the (now multi-line, auto-growing) input box, not a single frame
+        // GetInputRowReserve() as the (now multi-line, auto-growing) input row, not a single frame
         // height, so the two stay aligned as the input row grows/shrinks.
-        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
+        var bottomReserve = GetInputRowReserve() + TightRowSpacing;
         using (var child = ImRaii.Child("Sidebar", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -468,9 +473,9 @@ public sealed class MainWindow : Window, IDisposable
         // see DrawInputRow, rather than a separate row of its own). Uses TightRowSpacing rather than
         // the theme's default ItemSpacing.Y, matching the spacing actually applied below the child
         // (see there) - otherwise this would over-reserve relative to what's really drawn, since the
-        // gap now visibly reads as a gap against the message area's own border. GetComposeBoxHeight()
+        // gap now visibly reads as a gap against the message area's own border. GetInputRowReserve()
         // (not a single frame height) since the input is a multi-line, auto-growing box, see DrawInputRow.
-        var bottomReserve = GetComposeBoxHeight() + TightRowSpacing;
+        var bottomReserve = GetInputRowReserve() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -576,6 +581,27 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.InputTextMultiline($"##transcript_{tab.Id}", ref transcriptText, transcriptText.Length + 1024, new Vector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
     }
 
+    /// <summary>Marks a newline this same wrap logic inserted for purely visual purposes, as opposed to
+    /// a real one the player typed with Shift+Enter - always inserted immediately after the "\n" itself
+    /// (see both insertion sites below), so <see cref="StripWrapMarkers"/> can reliably tell the two
+    /// apart and undo only the visual ones before a message is actually sent, regardless of how the
+    /// text gets edited afterward (the marker travels with the buffer through any edit, unlike trying
+    /// to track "which newline was ours" by byte position, which arbitrary further edits would
+    /// invalidate). Zero Width Space - a standard Unicode character with no visible glyph in virtually
+    /// any font (used for exactly this "invisible line-break hint" purpose in real text), not a made-up
+    /// sentinel that could show up as visible tofu.</summary>
+    private const char WrapMarker = (char)0x200B;
+
+    /// <summary>Undoes every visual-only wrap this project's own auto-wrap simulation ever inserted (see
+    /// <see cref="WrapComposeLineIfNeeded"/>) - called right before a message is actually sent, so what
+    /// goes out never depends on how narrow the compose box happened to be while it was typed. A
+    /// "\n" + <see cref="WrapMarker"/> pair (soft break, replaced a space) becomes a single space again;
+    /// a lone marker (hard break, inserted with nothing removed) is just dropped, rejoining the token it
+    /// split. A real Shift+Enter newline never has this marker following it, so it's untouched either
+    /// way.</summary>
+    private static string StripWrapMarkers(string text) =>
+        text.Replace("\n" + WrapMarker, " ").Replace(WrapMarker.ToString(), string.Empty);
+
     /// <summary>Dear ImGui's InputTextMultiline has no built-in word-wrap - long lines just scroll
     /// horizontally. This simulates it by physically inserting a real newline once the line containing
     /// the cursor gets too wide, breaking at the last space in that line (close enough to a proper
@@ -584,7 +610,12 @@ public sealed class MainWindow : Window, IDisposable
     /// already-typed paragraph). If there's no space to break at (one long unbroken word/URL), it's
     /// left alone rather than risk a hard break landing mid-codepoint in multi-byte UTF-8 text -
     /// <see cref="ImGuiInputTextCallbackData.CursorPos"/> and friends are UTF-8 *byte* offsets, not
-    /// character offsets, which matters for Cyrillic (2 bytes/char) text.</summary>
+    /// character offsets, which matters for Cyrillic (2 bytes/char) text. Every inserted newline is
+    /// tagged with <see cref="WrapMarker"/> so it can be told apart from a real one and undone before
+    /// sending (see <see cref="StripWrapMarkers"/>) - this simulation still isn't perfect (an edit made
+    /// while the cursor is elsewhere on a long paragraph can still misfire, e.g. re-wrapping mid-edit),
+    /// but the marker means a misfire is now only ever a cosmetic wrinkle while typing, never a
+    /// corrupted outgoing message.</summary>
     private static void WrapComposeLineIfNeeded(ImGuiInputTextCallbackDataPtr data, float wrapWidth)
     {
         var bytes = data.BufTextSpan;
@@ -622,7 +653,7 @@ public sealed class MainWindow : Window, IDisposable
         {
             var spaceByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..lastSpaceIndex]);
             data.DeleteChars(spaceByteOffset, 1);
-            data.InsertChars(spaceByteOffset, "\n");
+            data.InsertChars(spaceByteOffset, "\n" + WrapMarker);
             return;
         }
 
@@ -650,7 +681,7 @@ public sealed class MainWindow : Window, IDisposable
                 continue;
 
             var breakByteOffset = lineStartByte + Encoding.UTF8.GetByteCount(line[..i]);
-            data.InsertChars(breakByteOffset, "\n");
+            data.InsertChars(breakByteOffset, "\n" + WrapMarker);
             return;
         }
     }
@@ -805,7 +836,7 @@ public sealed class MainWindow : Window, IDisposable
 
         if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0))
         {
-            plugin.SendFromTab(tab, inputText, pendingItemLinks);
+            plugin.SendFromTab(tab, StripWrapMarkers(inputText), pendingItemLinks);
             inputText = string.Empty;
             pendingItemLinks.Clear();
         }
