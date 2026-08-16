@@ -574,7 +574,10 @@ public static class ChatMessageRenderer
     /// behaviour rather than risk calling into the tooltip service with nothing to show.</summary>
     private static bool DrawItemLink(string text, ItemPayload? payload, ItemTooltipService itemTooltipService, float rightEdge, bool canInline) =>
         DrawColoredLinkToken(text, ItemLinkColor, payload != null ? null : $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, canInline,
-            onHover: payload != null ? () => itemTooltipService.NotifyHovered(payload.RawItemId, payload.Kind) : null);
+            // ImGui.GetWindowPos() has to be read right here, inside the hover check - it reflects
+            // whatever window/child is currently drawing, so reading it later (e.g. inside
+            // ItemTooltipService itself, after this frame's drawing is done) wouldn't be valid.
+            onHover: payload != null ? () => itemTooltipService.NotifyHovered(payload.RawItemId, payload.Kind, ImGui.GetWindowPos()) : null);
 
     /// <summary>Shared wrap/inline/click plumbing behind <see cref="DrawMapLink"/> and
     /// <see cref="DrawItemLink"/> - the same logic <see cref="DrawLink"/> uses, just parameterised by

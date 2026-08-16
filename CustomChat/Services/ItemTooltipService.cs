@@ -1,5 +1,5 @@
 using System;
-using Dalamud.Bindings.ImGui;
+using System.Numerics;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Enums;
@@ -32,6 +32,7 @@ public sealed unsafe class ItemTooltipService
     private uint openRawItemId;
     private uint hoveredRawItemId;
     private ItemKind hoveredKind;
+    private Vector2 hoveredAnchor;
 
     public ItemTooltipService(IGameGui gameGui, IPluginLog log)
     {
@@ -43,11 +44,20 @@ public sealed unsafe class ItemTooltipService
     /// <see cref="Windows.ChatMessageRenderer"/>. Doesn't open anything itself (multiple windows can
     /// draw messages in the same real frame; opening/closing per-draw-call rather than per-frame could
     /// otherwise flicker the tooltip closed between them) - just records the target for
-    /// <see cref="EndFrame"/> to act on once the whole frame's drawing is done.</summary>
-    public void NotifyHovered(uint rawItemId, ItemKind kind)
+    /// <see cref="EndFrame"/> to act on once the whole frame's drawing is done.
+    /// <paramref name="anchor"/> is the screen position of the top-left corner of whatever ImGui
+    /// window/child is currently drawing the hovered link (<c>ImGui.GetWindowPos()</c>, read at the
+    /// exact moment of the hover check, so it's still valid inside that window's own draw call) - the
+    /// tooltip is pinned directly above it (see <see cref="UpdatePosition"/>), not following the mouse,
+    /// per explicit request for a fixed position that's guaranteed to never be covered by the chat
+    /// window itself, regardless of which of the two (native addon vs. this plugin's own ImGui overlay)
+    /// actually paints on top in any given frame - a z-order fight this plugin has no reliable way to
+    /// win (see the reasoning in <see cref="Open"/>).</summary>
+    public void NotifyHovered(uint rawItemId, ItemKind kind, Vector2 anchor)
     {
         hoveredRawItemId = rawItemId;
         hoveredKind = kind;
+        hoveredAnchor = anchor;
     }
 
     /// <summary>Resets the per-frame hover target - called once per real frame, before any window
@@ -55,8 +65,9 @@ public sealed unsafe class ItemTooltipService
     public void BeginFrame() => hoveredRawItemId = 0;
 
     /// <summary>Opens/closes/switches the native tooltip based on whatever was hovered this frame, and
-    /// keeps it following the mouse cursor while it stays open - called once per real frame, after
-    /// every window has drawn.</summary>
+    /// keeps it pinned above the anchor while it stays open (the anchor itself can move - e.g. the
+    /// window being dragged, or resized - so this still needs to re-apply every frame, not just once)
+    /// - called once per real frame, after every window has drawn.</summary>
     public void EndFrame()
     {
         if (hoveredRawItemId != openRawItemId)
@@ -68,9 +79,6 @@ public sealed unsafe class ItemTooltipService
         }
         else if (hoveredRawItemId != 0)
         {
-            // Same item still hovered as last frame - Open() already positioned it once, but a real
-            // tooltip has to keep tracking the cursor as it moves, not just where it happened to be the
-            // instant the item was first hovered.
             UpdatePosition();
         }
     }
@@ -115,17 +123,17 @@ public sealed unsafe class ItemTooltipService
         }
     }
 
-    /// <summary>Positions the tooltip addon just above the mouse cursor (per explicit request - keeps
-    /// it clear of the item link text itself and the cursor, and above rather than below reads more
-    /// like a normal tooltip anyway). Native item-detail addons aren't automatically mouse-following
-    /// the way this same window is when opened by hovering a real inventory slot - that positioning is
-    /// driven by <c>AtkTooltipManager</c> being attached to the slot's own <c>AtkResNode</c>, which chat
-    /// text drawn by this plugin's own ImGui doesn't have one of, so this has to be done by hand
-    /// instead. Uses the addon's own actual rendered height (<c>GetScaledHeight</c>), not a guessed
-    /// fixed offset, so it sits flush above the cursor regardless of how tall a given item's tooltip
-    /// turns out to be - on the very first frame it opens the height may still reflect the previously
-    /// shown item (or be 0 for the first tooltip ever shown this session), self-correcting within a
-    /// frame or two as this runs again every frame the same item stays hovered.</summary>
+    /// <summary>Positions the tooltip addon flush above <see cref="hoveredAnchor"/> (the chat window's
+    /// own top-left corner - see <see cref="NotifyHovered"/>), not following the mouse. Fixed relative
+    /// to the window rather than the cursor per explicit request: since this plugin has no reliable way
+    /// to force the native addon to paint in front of its own ImGui window (see <see cref="Open"/>),
+    /// pinning the tooltip somewhere its rectangle never overlaps the window's rectangle at all sidesteps
+    /// the z-order problem entirely, rather than trying to actually win it. Uses the addon's own actual
+    /// rendered height (<c>GetScaledHeight</c>), not a guessed fixed offset, so it sits flush above the
+    /// anchor regardless of how tall a given item's tooltip turns out to be - on the very first frame it
+    /// opens, the height may still reflect the previously shown item (or be 0 for the first tooltip ever
+    /// shown this session), self-correcting within a frame or two as this runs again every frame the
+    /// same item stays hovered.</summary>
     private void UpdatePosition()
     {
         try
@@ -134,10 +142,9 @@ public sealed unsafe class ItemTooltipService
             if (addon == null)
                 return;
 
-            var mouse = ImGui.GetMousePos();
             const float margin = 12f;
             var height = addon->GetScaledHeight(true);
-            addon->SetPosition((short)(mouse.X + 16), (short)(mouse.Y - height - margin));
+            addon->SetPosition((short)hoveredAnchor.X, (short)(hoveredAnchor.Y - height - margin));
         }
         catch (Exception ex)
         {
