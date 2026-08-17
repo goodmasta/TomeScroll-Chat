@@ -158,6 +158,7 @@ public sealed class ChatCaptureService : IDisposable
         ChatPayloadLinkType? pendingType = null;
         MapLinkPayload? pendingMapLink = null;
         ItemPayload? pendingItemLink = null;
+        PartyFinderPayload? pendingPartyFinderLink = null;
         var pendingStart = 0;
         var pendingLength = 0;
 
@@ -172,12 +173,14 @@ public sealed class ChatCaptureService : IDisposable
                     Length = pendingLength,
                     MapLink = pendingMapLink,
                     Item = pendingItemLink,
+                    PartyFinder = pendingPartyFinderLink,
                 });
             }
 
             pendingType = null;
             pendingMapLink = null;
             pendingItemLink = null;
+            pendingPartyFinderLink = null;
             pendingLength = 0;
         }
 
@@ -206,6 +209,12 @@ public sealed class ChatCaptureService : IDisposable
                 CommitPending();
                 pendingType = ChatPayloadLinkType.Item;
                 pendingItemLink = itemLink;
+            }
+            else if (payload is PartyFinderPayload pfLink)
+            {
+                CommitPending();
+                pendingType = ChatPayloadLinkType.PartyFinder;
+                pendingPartyFinderLink = pfLink;
             }
             else if (payload is not (UIForegroundPayload or UIGlowPayload))
             {

@@ -61,6 +61,7 @@ public sealed class Plugin : IDalamudPlugin
     public AdventurerPlateService AdventurerPlateService { get; }
     public ItemTooltipService ItemTooltipService { get; }
     public ItemContextService ItemContextService { get; }
+    public PartyFinderLinkService PartyFinderLinkService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
@@ -99,6 +100,7 @@ public sealed class Plugin : IDalamudPlugin
         AdventurerPlateService = new AdventurerPlateService(ObjectTable, FriendListService);
         ItemTooltipService = new ItemTooltipService(GameGui, Log);
         ItemContextService = new ItemContextService(Log);
+        PartyFinderLinkService = new PartyFinderLinkService(Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -288,6 +290,10 @@ public sealed class Plugin : IDalamudPlugin
         if (!GameGui.OpenMapWithMapLink(payload))
             ToastGui.ShowError("Couldn't open that map link.");
     }
+
+    /// <summary>Opens a clicked Party Finder listing link - see <see cref="Models.ChatPayloadLink"/>
+    /// for how these are captured in the first place.</summary>
+    public void OpenPartyFinderLink(PartyFinderPayload payload) => PartyFinderLinkService.OpenListing(payload.ListingId);
 
     /// <summary>Exports a tab's *entire* stored history (not just what's currently buffered in
     /// memory - reads straight from <see cref="ChatHistoryService"/>) to a plain-text file under the

@@ -6,6 +6,7 @@ public enum ChatPayloadLinkType
 {
     MapLink,
     Item,
+    PartyFinder,
 }
 
 /// <summary>
@@ -40,4 +41,9 @@ public sealed class ChatPayloadLink
     /// <c>RawItemId</c>/<c>Kind</c> are passed to <see cref="Services.ItemTooltipService"/> on hover to
     /// open the real native item tooltip, no need to re-derive the HQ/collectible id offset by hand.</summary>
     public ItemPayload? Item { get; init; }
+
+    /// <summary>Set when <see cref="Type"/> is <see cref="ChatPayloadLinkType.PartyFinder"/> - its
+    /// <c>ListingId</c> is passed to <see cref="Services.PartyFinderLinkService"/> on click to open the
+    /// native listing detail directly, same as clicking it in the native chat log would.</summary>
+    public PartyFinderPayload? PartyFinder { get; init; }
 }

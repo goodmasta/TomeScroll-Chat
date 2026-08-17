@@ -221,6 +221,8 @@ public sealed class ChatHistoryService : IDisposable
         public int RawY { get; set; }
         public uint ItemId { get; set; }
         public int ItemKind { get; set; }
+        public uint ListingId { get; set; }
+        public int PartyFinderLinkType { get; set; }
     }
 
     private static string? SerializePayloadLinks(IReadOnlyList<ChatPayloadLink> links)
@@ -253,6 +255,16 @@ public sealed class ChatHistoryService : IDisposable
                         Type = nameof(ChatPayloadLinkType.Item),
                         ItemId = item.ItemId,
                         ItemKind = (int)item.Kind,
+                    });
+                    break;
+                case { Type: ChatPayloadLinkType.PartyFinder, PartyFinder: { } pf }:
+                    stored.Add(new StoredPayloadLink
+                    {
+                        Start = link.Start,
+                        Length = link.Length,
+                        Type = nameof(ChatPayloadLinkType.PartyFinder),
+                        ListingId = pf.ListingId,
+                        PartyFinderLinkType = (int)pf.LinkType,
                     });
                     break;
             }
@@ -293,6 +305,16 @@ public sealed class ChatHistoryService : IDisposable
                         Length = s.Length,
                         Type = ChatPayloadLinkType.Item,
                         Item = new ItemPayload(s.ItemId, (ItemKind)s.ItemKind, null),
+                    });
+                }
+                else if (s.Type == nameof(ChatPayloadLinkType.PartyFinder))
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Start = s.Start,
+                        Length = s.Length,
+                        Type = ChatPayloadLinkType.PartyFinder,
+                        PartyFinder = new PartyFinderPayload(s.ListingId, (PartyFinderPayload.PartyFinderLinkType)s.PartyFinderLinkType),
                     });
                 }
             }
