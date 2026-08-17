@@ -10,6 +10,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
+using CustomChat.Services;
 using CustomChat.Utility;
 
 namespace CustomChat.Windows;
@@ -44,6 +45,42 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// <summary>Same "force a fresh widget on send" trick as MainWindow - see its field comment for
     /// the reasoning.</summary>
     private int inputGeneration;
+
+    /// <summary>Same up/down-arrow send history as MainWindow, just a single tracker rather than one
+    /// per tab - this window only ever has the one <see cref="Tab"/> it was popped out for.</summary>
+    private readonly SendHistoryTracker sendHistory = new();
+
+    /// <summary>Auto-translate dictionary phrases picked via <see cref="Windows.AutoTranslatePicker"/>
+    /// (Tab in this window's own compose box), consumed in order by each "&lt;atlink&gt;" placeholder
+    /// at send time - unlike item/Party Finder links (always land on MainWindow's shared compose
+    /// state, since those are triggered from *outside* the plugin's UI entirely with no natural window
+    /// to target), Tab is pressed inside whichever window's own input box has focus, so this window
+    /// keeps its own list rather than deferring to MainWindow's.</summary>
+    private readonly List<PendingAutoTranslateLink> pendingAutoTranslateLinks = new();
+    private string autoTranslateSearch = string.Empty;
+
+    /// <summary>Same "strip the typed word back off on pick" as MainWindow - see its version for the
+    /// reasoning.</summary>
+    private string autoTranslateReplacingWord = string.Empty;
+    private const string AutoTranslateLinkPlaceholder = "<atlink>";
+
+    private void AttachAutoTranslateLink(AutoTranslatePhrase phrase)
+    {
+        pendingAutoTranslateLinks.Add(new PendingAutoTranslateLink(phrase.Group, phrase.RowId, phrase.Text));
+        if (autoTranslateReplacingWord.Length > 0 && inputText.EndsWith(autoTranslateReplacingWord, StringComparison.Ordinal))
+            inputText = inputText[..^autoTranslateReplacingWord.Length];
+        if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+            inputText += " ";
+        inputText += AutoTranslateLinkPlaceholder;
+    }
+
+    /// <summary>Same trailing-word extraction as MainWindow - see its version for the reasoning.</summary>
+    private static string ExtractTrailingWord(string text)
+    {
+        var trimmed = text.TrimEnd();
+        var lastBreak = trimmed.LastIndexOfAny(new[] { ' ', '\n' });
+        return lastBreak >= 0 ? trimmed[(lastBreak + 1)..] : trimmed;
+    }
 
     /// <summary>Same "GetFrameHeight()-for-one-line" formula as MainWindow - see its field comment for
     /// why GetTextLineHeightWithSpacing() * n (tried first) caused per-keystroke height jitter. Sizes
@@ -342,6 +379,46 @@ public sealed class DetachedTabWindow : Window, IDisposable
         refocusInput = true;
     }
 
+    /// <summary>Same as <see cref="MainWindow.GenerateAiReply"/> - see its own doc comment.</summary>
+    private async void GenerateAiReply(ChatMessageRecord msg)
+    {
+        var reply = await plugin.AiReplyService.GenerateReplyAsync(msg.SenderName, msg.Body).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(reply))
+            PrefillInput(reply);
+    }
+
+    /// <summary>Same as <see cref="MainWindow.RephraseInput"/> - see its own doc comment.</summary>
+    private async void RephraseInput()
+    {
+        var original = inputText;
+        if (string.IsNullOrWhiteSpace(original))
+            return;
+
+        var rephrased = await plugin.AiReplyService.RephraseAsync(original).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(rephrased) || inputText != original)
+            return;
+
+        inputText = rephrased;
+        inputGeneration++;
+        refocusInput = true;
+    }
+
+    /// <summary>Same as <see cref="MainWindow.CorrectInput"/> - see its own doc comment.</summary>
+    private async void CorrectInput()
+    {
+        var original = inputText;
+        if (string.IsNullOrWhiteSpace(original))
+            return;
+
+        var corrected = await plugin.AiReplyService.CorrectAsync(original).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(corrected) || inputText != original)
+            return;
+
+        inputText = corrected;
+        inputGeneration++;
+        refocusInput = true;
+    }
+
     /// <summary>Same fade-while-unfocused and body-matching-title-bar behaviour as MainWindow.PreDraw -
     /// see there for the reasoning.</summary>
     public override void PreDraw()
@@ -429,7 +506,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.ItemTooltipService, plugin.ItemContextService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(Tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, GenerateAiReply, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.ItemTooltipService, plugin.ItemContextService, plugin.NotificationService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
                     if (!searchMode && lastVisible >= 0)
@@ -529,6 +606,31 @@ public sealed class DetachedTabWindow : Window, IDisposable
             });
         }
 
+        if (ImGui.BeginPopupContextItem($"inputctx_{Tab.Id}"))
+        {
+            // Hidden entirely without a Gemini API key configured, per explicit user request - see
+            // MainWindow.DrawInputRow's own comment for why this is checked *inside* the block rather
+            // than short-circuited into the BeginPopupContextItem condition (its matching EndPopup()
+            // below still has to run either way).
+            if (!string.IsNullOrWhiteSpace(Plugin.Configuration.GeminiApiKey))
+            {
+                using (ImRaii.Disabled(string.IsNullOrWhiteSpace(inputText)))
+                {
+                    if (ImGui.MenuItem("Rephrase"))
+                        RephraseInput();
+
+                    if (ImGui.MenuItem("Fix errors"))
+                        CorrectInput();
+                }
+            }
+            else
+            {
+                ImGui.TextDisabled("Set a Gemini API key (Settings > AI) to use Rephrase/Fix errors.");
+            }
+
+            ImGui.EndPopup();
+        }
+
         var send = false;
         if (ImGui.IsItemFocused() && !ImGui.GetIO().KeyShift && (ImGui.IsKeyPressed(ImGuiKey.Enter, false) || ImGui.IsKeyPressed(ImGuiKey.KeypadEnter, false)))
         {
@@ -541,6 +643,34 @@ public sealed class DetachedTabWindow : Window, IDisposable
             inputGeneration++;
             refocusInput = true;
         }
+
+        // Up/down-arrow send history - see MainWindow's version for the full reasoning (only hijacks
+        // the arrow while the box is empty or already mid-browse).
+        if (ImGui.IsItemFocused() && (ImGui.IsKeyPressed(ImGuiKey.UpArrow, false) || ImGui.IsKeyPressed(ImGuiKey.DownArrow, false)))
+        {
+            var up = ImGui.IsKeyPressed(ImGuiKey.UpArrow, false);
+            if (sendHistory.IsBrowsing || string.IsNullOrEmpty(inputText))
+            {
+                var replacement = sendHistory.Navigate(up, inputText);
+                if (replacement != null)
+                {
+                    inputText = replacement;
+                    inputGeneration++;
+                    refocusInput = true;
+                }
+            }
+        }
+
+        // Tab opens the auto-translate dictionary picker - see MainWindow's version for the full
+        // reasoning, including pre-filling the search from whatever's already typed.
+        if (ImGui.IsItemFocused() && ImGui.IsKeyPressed(ImGuiKey.Tab, false))
+        {
+            autoTranslateReplacingWord = ExtractTrailingWord(inputText);
+            autoTranslateSearch = autoTranslateReplacingWord;
+            ImGui.OpenPopup($"AutoTranslatePicker_{Tab.Id}");
+        }
+
+        AutoTranslatePicker.Draw($"AutoTranslatePicker_{Tab.Id}", plugin.AutoTranslatePhraseService, ref autoTranslateSearch, AttachAutoTranslateLink);
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
         // selection if there is one.
@@ -602,13 +732,16 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         EmotePicker.Draw($"EmotePicker_{Tab.Id}", plugin.EmoteService, ref emoteSearch, code =>
         {
-            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
+            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + $":{code}:" + " ";
         });
 
-        if (send && !string.IsNullOrWhiteSpace(inputText))
+        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingAutoTranslateLinks.Count > 0))
         {
-            plugin.SendFromTab(Tab, StripWrapNewlines(inputText));
+            var textToSend = StripWrapNewlines(inputText);
+            sendHistory.Push(textToSend); // recorded even for a "<atlink>" placeholder-only send - the attachment itself isn't preserved for recall, just the typed text
+            plugin.SendFromTab(Tab, textToSend, autoTranslateAttachments: pendingAutoTranslateLinks);
             inputText = string.Empty;
+            pendingAutoTranslateLinks.Clear();
             wrapNewlines.Clear();
             lastWrapSnapshot = Array.Empty<byte>();
         }

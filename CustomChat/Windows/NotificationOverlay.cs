@@ -65,6 +65,14 @@ public sealed class NotificationOverlay : Window
         DisableWindowSounds = true; // this "window" never really opens/closes in the usual sense
         IsTopMost = true;
 
+        // Dalamud's own triple-dash system menu (not this project's UI) defaults every one of these
+        // to true - confirmed via the metadata tool on Dalamud.Interface.Windowing.Window, which has
+        // exactly three matching Allow* flags. Only pinning makes sense for a toast stack that repositions
+        // itself every frame anyway; clickthrough and background blur were both left at their defaults
+        // and showed up unwanted in that menu.
+        AllowClickthrough = false;
+        AllowBackgroundBlur = false;
+
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove |
                 ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse |
                 ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoBackground;
@@ -76,14 +84,18 @@ public sealed class NotificationOverlay : Window
 
     public override void PreDraw()
     {
+        // Forced to zero (popped in PostDraw, since WindowPadding only takes effect if pushed
+        // before Begin()) so every width calculation here and in Draw() works in the same, fully
+        // known coordinate space - the default ~8px WindowPadding on each side was never accounted
+        // for in Width/CardPadding/IconColumnWidth below, which quietly ate into the budget those
+        // assumed was available and pushed wrapped text (and the card background rect built from
+        // it) past the window's real right edge, where it got silently clipped off.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+
         var wrapWidth = Width - (CardPadding * 2) - IconColumnWidth;
-        var totalHeight = CardPadding;
+        var totalHeight = 0f;
         foreach (var n in notifications.Active)
-        {
-            var textHeight = ImGui.CalcTextSize(n.Message, false, wrapWidth).Y;
-            var cardHeight = Math.Max(textHeight, ImGui.GetTextLineHeight()) + (CardPadding * 2);
-            totalHeight += cardHeight + CardSpacing;
-        }
+            totalHeight += CardHeight(n.Message, wrapWidth) + CardSpacing;
 
         Size = new Vector2(Width, Math.Max(totalHeight, 1f));
         SizeCondition = ImGuiCond.Always;
@@ -99,12 +111,22 @@ public sealed class NotificationOverlay : Window
         PositionCondition = ImGuiCond.Always;
     }
 
+    public override void PostDraw() => ImGui.PopStyleVar(); // WindowPadding, pushed in PreDraw
+
     public override void Draw()
     {
         var toShow = notifications.Active;
         List<NotificationService.Notification>? toDismiss = null;
         var drawList = ImGui.GetWindowDrawList();
-        var wrapWidth = Width - (CardPadding * 2) - IconColumnWidth;
+
+        // Every bit of vertical space in this loop is an explicit Dummy sized to exactly match
+        // what PreDraw's CardHeight sum assumes, with ImGui's own automatic ItemSpacing between
+        // widgets forced to zero - relying on both an explicit reserve AND ImGui's implicit
+        // per-widget gap on top of it is the same "double-counted spacer" trap that caused a real
+        // misalignment bug elsewhere in this project before, and is what let the two passes here
+        // drift apart (window sized shorter than its real content, so content spilled past the
+        // window's own background instead of getting a scrollbar).
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(ImGui.GetStyle().ItemSpacing.X, 0));
 
         for (var i = 0; i < toShow.Count; i++)
         {
@@ -124,8 +146,9 @@ public sealed class NotificationOverlay : Window
             drawList.ChannelsSetCurrent(1); // foreground: real content, drawn first so its rect is known
 
             ImGui.PushStyleVar(ImGuiStyleVar.Alpha, alpha);
+            ImGui.Dummy(new Vector2(1, CardPadding)); // top inset, matches CardHeight's CardPadding term exactly
+
             ImGui.Indent(CardPadding);
-            ImGui.Dummy(new Vector2(0, 1)); // top inset before the content, tiny since ItemSpacing already adds most of it
             ImGui.BeginGroup();
 
             ImGui.PushStyleColor(ImGuiCol.Text, accent);
@@ -134,15 +157,20 @@ public sealed class NotificationOverlay : Window
             ImGui.PopStyleColor();
             ImGui.SameLine();
 
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + wrapWidth);
+            // An absolute wrap position (window-local space, same space GetCursorPosX() reports -
+            // valid per Dear ImGui's own PushTextWrapPos docs), not "current cursor + an assumed
+            // icon width" - with WindowPadding now zero, Width itself *is* the window's real right
+            // edge, so this reliably lands the wrap boundary exactly CardPadding before it no matter
+            // how wide the icon glyph actually rendered, instead of guessing via IconColumnWidth.
+            ImGui.PushTextWrapPos(Width - CardPadding);
             ImGui.TextUnformatted(notification.Message);
             ImGui.PopTextWrapPos();
 
             ImGui.EndGroup();
-            ImGui.Unindent(CardPadding);
 
             var cardMin = ImGui.GetItemRectMin() - new Vector2(CardPadding, CardPadding);
             var cardMax = ImGui.GetItemRectMax() + new Vector2(CardPadding, CardPadding);
+            ImGui.Unindent(CardPadding);
 
             if (ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(cardMin, cardMax) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
                 (toDismiss ??= new List<NotificationService.Notification>()).Add(notification);
@@ -152,11 +180,27 @@ public sealed class NotificationOverlay : Window
             drawList.AddRect(cardMin, cardMax, ImGui.GetColorU32(accent), 4f);
             drawList.ChannelsMerge();
 
-            ImGui.PopStyleVar();
-            ImGui.Spacing();
+            ImGui.Dummy(new Vector2(1, CardPadding)); // bottom inset, matches CardHeight's CardPadding term exactly
+            ImGui.PopStyleVar(); // alpha
+
+            ImGui.Dummy(new Vector2(1, CardSpacing)); // gap before the next card, matches PreDraw's CardSpacing term
         }
+
+        ImGui.PopStyleVar(); // ItemSpacing
 
         if (toDismiss != null)
             notifications.Dismiss(toDismiss);
+    }
+
+    // Shared by PreDraw's height sum and Draw's actual layout so the two can never drift apart -
+    // adds a small safety margin on top of CalcTextSize's estimate since the icon glyph (drawn in
+    // Dalamud's icon font, not the body font) may render taller than GetTextLineHeight() reports
+    // in the body font's context, which previously wasn't accounted for at all.
+    private static float CardHeight(string message, float wrapWidth)
+    {
+        const float safetyMargin = 4f;
+        var textHeight = ImGui.CalcTextSize(message, false, wrapWidth).Y;
+        var contentHeight = Math.Max(textHeight, ImGui.GetTextLineHeight()) + safetyMargin;
+        return contentHeight + (CardPadding * 2);
     }
 }

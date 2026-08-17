@@ -7,19 +7,33 @@ public enum ChatPayloadLinkType
     MapLink,
     Item,
     PartyFinder,
+
+    /// <summary>An auto-translate dictionary phrase (<see cref="Dalamud.Game.Text.SeStringHandling.Payloads.AutoTranslatePayload"/>) -
+    /// unlike the other three, this one's display text (wrapped in the same guillemets the native
+    /// chat log uses, see <see cref="Services.ChatCaptureService.BuildBodyAndPayloadLinks"/>) is
+    /// *inserted* into <see cref="ChatMessageRecord.Body"/> at capture time rather than merely located
+    /// in it - the game gives it no separate display <c>TextPayload</c> of its own to find the way a
+    /// map/item link does, so without this it doesn't appear in the flattened body at all. Purely
+    /// display styling - no click action, unlike the other three.</summary>
+    AutoTranslate,
 }
 
 /// <summary>
-/// A rich SeString payload (map/flag coordinate link, item link) found in a message at capture
-/// time, with its position in <see cref="ChatMessageRecord.Body"/> so it can be rendered as its own
-/// clickable widget instead of plain text. <see cref="ChatMessageRecord.Body"/> is already flattened
-/// plain text (<c>SeString.TextValue</c>, which only concatenates <c>TextPayload</c> text - every
-/// other payload type, map/item links included, contributes zero characters) by the time it's
-/// captured, so this is the only place that structure survives. <see cref="MapLink"/>/<see cref="Item"/>
-/// themselves aren't directly persisted (Dalamud's SDK payload types don't round-trip through
-/// SQLite/JSON as-is) - <see cref="Services.ChatHistoryService"/> stores just enough raw data
-/// (territory/map ids + raw X/Y, or item id + kind) to reconstruct an equivalent payload object on
+/// A rich SeString payload (map/flag coordinate link, item link, auto-translate phrase) found in a
+/// message at capture time, with its position in <see cref="ChatMessageRecord.Body"/> so it can be
+/// rendered/styled as its own widget instead of plain text. <see cref="ChatMessageRecord.Body"/> is
+/// flattened plain text built by <see cref="Services.ChatCaptureService.BuildBodyAndPayloadLinks"/>
+/// (equivalent to <c>SeString.TextValue</c> - only <c>TextPayload</c> text - for every message that
+/// doesn't use the auto-translate dictionary; see <see cref="ChatPayloadLinkType.AutoTranslate"/> for
+/// the one case that isn't) by the time it's captured, so this is the only place that structure
+/// survives. <see cref="MapLink"/>/<see cref="Item"/>/<see cref="PartyFinder"/> themselves aren't
+/// directly persisted (Dalamud's SDK payload types don't round-trip through SQLite/JSON as-is) -
+/// <see cref="Services.ChatHistoryService"/> stores just enough raw data (territory/map ids + raw
+/// X/Y, item id + kind, or listing id + link type) to reconstruct an equivalent payload object on
 /// reload via the same constructors used to build one from scratch elsewhere in this project.
+/// <see cref="ChatPayloadLinkType.AutoTranslate"/> needs none of that - its display text is already
+/// baked into <see cref="ChatMessageRecord.Body"/> itself, so only <see cref="Start"/>/<see cref="Length"/>/
+/// <see cref="Type"/> round-trip for it.
 /// </summary>
 public sealed class ChatPayloadLink
 {

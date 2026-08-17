@@ -16,6 +16,7 @@ public sealed class WorldIdResolver
     private readonly IDataManager dataManager;
     private readonly IPluginLog log;
     private Dictionary<string, ushort>? worldIdsByName;
+    private Dictionary<ushort, string>? worldNamesById;
 
     public WorldIdResolver(IDataManager dataManager, IPluginLog log)
     {
@@ -30,6 +31,15 @@ public sealed class WorldIdResolver
 
         worldIdsByName ??= BuildWorldIndex();
         return worldIdsByName.TryGetValue(worldName, out var id) ? id : null;
+    }
+
+    /// <summary>The reverse of <see cref="Resolve"/> - a world row id back to its display name, needed
+    /// for building "Name@World" keys from native friend-list entries (which only carry a world row
+    /// id, not a name) - see <see cref="FriendListService.GetAllFriends"/>.</summary>
+    public string? ResolveName(ushort worldId)
+    {
+        worldNamesById ??= BuildReverseWorldIndex();
+        return worldNamesById.TryGetValue(worldId, out var name) ? name : null;
     }
 
     private Dictionary<string, ushort> BuildWorldIndex()
@@ -51,6 +61,30 @@ public sealed class WorldIdResolver
         catch (Exception ex)
         {
             log.Warning(ex, "CustomChat: failed to build world name index");
+        }
+
+        return dict;
+    }
+
+    private Dictionary<ushort, string> BuildReverseWorldIndex()
+    {
+        var dict = new Dictionary<ushort, string>();
+        try
+        {
+            var sheet = dataManager.GetExcelSheet<Lumina.Excel.Sheets.World>();
+            if (sheet != null)
+            {
+                foreach (var world in sheet)
+                {
+                    var name = world.Name.ToString();
+                    if (!string.IsNullOrEmpty(name))
+                        dict[(ushort)world.RowId] = name;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to build reverse world name index");
         }
 
         return dict;

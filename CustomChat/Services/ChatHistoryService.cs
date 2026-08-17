@@ -267,6 +267,17 @@ public sealed class ChatHistoryService : IDisposable
                         PartyFinderLinkType = (int)pf.LinkType,
                     });
                     break;
+                case { Type: ChatPayloadLinkType.AutoTranslate }:
+                    // No extra fields to round-trip - the display text is already baked into Body
+                    // itself (see ChatPayloadLinkType.AutoTranslate's own doc comment), so Start/Length/
+                    // Type alone are enough to re-style it on reload.
+                    stored.Add(new StoredPayloadLink
+                    {
+                        Start = link.Start,
+                        Length = link.Length,
+                        Type = nameof(ChatPayloadLinkType.AutoTranslate),
+                    });
+                    break;
             }
         }
 
@@ -315,6 +326,15 @@ public sealed class ChatHistoryService : IDisposable
                         Length = s.Length,
                         Type = ChatPayloadLinkType.PartyFinder,
                         PartyFinder = new PartyFinderPayload(s.ListingId, (PartyFinderPayload.PartyFinderLinkType)s.PartyFinderLinkType),
+                    });
+                }
+                else if (s.Type == nameof(ChatPayloadLinkType.AutoTranslate))
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Start = s.Start,
+                        Length = s.Length,
+                        Type = ChatPayloadLinkType.AutoTranslate,
                     });
                 }
             }
@@ -449,6 +469,24 @@ public sealed class ChatHistoryService : IDisposable
         {
             log.Warning(ex, "CustomChat: failed to estimate average message size");
             return FallbackAverageBytesPerMessage;
+        }
+    }
+
+    /// <summary>Current on-disk size of the history database (main file + WAL, same two files
+    /// <see cref="EnforceSizeCap"/> measures against <see cref="maxBytes"/>) - Settings' "currently
+    /// using X" indicator next to the max-size setting. No DB connection needed, just file stats.</summary>
+    public long GetCurrentSizeBytes()
+    {
+        try
+        {
+            var fileInfo = new FileInfo(dbPath);
+            var walInfo = new FileInfo(dbPath + "-wal");
+            return (fileInfo.Exists ? fileInfo.Length : 0) + (walInfo.Exists ? walInfo.Length : 0);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to read history database size");
+            return 0;
         }
     }
 

@@ -68,6 +68,27 @@ public sealed class TabManager
         TabRemoved?.Invoke(tab);
     }
 
+    /// <summary>Wipes every tab (regular *and* PM/whisper) and rebuilds the same five built-in tabs a
+    /// brand-new install starts with (<see cref="DefaultTabFactory.CreateDefaults"/>) - the "Reset
+    /// settings to defaults" button's tab-related handling, added per explicit user request (tabs used
+    /// to be deliberately left alone by a settings reset - now they're included too). Removes each tab
+    /// through <see cref="RemoveTab"/>'s own path (not a raw <c>Tabs.Clear()</c>) specifically so
+    /// <see cref="TabRemoved"/> fires for every one of them - <c>Plugin.OnTabRemoved</c> depends on
+    /// that to close/dispose any currently-open detached tab window, which a raw clear would leave
+    /// dangling (pointing at a tab config no longer in <see cref="Tabs"/>).</summary>
+    public void ResetToDefaults()
+    {
+        foreach (var tab in configuration.Tabs.ToList())
+            RemoveTab(tab);
+
+        var defaults = DefaultTabFactory.CreateDefaults();
+        configuration.Tabs.AddRange(defaults);
+        configuration.Save();
+
+        foreach (var tab in defaults)
+            TabAdded?.Invoke(tab);
+    }
+
     /// <summary>True if <see cref="MoveTab"/> would actually move <paramref name="tab"/> - i.e. it's
     /// not already first/last among tabs sharing its own <see cref="ChatTabConfig.IsPmTab"/> value.
     /// Backs the "Move up"/"Move down" buttons' disabled state.</summary>

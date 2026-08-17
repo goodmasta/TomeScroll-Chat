@@ -35,14 +35,25 @@ public sealed class EmoteService : IDisposable
     // back to printing the raw code as plain text when a texture never finishes loading, which looks
     // indistinguishable from "the emote feature doesn't work" even though everything else is fine.
     // Mirrors are tried in order and the first one that succeeds wins.
+    //
+    // Fixed 2026-08-17: the first mirror used to be "cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/...",
+    // which always 404s - confirmed directly (data.jsdelivr.com's own package listing for the npm
+    // "twemoji" package) that it only ships the dist/*.js parsing library, no assets/ directory at
+    // all, so every single emoji silently fell through to the next mirror. jsdelivr's "/gh/" mode
+    // (serve straight from the GitHub repo instead of the npm package) is what actually has the PNGs.
     private static readonly string[] TwemojiMirrors =
     {
-        "https://cdn.jsdelivr.net/npm/twemoji@14.0.2/assets/72x72/{0}.png",
+        "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/{0}.png",
         "https://raw.githubusercontent.com/twitter/twemoji/v14.0.2/assets/72x72/{0}.png",
         "https://cdn.statically.io/gh/twitter/twemoji/v14.0.2/assets/72x72/{0}.png",
     };
 
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(15) };
+    // Same stale-pooled-connection mitigation as GeminiService.http - see its own doc comment
+    // (this field lives just as long, so it's exposed to the exact same failure mode).
+    private readonly HttpClient http = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+    {
+        Timeout = TimeSpan.FromSeconds(15),
+    };
     private readonly ITextureProvider textureProvider;
     private readonly IPluginLog log;
     private readonly string manifestPath;
@@ -52,6 +63,16 @@ public sealed class EmoteService : IDisposable
     private readonly ConcurrentDictionary<string, EmoteDefinition> byCode = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IDalamudTextureWrap> textureCache = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> loading = new(StringComparer.Ordinal);
+
+    /// <summary>Codes whose download failed - <see cref="TryGetTexture"/> stops retrying them for the
+    /// rest of this session once added. Added 2026-08-17: <see cref="LoadTextureAsync"/>'s <c>finally</c>
+    /// always clears <see cref="loading"/>, success or failure, so without this a permanently-failing
+    /// download (e.g. all <see cref="TwemojiMirrors"/> rejecting the same emoji) gets retried - and
+    /// re-logged - every single time <see cref="TryGetTexture"/> is called for it, which for something
+    /// drawn every ImGui frame (a message marker, a repeatedly-rendered emote) floods <c>/xllog</c>
+    /// with the same warning dozens of times a second. Session-scoped, not persisted - a plugin reload
+    /// gives every code a fresh chance (mirrors/network conditions can change).</summary>
+    private readonly ConcurrentDictionary<string, byte> failed = new(StringComparer.Ordinal);
 
     public EmoteService(string configDirectory, ITextureProvider textureProvider, IPluginLog log)
     {
@@ -193,6 +214,9 @@ public sealed class EmoteService : IDisposable
         if (textureCache.TryGetValue(code, out var texture))
             return texture;
 
+        if (failed.ContainsKey(code))
+            return null;
+
         if (!byCode.TryGetValue(code, out var def))
             return null;
 
@@ -234,6 +258,7 @@ public sealed class EmoteService : IDisposable
         catch (Exception ex)
         {
             log.Warning(ex, "CustomChat: failed to load emote texture for {Code}", def.Code);
+            failed.TryAdd(def.Code, 0);
         }
         finally
         {

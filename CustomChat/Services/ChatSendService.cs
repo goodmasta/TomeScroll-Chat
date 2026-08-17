@@ -6,6 +6,7 @@ using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.System.String;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using Lumina.Text.Payloads;
 using CustomChat.Models;
 
 namespace CustomChat.Services;
@@ -21,6 +22,8 @@ public sealed unsafe class ChatSendService
 {
     private const int MaxUtf8Bytes = 500;
     private const string LinkPlaceholder = "<link>";
+    private const string PartyFinderLinkPlaceholder = "<pflink>";
+    private const string AutoTranslateLinkPlaceholder = "<atlink>";
 
     private readonly IPluginLog log;
 
@@ -42,10 +45,17 @@ public sealed unsafe class ChatSendService
     /// an item -> "Link"), consumed in order by each literal "&lt;link&gt;" placeholder found in
     /// <paramref name="message"/> - see <see cref="AppendWithPlaceholderExpansion"/>. A message can be
     /// sent with only a "&lt;link&gt;" and no other typed text at all.</param>
-    public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null)
+    /// <param name="partyFinderAttachments">Party Finder listing links queued via
+    /// <see cref="NativePartyFinderLinkWatcher"/> (the native Party Finder window's own "Relay"
+    /// action), consumed the same way by each literal "&lt;pflink&gt;" placeholder.</param>
+    /// <param name="autoTranslateAttachments">Auto-translate dictionary phrases picked via
+    /// <see cref="Windows.AutoTranslatePicker"/> (Tab in the chat input), consumed the same way by
+    /// each literal "&lt;atlink&gt;" placeholder - see <see cref="EncodeAutoTranslate"/> for how these
+    /// are actually encoded.</param>
+    public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null)
     {
         message ??= string.Empty;
-        var hasAttachments = attachments is { Count: > 0 };
+        var hasAttachments = attachments is { Count: > 0 } || partyFinderAttachments is { Count: > 0 } || autoTranslateAttachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(message) && !hasAttachments)
             return;
 
@@ -55,7 +65,7 @@ public sealed unsafe class ChatSendService
             : message.Length > 0 ? $"{channelCommand} {message}" : channelCommand;
 
         using var buffer = new MemoryStream();
-        AppendWithPlaceholderExpansion(buffer, full, attachments);
+        AppendWithPlaceholderExpansion(buffer, full, attachments, partyFinderAttachments, autoTranslateAttachments);
 
         if (buffer.Length > MaxUtf8Bytes)
         {
@@ -112,24 +122,66 @@ public sealed unsafe class ChatSendService
     /// other unrecognized token - reliability over the feature, given repeated failures trying to build
     /// this specific payload live. If revisiting, add logging *before* re-attempting the expansion, not
     /// after - this was debugged blind for too many rounds already.</para></summary>
-    private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments)
+    private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments)
     {
         var itemIndex = 0;
+        var pfIndex = 0;
+        var atIndex = 0;
         var pos = 0;
 
         while (pos < text.Length)
         {
+            // None of "<link>"/"<pflink>"/"<atlink>" can ever appear as a substring of one of the
+            // others (each has a distinct character right after "<"), so whichever is found earliest
+            // in the remaining text just wins outright - no need to worry about overlap.
             var linkIndex = text.IndexOf(LinkPlaceholder, pos, StringComparison.Ordinal);
-            if (linkIndex < 0)
+            var pfLinkIndex = text.IndexOf(PartyFinderLinkPlaceholder, pos, StringComparison.Ordinal);
+            var atLinkIndex = text.IndexOf(AutoTranslateLinkPlaceholder, pos, StringComparison.Ordinal);
+
+            var matchIndex = -1;
+            var placeholder = string.Empty;
+            foreach (var (index, candidate) in new[] { (linkIndex, LinkPlaceholder), (pfLinkIndex, PartyFinderLinkPlaceholder), (atLinkIndex, AutoTranslateLinkPlaceholder) })
+            {
+                if (index >= 0 && (matchIndex < 0 || index < matchIndex))
+                {
+                    matchIndex = index;
+                    placeholder = candidate;
+                }
+            }
+
+            if (matchIndex < 0)
             {
                 buffer.Write(Encoding.UTF8.GetBytes(text[pos..]));
                 return;
             }
 
-            if (linkIndex > pos)
-                buffer.Write(Encoding.UTF8.GetBytes(text[pos..linkIndex]));
+            if (matchIndex > pos)
+                buffer.Write(Encoding.UTF8.GetBytes(text[pos..matchIndex]));
 
-            if (attachments != null && itemIndex < attachments.Count)
+            if (placeholder == PartyFinderLinkPlaceholder)
+            {
+                // Unlike item links, there's no reconstruction fallback here (see
+                // PendingPartyFinderLink's doc comment) - missing bytes just leaves the literal
+                // placeholder text in place rather than guessing at a payload.
+                byte[]? bytes = null;
+                if (partyFinderAttachments != null && pfIndex < partyFinderAttachments.Count)
+                    bytes = partyFinderAttachments[pfIndex++].RawPayloadBytes;
+
+                buffer.Write(bytes ?? Encoding.UTF8.GetBytes(placeholder));
+            }
+            else if (placeholder == AutoTranslateLinkPlaceholder)
+            {
+                if (autoTranslateAttachments != null && atIndex < autoTranslateAttachments.Count)
+                {
+                    var link = autoTranslateAttachments[atIndex++];
+                    buffer.Write(EncodeAutoTranslate(link.Group, link.RowId));
+                }
+                else
+                {
+                    buffer.Write(Encoding.UTF8.GetBytes(placeholder));
+                }
+            }
+            else if (attachments != null && itemIndex < attachments.Count)
             {
                 var link = attachments[itemIndex++];
                 // Prefer the game's own captured bytes (see PendingItemLink.RawPayloadBytes) over
@@ -141,10 +193,34 @@ public sealed unsafe class ChatSendService
             }
             else
             {
-                buffer.Write(Encoding.UTF8.GetBytes(LinkPlaceholder));
+                buffer.Write(Encoding.UTF8.GetBytes(placeholder));
             }
 
-            pos = linkIndex + LinkPlaceholder.Length;
+            pos = matchIndex + placeholder.Length;
         }
+    }
+
+    /// <summary>Encodes an auto-translate dictionary phrase for sending - **not**
+    /// <see cref="Dalamud.Game.Text.SeStringHandling.Payloads.AutoTranslatePayload"/> (Dalamud's own
+    /// class for this), which was tried first and always got the message rejected outright by the
+    /// game with "Please use the auto-translate function." regardless of which phrase was picked -
+    /// that class's <c>EncodeImpl()</c> apparently doesn't produce the exact byte format the game's
+    /// own send-time validation recognizes as real. Found the actual working format by studying
+    /// ChatTwo's own implementation (<c>Util/AutoTranslate.cs</c>, <c>Infiziert90/ChatTwo</c> on
+    /// GitHub, read via WebFetch on the user's own suggestion): a raw <c>MacroCode.Fixed</c> macro
+    /// expression, built via <b>Lumina's</b> own <c>Lumina.Text.SeStringBuilder</c> (a different,
+    /// lower-level builder than <see cref="SeStringBuilder"/> used elsewhere in this file - fully
+    /// qualified here specifically to avoid colliding with that using), with the group passed as
+    /// <c>group - 1</c> (verbatim from ChatTwo's own code, not otherwise explained there either) and
+    /// the phrase's <c>Completion</c> row id as the second expression.</summary>
+    private static byte[] EncodeAutoTranslate(uint group, uint rowId)
+    {
+        var builder = new Lumina.Text.SeStringBuilder();
+        return builder
+            .BeginMacro(MacroCode.Fixed)
+            .AppendUIntExpression(group - 1)
+            .AppendUIntExpression(rowId)
+            .EndMacro()
+            .ToArray();
     }
 }

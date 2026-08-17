@@ -5,8 +5,14 @@ namespace CustomChat.Services.Emotes;
 /// used to build <see cref="Models.EmoteDefinition"/> entries whose image comes from a CDN instead
 /// of a live BTTV/7TV-style API. Not exhaustive Unicode coverage - just enough well-known emoji to
 /// be useful, picked to avoid characters that need a "-fe0f" variation-selector suffix in the CDN
-/// filename (a handful of common symbols like ❤/☀/☕ do need it and are omitted here to keep this
-/// simple, except heart, which is common enough to be worth the one exception).
+/// filename (a handful of common symbols like ☀/☕ do need it and are omitted here to keep this
+/// simple).
+/// <para><b>Fixed 2026-08-17</b>: <c>heart</c> used to be listed as <c>"2764-fe0f"</c>, on the
+/// (wrong) assumption it needed the same variation-selector suffix as ☀/☕ - reported live as
+/// permanently failing to load ("301 Moved Permanently" through one mirror's redirect chain, plain
+/// 404 on the others). Confirmed directly against Twemoji's real v14.0.2 asset listing
+/// (<c>raw.githubusercontent.com/twitter/twemoji/v14.0.2/assets/72x72/</c>) that the actual filename
+/// is just <c>2764.png</c> - Twemoji drops <c>-fe0f</c> for this one specifically, unlike ☀/☕.</para>
 /// </summary>
 public static class StandardEmojiCatalog
 {
@@ -26,7 +32,7 @@ public static class StandardEmojiCatalog
         ("thumbsup", "1f44d"), ("thumbsdown", "1f44e"), ("clap", "1f44f"), ("wave", "1f44b"),
         ("raised_hands", "1f64c"), ("open_hands", "1f450"), ("pray", "1f64f"), ("muscle", "1f4aa"),
         ("handshake", "1f91d"), ("ok_hand", "1f44c"),
-        ("heart", "2764-fe0f"), ("heartbeat", "1f493"), ("two_hearts", "1f495"),
+        ("heart", "2764"), ("heartbeat", "1f493"), ("two_hearts", "1f495"),
         ("sparkling_heart", "1f496"), ("broken_heart", "1f494"), ("fire", "1f525"), ("star", "2b50"),
         ("sparkles", "2728"), ("tada", "1f389"), ("confetti_ball", "1f38a"), ("hundred", "1f4af"),
         ("check", "2705"), ("cross", "274c"), ("poop", "1f4a9"), ("skull", "1f480"),

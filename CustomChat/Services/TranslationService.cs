@@ -26,20 +26,24 @@ namespace CustomChat.Services;
 /// go through a single-consumer queue rather than firing immediately: <see cref="WorkerLoopAsync"/>
 /// processes one at a time with a baseline delay between requests, plus exponential backoff stacked
 /// on top after consecutive failures (none of these free-tier backends reliably distinguish a rate
-/// limit from any other failure, so any failure is treated as a possible one). Enough consecutive
-/// failures on the current engine also switches the *active* engine to the next one in
-/// <see cref="EngineFallbackOrder"/> (wrapping, skipping <see cref="TranslationEngine.Gemini"/> if it
-/// isn't configured) - regardless of which engine that was, not just <see cref="TranslationEngine.GoogleFree"/>
+/// limit from any other failure, so any failure is treated as a possible one) - this backoff-*delay*
+/// behavior is specific to the queue (only it has a bursty-request problem to throttle). Enough
+/// consecutive failures on the current engine, from *any* <see cref="TranslateRawAsync"/> caller (not
+/// just the queue - see <see cref="TrackEngineHealth"/>), switches the *active* engine to the next one
+/// in <see cref="EngineFallbackOrder"/> (wrapping, skipping <see cref="TranslationEngine.Gemini"/> if
+/// it isn't configured) - regardless of which engine that was, not just <see cref="TranslationEngine.GoogleFree"/>
 /// - with a <see cref="NotificationService"/> toast announcing the switch, so it's not silent. The
 /// *active* engine (what's actually used right now) is distinct from <see cref="Configuration.TranslationEngine"/>
 /// (the player's own preference) - picking a different engine in Settings resets the active one back
 /// to that preference immediately, overriding whatever it had auto-switched to. This queue matters
 /// specifically because of <see cref="ChatTabConfig.AutoTranslate"/>: opening a tab with hundreds of
 /// untranslated backlog messages would otherwise fire that many requests in the same frame.
-/// <see cref="TranslateRawAsync"/> (translating the player's own not-yet-sent input box text)
-/// deliberately bypasses the queue/backoff/switch-on-failure logic - it's a rare, manual, one-off
-/// action, not the bursty case this exists for - but still uses whichever engine is currently active,
-/// same as the queued path.</para>
+/// <see cref="TranslateRawAsync"/> (translating the player's own not-yet-sent input box text, or a
+/// line of NPC dialogue via <see cref="DialogueTranslationService"/>) bypasses the queue's *rate*
+/// throttling - it's a rare, manual/one-line-at-a-time action, not the bursty case that exists for -
+/// but still uses whichever engine is currently active, same as the queued path, and its failures
+/// still count toward the same switch-on-failure decision (fixed 2026-08-17 - see
+/// <see cref="TranslateRawAsync"/>'s own doc comment for the bug this closed).</para>
 ///
 /// <para>Results are cached by the <see cref="ChatMessageRecord"/> instance itself (reference
 /// identity, not <see cref="ChatMessageRecord.Id"/> - that's the SQLite rowid and reads back 0 for
@@ -77,7 +81,12 @@ public sealed class TranslationService : IDisposable
     private const int BaseDelayMs = 350;
     private const int MaxBackoffSeconds = 60;
 
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(10) };
+    // Same stale-pooled-connection mitigation as GeminiService.http - see its own doc comment
+    // (this field lives just as long, so it's exposed to the exact same failure mode).
+    private readonly HttpClient http = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+    {
+        Timeout = TimeSpan.FromSeconds(10),
+    };
     private readonly IPluginLog log;
     private readonly Configuration configuration;
     private readonly ChatHistoryService historyService;
@@ -168,7 +177,12 @@ public sealed class TranslationService : IDisposable
     }
 
     /// <summary>Single consumer for every queued per-message translation - see the class doc comment
-    /// for why this exists instead of firing each request immediately.</summary>
+    /// for why this exists instead of firing each request immediately. The engine-switch decision
+    /// itself now lives in <see cref="TrackEngineHealth"/> (called from inside
+    /// <see cref="TranslateRawAsync"/>, so it applies to every caller, not just this loop - see that
+    /// method's own doc comment) - <c>consecutiveFailures</c> here is purely local bookkeeping for this
+    /// loop's own request-rate backoff *delay*, which only ever makes sense for the bursty queued case
+    /// (a one-off dialogue-line/input-box translation has nothing to back off between).</summary>
     private async Task WorkerLoopAsync(CancellationToken token)
     {
         var consecutiveFailures = 0;
@@ -188,6 +202,7 @@ public sealed class TranslationService : IDisposable
                         consecutiveFailures = 0;
                     }
 
+                    var engineBeforeRequest = activeEngine;
                     var translated = await TranslateRawAsync(job.Message.Body, job.TargetLanguage).ConfigureAwait(false);
                     pendingOrInFlight.TryRemove(job.Message, out _);
 
@@ -201,28 +216,18 @@ public sealed class TranslationService : IDisposable
                     {
                         consecutiveFailures++;
 
-                        if (consecutiveFailures >= SwitchEngineAfterFailures)
+                        // TrackEngineHealth (inside the TranslateRawAsync call above) may have already
+                        // switched engines this exact call - only keep counting/backing off toward a
+                        // *second* switch if it didn't, otherwise this loop's own counter would be
+                        // stale relative to the engine actually in use now.
+                        if (activeEngine != engineBeforeRequest)
                         {
-                            var next = NextEngine(activeEngine);
-                            if (next != activeEngine)
-                            {
-                                notificationService.Show($"Switched translation engine: {EngineLabel(activeEngine)} → {EngineLabel(next)} after repeated failures.", NotificationSeverity.Warning);
-                                activeEngine = next;
-                            }
-
-                            consecutiveFailures = 0; // give the new engine a fresh streak/backoff, not an inherited one
+                            consecutiveFailures = 0;
                         }
                         else
                         {
-                            // Fires once per remaining attempt before the switch above actually
-                            // triggers (with SwitchEngineAfterFailures at its current value of 2,
-                            // that's just once per streak - never spammy - but written as a genuine
-                            // countdown rather than a one-off message so it stays correct if that
-                            // threshold ever changes).
-                            var remaining = SwitchEngineAfterFailures - consecutiveFailures;
                             notificationService.Show(
-                                $"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details. " +
-                                $"{remaining} more failure{(remaining == 1 ? "" : "s")} before switching engines.",
+                                $"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details.",
                                 NotificationSeverity.Warning);
                         }
                     }
@@ -275,18 +280,66 @@ public sealed class TranslationService : IDisposable
         _ => "Google",
     };
 
+    /// <summary>Consecutive failures on the active engine from any <see cref="TranslateRawAsync"/>
+    /// caller - queued per-message translations, the input-box one-off "Translate" action, and
+    /// <see cref="DialogueTranslationService"/>'s NPC-dialogue/subtitle/quest-toast translations alike.
+    /// Separate from <see cref="WorkerLoopAsync"/>'s own local counter, which only ever drives that
+    /// loop's request-rate backoff *delay* - this one drives the actual engine switch (see
+    /// <see cref="TrackEngineHealth"/>), <see cref="Interlocked"/>-guarded since one-off callers can run
+    /// on any thread concurrently with the worker.</summary>
+    private int rawConsecutiveFailures;
+
     /// <summary>Translates via whichever engine is currently *active* (see the class doc comment for
     /// how that differs from the player's raw <see cref="Configuration.TranslationEngine"/> choice) -
     /// the shared dispatcher both the queued per-message path and one-off callers (e.g. translating the
-    /// player's own not-yet-sent input box text) go through. A single attempt, no retry/backoff/
-    /// switch-on-failure logic of its own - see <see cref="WorkerLoopAsync"/> for that, layered on top
-    /// for the queued path only.</summary>
-    public Task<string?> TranslateRawAsync(string text, string targetLanguage) => activeEngine switch
+    /// player's own not-yet-sent input box text, or a line of NPC dialogue) go through.
+    /// <para><b>Fixed 2026-08-17</b>: reported live as NPC dialogue translation silently never
+    /// recovering after Gemini started rejecting every request ("User location is not supported for
+    /// the API use") - <see cref="DialogueTranslationService"/> calls this directly, bypassing
+    /// <see cref="WorkerLoopAsync"/> entirely, so the queue's own switch-on-failure logic never saw
+    /// those failures and never switched away from a broken engine on their behalf (regular chat
+    /// translation would eventually self-heal via the queue; dialogue translation never would on its
+    /// own). Every call through here now feeds <see cref="TrackEngineHealth"/>, so *any* caller's
+    /// failures count toward the same switch decision, not just the queue's.</para></summary>
+    public async Task<string?> TranslateRawAsync(string text, string targetLanguage)
     {
-        TranslationEngine.MyMemory => TranslateViaMyMemoryAsync(text, targetLanguage),
-        TranslationEngine.Gemini => TranslateViaGeminiAsync(text, targetLanguage),
-        _ => TranslateViaGoogleGtxAsync(text, targetLanguage),
-    };
+        var result = await (activeEngine switch
+        {
+            TranslationEngine.MyMemory => TranslateViaMyMemoryAsync(text, targetLanguage),
+            TranslationEngine.Gemini => TranslateViaGeminiAsync(text, targetLanguage),
+            _ => TranslateViaGoogleGtxAsync(text, targetLanguage),
+        }).ConfigureAwait(false);
+
+        TrackEngineHealth(!string.IsNullOrEmpty(result));
+        return result;
+    }
+
+    /// <summary>Centralized switch-on-failure decision - see <see cref="rawConsecutiveFailures"/>'s own
+    /// doc comment for why this lives here rather than only in <see cref="WorkerLoopAsync"/>. Mirrors
+    /// that loop's own switch behavior (same threshold, same fallback order, same notification) so
+    /// there's exactly one "when do we give up on the current engine" rule regardless of which caller's
+    /// failures actually triggered it.</summary>
+    private void TrackEngineHealth(bool success)
+    {
+        if (success)
+        {
+            Interlocked.Exchange(ref rawConsecutiveFailures, 0);
+            return;
+        }
+
+        if (Interlocked.Increment(ref rawConsecutiveFailures) < SwitchEngineAfterFailures)
+            return;
+
+        Interlocked.Exchange(ref rawConsecutiveFailures, 0);
+
+        var current = activeEngine;
+        var next = NextEngine(current);
+        if (next == current)
+            return;
+
+        activeEngine = next;
+        notificationService.Show($"Switched translation engine: {EngineLabel(current)} → {EngineLabel(next)} after repeated failures.", NotificationSeverity.Warning);
+    }
 
     private async Task<string?> TranslateViaGoogleGtxAsync(string text, string targetLanguage)
     {

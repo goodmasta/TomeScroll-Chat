@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using Dalamud.Game.Chat;
 using Dalamud.Game.Text;
@@ -42,6 +43,13 @@ public sealed class ChatCaptureService : IDisposable
 
     public event Action<ChatTabConfig, ChatMessageRecord>? MessageRouted;
 
+    /// <summary>Fires exactly once per real chat event, before any tab-routing happens - unlike
+    /// <see cref="MessageRouted"/>, which fires once *per matching tab* (so the same incoming "Say"
+    /// message could invoke it twice if two tabs both show that channel). <see cref="Services.AutoReplyService"/>
+    /// needs an exactly-once signal to avoid double-triggering, which is the whole reason this exists
+    /// separately rather than just reusing <see cref="MessageRouted"/>.</summary>
+    public event Action<XivChatType, string, string, string>? RawMessageReceived;
+
     public ChatCaptureService(IChatGui chatGui, IPluginLog log, Configuration configuration, TabManager tabManager, ChatHistoryService historyService, NotificationService notificationService)
     {
         this.chatGui = chatGui;
@@ -70,15 +78,16 @@ public sealed class ChatCaptureService : IDisposable
         var chatType = message.LogKind;
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
-        var body = message.Message.TextValue;
-        var payloadLinks = ExtractPayloadLinks(message.Message);
+        var (body, payloadLinks) = BuildBodyAndPayloadLinks(message.Message);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
         // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
         // so this uses wall-clock time at the moment the message is actually handled instead - for
         // a live chat capture that's effectively the same instant anyway.
         var timestamp = DateTime.UtcNow;
 
-        if (configuration.NotifyOnInvalidCommand && Array.IndexOf(CommandErrorChatTypes, chatType) >= 0 && LooksLikeInvalidCommandError(body))
+        RawMessageReceived?.Invoke(chatType, senderText, senderKey, body);
+
+        if (configuration.NotifyOnInvalidCommand && Array.IndexOf(CommandErrorChatTypes, chatType) >= 0 && LooksLikeChatSystemError(body))
             notificationService.Show(body, NotificationSeverity.Error);
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
@@ -134,27 +143,55 @@ public sealed class ChatCaptureService : IDisposable
         MessageRouted?.Invoke(tab, record);
     }
 
-    /// <summary>Walks the raw SeString payload sequence to find map/flag and item links, recording
-    /// where their auto-generated display text lands in the flattened <c>TextValue</c> string (see
-    /// <see cref="ChatPayloadLink"/>). <c>TextValue</c> only concatenates <see cref="TextPayload.Text"/>
-    /// from <see cref="TextPayload"/> instances - every other payload (formatting, the link markers
-    /// themselves) contributes zero characters.
-    /// <para>The display text isn't always a single <see cref="TextPayload"/> immediately after the
-    /// marker - confirmed via a real received map link (2026-08-13) to actually look like
-    /// <c>MapLinkPayload, UIForegroundPayload, UIGlowPayload, TextPayload, UIGlowPayload,
-    /// UIForegroundPayload, TextPayload, RawPayload</c>: an icon-glyph <see cref="TextPayload"/> inside
-    /// the glow/colour span, then a second <see cref="TextPayload"/> *outside* it (the actual readable
-    /// "Place Name (X, Y)" text) before the closing <see cref="RawPayload"/>. The original version of
-    /// this method only captured the first <see cref="TextPayload"/> (just the icon glyph) and stopped,
-    /// leaving the actual coordinate text plain and unclickable - reported as "other players'
-    /// coordinates aren't clickable in chat". Fixed by accumulating every consecutive
-    /// <see cref="TextPayload"/> into one combined span, only ending it at the first payload that
-    /// isn't text or the two "safe" formatting types (<see cref="UIForegroundPayload"/>/
-    /// <see cref="UIGlowPayload"/>) that appear between them here.</para></summary>
-    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message)
+    /// <summary>Guillemets this plugin wraps auto-translate dictionary phrases in for display - a
+    /// stand-in for the game's own native bracket-icon glyphs (see
+    /// <see cref="StripNativeAutoTranslateBrackets"/>), chosen because they're ordinary Unicode
+    /// punctuation likely to actually have a glyph in Dalamud's UI font, unlike the game-specific
+    /// Private Use Area codepoints the native ones use.</summary>
+    private const string AutoTranslateOpen = "《";
+    private const string AutoTranslateClose = "》";
+
+    /// <summary>The game's own native auto-translate bracket-icon glyphs - Private Use Area codepoints
+    /// (not literal guillemet characters) that <see cref="AutoTranslatePayload.Text"/> comes wrapped
+    /// in already, mapped to bracket shapes in FFXIV's own bundled font. Confirmed live (2026-08-17)
+    /// via exact Unicode codepoint logging, after a report that clicking a rendered auto-translate
+    /// phrase never matched its expected plain text - the codepoints turned out to be U+E040 (leading)
+    /// and U+E041 (trailing), not this plugin's own guillemets as first assumed. Stripped from
+    /// <see cref="AutoTranslatePayload.Text"/> before use in <see cref="BuildBodyAndPayloadLinks"/>,
+    /// since Dalamud's ImGui font almost certainly doesn't have these same PUA glyphs mapped (they're
+    /// specific to the game's own font atlas) - left in place, they'd likely render as missing-glyph
+    /// placeholders sandwiched inside <see cref="AutoTranslateOpen"/>/<see cref="AutoTranslateClose"/>.</summary>
+    private static string StripNativeAutoTranslateBrackets(string text) =>
+        text.Trim('\uE040', '\uE041').Trim();
+
+    /// <summary>Builds the flattened message body *and* finds every map/flag, item, Party Finder, and
+    /// auto-translate-dictionary span in it in one pass - replaces a plain <c>SeString.TextValue</c>
+    /// read (used until 2026-08-17) specifically because <see cref="AutoTranslatePayload"/> needs its
+    /// resolved text *inserted*, not just located: unlike a map/item link (whose marker payload is
+    /// always followed by a game-generated <see cref="TextPayload"/> holding the visible name/
+    /// coordinates, which already lands in <c>TextValue</c> on its own), an auto-translate phrase has
+    /// no such companion payload - <c>TextValue</c> contributes nothing for it at all, so a message
+    /// using the game's auto-translate dictionary reads with a silent gap where the phrase should be
+    /// (reported: "[05:22] Joon Veyris: night night hmm, fatcat" - the two auto-translate phrases the
+    /// player actually picked from the dictionary never showed up, unlike the "hmm, fatcat" they typed
+    /// themselves). Every other payload contributes exactly what a plain <c>TextValue</c> read already
+    /// did (only <see cref="TextPayload.Text"/> - confirmed by this project's own earlier map/item link
+    /// investigation, see <see cref="ChatPayloadLink"/>'s doc comment), so this is behaviour-preserving
+    /// for every message that has no auto-translate phrase in it.
+    /// <para>The display text for a map/item/Party Finder link isn't always a single
+    /// <see cref="TextPayload"/> immediately after the marker - confirmed via a real received map link
+    /// (2026-08-13) to actually look like <c>MapLinkPayload, UIForegroundPayload, UIGlowPayload,
+    /// TextPayload, UIGlowPayload, UIForegroundPayload, TextPayload, RawPayload</c>: an icon-glyph
+    /// <see cref="TextPayload"/> inside the glow/colour span, then a second <see cref="TextPayload"/>
+    /// *outside* it (the actual readable "Place Name (X, Y)" text) before the closing
+    /// <see cref="RawPayload"/>. Handled by accumulating every consecutive <see cref="TextPayload"/>
+    /// into one combined span, only ending it at the first payload that isn't text or the two "safe"
+    /// formatting types (<see cref="UIForegroundPayload"/>/<see cref="UIGlowPayload"/>) that appear
+    /// between them here.</para></summary>
+    private static (string Body, List<ChatPayloadLink> Links) BuildBodyAndPayloadLinks(SeString message)
     {
+        var body = new StringBuilder();
         var links = new List<ChatPayloadLink>();
-        var cursor = 0;
         ChatPayloadLinkType? pendingType = null;
         MapLinkPayload? pendingMapLink = null;
         ItemPayload? pendingItemLink = null;
@@ -192,11 +229,11 @@ public sealed class ChatCaptureService : IDisposable
                 if (pendingType != null && text.Length > 0)
                 {
                     if (pendingLength == 0)
-                        pendingStart = cursor;
+                        pendingStart = body.Length;
                     pendingLength += text.Length;
                 }
 
-                cursor += text.Length;
+                body.Append(text);
             }
             else if (payload is MapLinkPayload mapLink)
             {
@@ -216,6 +253,23 @@ public sealed class ChatCaptureService : IDisposable
                 pendingType = ChatPayloadLinkType.PartyFinder;
                 pendingPartyFinderLink = pfLink;
             }
+            else if (payload is AutoTranslatePayload autoTranslate)
+            {
+                CommitPending();
+
+                var phrase = autoTranslate.Text != null ? StripNativeAutoTranslateBrackets(autoTranslate.Text) : null;
+                if (!string.IsNullOrEmpty(phrase))
+                {
+                    var wrapped = AutoTranslateOpen + phrase + AutoTranslateClose;
+                    links.Add(new ChatPayloadLink
+                    {
+                        Type = ChatPayloadLinkType.AutoTranslate,
+                        Start = body.Length,
+                        Length = wrapped.Length,
+                    });
+                    body.Append(wrapped);
+                }
+            }
             else if (payload is not (UIForegroundPayload or UIGlowPayload))
             {
                 // Anything else (a RawPayload closing marker, another unrelated payload, ...) ends the
@@ -226,17 +280,29 @@ public sealed class ChatCaptureService : IDisposable
 
         CommitPending();
 
-        return links;
+        return (body.ToString(), links);
     }
 
-    /// <summary>Best-effort text match for FFXIV's own "invalid slash command" system message
-    /// (something like <c>The command "/xyz" does not exist.</c>) - chat type alone
-    /// (<see cref="CommandErrorChatTypes"/>) isn't specific enough on its own, since the same error
-    /// channels also carry unrelated in-game errors (failed actions, out-of-range targets, etc.) that
-    /// would otherwise make <see cref="Configuration.NotifyOnInvalidCommand"/> noisy well beyond just
-    /// bad commands. English-client text only - not verified against other game languages.</summary>
-    private static bool LooksLikeInvalidCommandError(string body) =>
-        body.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
+    /// <summary>Best-effort text match against a curated set of FFXIV's own system messages about a
+    /// *typed chat action* failing - chat type alone (<see cref="CommandErrorChatTypes"/>) isn't
+    /// specific enough on its own, since the same error channels also carry unrelated in-game errors
+    /// (failed actions, out-of-range targets, etc.) that would otherwise make
+    /// <see cref="Configuration.NotifyOnInvalidCommand"/> noisy well beyond just chat problems.
+    /// <b>2026-08-17</b>: extended past just "invalid slash command" (<c>The command "/xyz" does not
+    /// exist.</c>) to also catch the chat-spam-guard message (<c>Your message was not heard. You must
+    /// wait before using /tell, /say, /yell, or /shout again.</c>) - reported live as easy to miss the
+    /// same way the original invalid-command case was. Deliberately a short, exact-phrase allowlist
+    /// rather than a broader heuristic - each addition should be a real message seen live, not a
+    /// guess, to avoid false-positiving on unrelated errors sharing the same chat channels. English-
+    /// client text only - not verified against other game languages.</summary>
+    private static readonly string[] ChatSystemErrorMarkers =
+    {
+        "does not exist", // invalid slash command, e.g. "/xyz"
+        "was not heard", // /tell, /say, /yell, /shout spam guard
+    };
+
+    private static bool LooksLikeChatSystemError(string body) =>
+        ChatSystemErrorMarkers.Any(marker => body.Contains(marker, StringComparison.OrdinalIgnoreCase));
 
     private static bool MatchesFilter(ChatTabConfig tab, string body) => tab.FilterMode switch
     {

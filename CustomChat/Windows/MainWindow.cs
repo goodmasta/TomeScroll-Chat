@@ -10,6 +10,7 @@ using Dalamud.Interface;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
+using CustomChat.Services;
 using CustomChat.Utility;
 
 namespace CustomChat.Windows;
@@ -84,6 +85,20 @@ public sealed class MainWindow : Window, IDisposable
     private string inputText = string.Empty;
     private string emoteSearch = string.Empty;
     private bool refocusInput;
+
+    /// <summary>Up/down-arrow send history, one <see cref="SendHistoryTracker"/> per tab (created
+    /// lazily via <see cref="GetSendHistory"/>) - a tab bar switches between several tabs sharing this
+    /// one window, unlike <see cref="Windows.DetachedTabWindow"/> which only ever has the one tab it
+    /// was popped out for and so just keeps a single tracker.</summary>
+    private readonly Dictionary<Guid, SendHistoryTracker> sendHistory = new();
+
+    private SendHistoryTracker GetSendHistory(Guid tabId)
+    {
+        if (!sendHistory.TryGetValue(tabId, out var tracker))
+            sendHistory[tabId] = tracker = new SendHistoryTracker();
+        return tracker;
+    }
+
     private string? pendingPrefillText;
     /// <summary>Set alongside consuming <see cref="pendingPrefillText"/> - forces the cursor to land
     /// right after the inserted text on that same frame (see the callback in <see cref="DrawInputRow"/>)
@@ -96,6 +111,27 @@ public sealed class MainWindow : Window, IDisposable
     /// <see cref="Services.NativeItemLinkWatcher"/>), consumed in order by each "&lt;link&gt;"
     /// placeholder in <see cref="inputText"/> at send time - see <see cref="AttachItemLink"/>.</summary>
     private readonly List<PendingItemLink> pendingItemLinks = new();
+
+    /// <summary>Party Finder listing links queued via the native "Relay" action (see
+    /// <see cref="Services.NativePartyFinderLinkWatcher"/>), consumed in order by each
+    /// "&lt;pflink&gt;" placeholder in <see cref="inputText"/> at send time - see
+    /// <see cref="AttachPartyFinderLink"/>.</summary>
+    private readonly List<PendingPartyFinderLink> pendingPartyFinderLinks = new();
+
+    /// <summary>Auto-translate dictionary phrases picked via <see cref="Windows.AutoTranslatePicker"/>
+    /// (Tab in the compose box), consumed in order by each "&lt;atlink&gt;" placeholder in
+    /// <see cref="inputText"/> at send time.</summary>
+    private readonly List<PendingAutoTranslateLink> pendingAutoTranslateLinks = new();
+    private string autoTranslateSearch = string.Empty;
+
+    /// <summary>Whatever <see cref="ExtractTrailingWord"/> found in <see cref="inputText"/> the moment
+    /// Tab opened the picker - stripped back off the compose box once a phrase is actually picked (see
+    /// <see cref="AttachAutoTranslateLink"/>), so the typed word gets *replaced*, not just used to
+    /// filter the popup and then left behind. Only removed if <see cref="inputText"/> still ends with
+    /// it unchanged at pick time - defensive in case something else edited the box while the popup was
+    /// open.</summary>
+    private string autoTranslateReplacingWord = string.Empty;
+    private const string AutoTranslateLinkPlaceholder = "<atlink>";
 
     // Bumped every time a message is sent, and folded into the input box's ImGui id (see
     // DrawInputRow). Without EnterReturnsTrue (removed for the multi-line Shift+Enter rework), ImGui
@@ -190,6 +226,18 @@ public sealed class MainWindow : Window, IDisposable
             IconOffset = new Vector2(2, 1),
             ShowTooltip = () => ImGui.SetTooltip("Custom Chat settings"),
             Click = _ => plugin.OpenSettings(),
+        });
+
+        // Deliberately its own dedicated title bar button rather than folded into Settings - per
+        // explicit user request, and Configuration.AutoReplyEnabled's own doc comment (this is the
+        // highest-risk feature in the plugin - sends real messages with no per-message confirmation -
+        // so it gets a visible, dedicated entry point rather than being buried in a settings tab).
+        TitleBarButtons.Add(new TitleBarButton
+        {
+            Icon = FontAwesomeIcon.Robot,
+            IconOffset = new Vector2(2, 1),
+            ShowTooltip = () => ImGui.SetTooltip("Auto-reply settings"),
+            Click = _ => ImGui.OpenPopup(AutoReplyPopupId),
         });
 
         // Kept as a field (rather than only ever living inside TitleBarButtons) so PreDraw can add/
@@ -342,6 +390,63 @@ public sealed class MainWindow : Window, IDisposable
         refocusInput = true;
     }
 
+    /// <summary>"Generate AI Reply" (message right-click menu) - fires the actual (async) generation
+    /// via <see cref="Services.AiReplyService"/> and, once it lands, inserts the result the same way
+    /// <see cref="PrefillInput"/> does (appended after whatever's already typed, not replacing it).
+    /// <see cref="Services.AiReplyService.GenerateReplyAsync"/> already shows its own
+    /// <see cref="Services.NotificationService"/> toast on failure (not configured, request failed), so
+    /// nothing else here needs to handle a null result beyond just not inserting anything.</summary>
+    private async void GenerateAiReply(ChatMessageRecord msg)
+    {
+        var reply = await plugin.AiReplyService.GenerateReplyAsync(msg.SenderName, msg.Body).ConfigureAwait(false);
+        if (!string.IsNullOrEmpty(reply))
+            PrefillInput(reply);
+    }
+
+    /// <summary>Compose box right-click -> "Rephrase" - sends whatever's currently typed to Gemini via
+    /// <see cref="Services.AiReplyService.RephraseAsync"/> and, once it lands, *replaces* the box
+    /// outright (unlike <see cref="PrefillInput"/>, which appends - rephrasing the whole thing then
+    /// keeping the original around too wouldn't make sense). Guards against the player having changed
+    /// or sent the box in the few seconds this took (the async round trip isn't instant) - only applies
+    /// the result if <see cref="inputText"/> still matches what was actually sent for rephrasing,
+    /// otherwise silently drops it rather than clobbering whatever's there now. Uses the same
+    /// <see cref="inputGeneration"/>-bump trick as Enter-clear/history-navigation (see that field's own
+    /// doc comment) - an external mutation like this is otherwise silently ignored by a still-focused
+    /// InputText widget.</summary>
+    private async void RephraseInput()
+    {
+        var original = inputText;
+        if (string.IsNullOrWhiteSpace(original))
+            return;
+
+        var rephrased = await plugin.AiReplyService.RephraseAsync(original).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(rephrased) || inputText != original)
+            return;
+
+        inputText = rephrased;
+        inputGeneration++;
+        refocusInput = true;
+    }
+
+    /// <summary>Compose box right-click -> "Fix errors" - same shape as <see cref="RephraseInput"/>
+    /// (see its own doc comment for the snapshot/race-guard and inputGeneration-bump reasoning), just
+    /// calling <see cref="Services.AiReplyService.CorrectAsync"/> instead (fixes spelling/grammar only,
+    /// doesn't otherwise reword).</summary>
+    private async void CorrectInput()
+    {
+        var original = inputText;
+        if (string.IsNullOrWhiteSpace(original))
+            return;
+
+        var corrected = await plugin.AiReplyService.CorrectAsync(original).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(corrected) || inputText != original)
+            return;
+
+        inputText = corrected;
+        inputGeneration++;
+        refocusInput = true;
+    }
+
     /// <summary>Placeholder text inserted into the compose box the moment an item gets linked via the
     /// native "Link" action - swapped for the real link at send time (see <see cref="Services.ChatSendService"/>),
     /// same approach ChatTwo uses for this. Kept in sync with <c>ChatSendService.LinkPlaceholder</c>.</summary>
@@ -365,6 +470,55 @@ public sealed class MainWindow : Window, IDisposable
         inputText += ItemLinkPlaceholder;
     }
 
+    /// <summary>Placeholder text inserted into the compose box the moment a Party Finder listing gets
+    /// relayed via the native Party Finder window's own "Relay" action - swapped for the real link at
+    /// send time (see <see cref="Services.ChatSendService"/>). Kept in sync with
+    /// <c>ChatSendService.PartyFinderLinkPlaceholder</c>.</summary>
+    private const string PartyFinderLinkPlaceholder = "<pflink>";
+
+    /// <summary>Queues a Party Finder listing link and drops a "&lt;pflink&gt;" placeholder into the
+    /// compose box - the <see cref="Services.NativePartyFinderLinkWatcher"/> handler for the native
+    /// "Relay" action. Same shape as <see cref="AttachItemLink"/>, including landing on the main
+    /// window's shared compose state regardless of which tab/window last had focus, and not stealing
+    /// focus (relaying a listing is as incidental as linking an item).</summary>
+    public void AttachPartyFinderLink(PendingPartyFinderLink link)
+    {
+        pendingPartyFinderLinks.Add(link);
+        if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+            inputText += " ";
+        inputText += PartyFinderLinkPlaceholder;
+    }
+
+    /// <summary>Queues an auto-translate dictionary phrase and drops a "&lt;atlink&gt;" placeholder
+    /// into the compose box - <see cref="Windows.AutoTranslatePicker"/>'s pick callback. Same shape as
+    /// <see cref="AttachItemLink"/>/<see cref="AttachPartyFinderLink"/>, appended directly rather than
+    /// via a deferred pending field since, by the time a phrase is actually picked, the popup (not the
+    /// input box) has had focus for at least a frame - the same "nothing here also grants keyboard
+    /// focus on the same frame" reasoning that already lets the emote picker's own append skip
+    /// <see cref="PrefillInput"/>'s one-frame deferral. First strips <see cref="autoTranslateReplacingWord"/>
+    /// (whatever was typed when Tab opened the picker, see <see cref="DrawInputRow"/>) back off the
+    /// compose box if it's still there unchanged - reported as unhelpful otherwise (the typed word was
+    /// only used to filter the popup, then left sitting right next to the inserted phrase).</summary>
+    private void AttachAutoTranslateLink(AutoTranslatePhrase phrase)
+    {
+        pendingAutoTranslateLinks.Add(new PendingAutoTranslateLink(phrase.Group, phrase.RowId, phrase.Text));
+        if (autoTranslateReplacingWord.Length > 0 && inputText.EndsWith(autoTranslateReplacingWord, StringComparison.Ordinal))
+            inputText = inputText[..^autoTranslateReplacingWord.Length];
+        if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+            inputText += " ";
+        inputText += AutoTranslateLinkPlaceholder;
+    }
+
+    /// <summary>Whatever's typed after the last space/newline (or the whole trimmed text if there's
+    /// no whitespace in it at all) - used to pre-fill the auto-translate picker's search box with
+    /// whatever the player was in the middle of typing when they pressed Tab.</summary>
+    private static string ExtractTrailingWord(string text)
+    {
+        var trimmed = text.TrimEnd();
+        var lastBreak = trimmed.LastIndexOfAny(new[] { ' ', '\n' });
+        return lastBreak >= 0 ? trimmed[(lastBreak + 1)..] : trimmed;
+    }
+
     /// <summary>This window's actual current on-screen position/size, in the same coordinate space as
     /// <see cref="ImGuiHelpers.MainViewport"/> - captured here (inside <c>Draw()</c>, the only place
     /// this window's own <c>ImGui.GetWindowPos/Size()</c> queries are valid, *before* Begin()/End() -
@@ -379,10 +533,79 @@ public sealed class MainWindow : Window, IDisposable
 
     public Vector2 ScreenSize { get; private set; }
 
+    private const string AutoReplyPopupId = "AutoReplyPopup";
+
+    /// <summary>The main window title bar's robot-icon button opens this - checked *before* the
+    /// <see cref="isChatHidden"/> early-return below, since the title bar (and its buttons) render and
+    /// work regardless of whether the chat body itself is hidden this frame, same reasoning as
+    /// <see cref="hideChatButton"/>'s own doc comment. If this were checked after that early return,
+    /// clicking the button while chat is hidden would open the popup but never actually draw it.</summary>
+    private void DrawAutoReplyPopup()
+    {
+        if (!ImGui.BeginPopup(AutoReplyPopupId))
+            return;
+
+        var configuration = Plugin.Configuration;
+
+        ImGui.TextUnformatted("Auto-reply");
+        ImGui.TextDisabled("Sends a fixed message automatically - to whispers, and/or when your name is mentioned in Say/Yell/Shout/Party/FC/Alliance/Linkshells (always replied to as a whisper, never posted into the public channel itself).");
+        ImGui.Spacing();
+
+        var enabled = configuration.AutoReplyEnabled;
+        if (ImGui.Checkbox("Enabled", ref enabled))
+        {
+            configuration.AutoReplyEnabled = enabled;
+            configuration.Save();
+        }
+
+        using (ImRaii.Disabled(!configuration.AutoReplyEnabled))
+        {
+            var message = configuration.AutoReplyMessage;
+            ImGui.SetNextItemWidth(340);
+            if (ImGui.InputTextMultiline("##autoReplyMessage", ref message, 500, new Vector2(340, 60)))
+            {
+                configuration.AutoReplyMessage = message;
+                configuration.Save();
+            }
+
+            if (ImGui.Button("Reset to default message"))
+            {
+                configuration.AutoReplyMessage = Configuration.DefaultAutoReplyMessage;
+                configuration.Save();
+            }
+
+            var toWhispers = configuration.AutoReplyToWhispers;
+            if (ImGui.Checkbox("Reply to whispers", ref toWhispers))
+            {
+                configuration.AutoReplyToWhispers = toWhispers;
+                configuration.Save();
+            }
+
+            var toMentions = configuration.AutoReplyToMentions;
+            if (ImGui.Checkbox("Reply when mentioned (Say/Yell/Shout/Party/FC/Alliance/LS)", ref toMentions))
+            {
+                configuration.AutoReplyToMentions = toMentions;
+                configuration.Save();
+            }
+
+            var cooldown = configuration.AutoReplyCooldownMinutes;
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.InputInt("Cooldown per sender (minutes)", ref cooldown))
+            {
+                configuration.AutoReplyCooldownMinutes = Math.Clamp(cooldown, 1, 1440);
+                configuration.Save();
+            }
+        }
+
+        ImGui.EndPopup();
+    }
+
     public override void Draw()
     {
         ScreenPosition = ImGui.GetWindowPos();
         ScreenSize = ImGui.GetWindowSize();
+
+        DrawAutoReplyPopup();
 
         // Nothing drawn while hidden - the title bar (and the eye button on it) still renders
         // regardless, since that happens as part of Begin() itself, outside this method entirely.
@@ -429,10 +652,21 @@ public sealed class MainWindow : Window, IDisposable
                 // group (not above the regular tabs) so a new whisper is easy to spot without
                 // reshuffling the whole sidebar. OrderBy/ThenBy are stable, so ties (same PM-ness,
                 // same unread-ness) keep their original relative order.
+                //
+                // Fixed 2026-08-17: the currently-selected tab used to bubble like any other PM tab
+                // once its UnreadCount ticked above 0 - fine normally, since a tab you're actively
+                // looking at gets its count decayed back to 0 within a frame or two (see the Discord-
+                // style unread tracking system). But under a fast burst of incoming messages (reported
+                // live as "friend list spams me"), UnreadCount can tick up and immediately back down
+                // *every single message*, faster than the eye tracks - each tick flips this tab's sort
+                // key, which reshuffles/reflows the *entire* PM group around it every time, visible as
+                // the whole friend-tabs block repeatedly vanishing and reappearing. There's no reason
+                // for the tab you're already looking at to ever jump position from its own traffic in
+                // the first place, so it's excluded from the bubble-to-top treatment entirely now.
                 var orderedTabs = plugin.TabManager.Tabs
                     .Where(t => !t.IsDetached)
                     .OrderBy(t => t.IsPmTab ? 1 : 0)
-                    .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 ? 0 : 1)
+                    .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
                     .ToList();
 
                 foreach (var tab in orderedTabs)
@@ -473,7 +707,10 @@ public sealed class MainWindow : Window, IDisposable
         var allTabs = plugin.TabManager.Tabs;
         var totalTabCount = allTabs.Count;
         var pmTabCount = allTabs.Count(t => t.IsPmTab);
-        var unreadTotal = allTabs.Sum(t => t.UnreadCount);
+        // Excludes tabs with their unread indicator muted (Settings > Tabs) - a tab's own row already
+        // hides its "(N)"/blink for these (see DrawTabRow), so this aggregate should agree rather than
+        // still counting an unread number the player has deliberately chosen not to see anywhere.
+        var unreadTotal = allTabs.Where(t => !t.MuteUnreadIndicator).Sum(t => t.UnreadCount);
         ImGui.TextDisabled($"{totalTabCount} tabs, {pmTabCount} PM, {unreadTotal} unread");
 
         var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
@@ -710,7 +947,7 @@ public sealed class MainWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.ItemTooltipService, plugin.ItemContextService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, GenerateAiReply, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.ItemTooltipService, plugin.ItemContextService, plugin.NotificationService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
                     // Unread count shrinks as messages actually scroll into view, not all at once on
@@ -1169,6 +1406,31 @@ public sealed class MainWindow : Window, IDisposable
             });
         }
 
+        if (ImGui.BeginPopupContextItem($"inputctx_{tab.Id}"))
+        {
+            // Hidden entirely without a Gemini API key configured, per explicit user request - checked
+            // *inside* BeginPopupContextItem's block (not short-circuited into the condition above),
+            // since that call still needs its matching EndPopup() below regardless of this check -
+            // ImGui's Begin/End stack has to stay balanced whenever BeginPopupContextItem returns true.
+            if (!string.IsNullOrWhiteSpace(Plugin.Configuration.GeminiApiKey))
+            {
+                using (ImRaii.Disabled(string.IsNullOrWhiteSpace(inputText)))
+                {
+                    if (ImGui.MenuItem("Rephrase"))
+                        RephraseInput();
+
+                    if (ImGui.MenuItem("Fix errors"))
+                        CorrectInput();
+                }
+            }
+            else
+            {
+                ImGui.TextDisabled("Set a Gemini API key (Settings > AI) to use Rephrase/Fix errors.");
+            }
+
+            ImGui.EndPopup();
+        }
+
         // A multi-line InputText has no "Enter submits" concept of its own - by default Enter (with
         // or without Shift) always just inserts a newline, which is exactly what's wanted for
         // Shift+Enter but not for a plain Enter, which should send instead. Rather than fight ImGui's
@@ -1190,6 +1452,44 @@ public sealed class MainWindow : Window, IDisposable
             inputGeneration++;
             refocusInput = true;
         }
+
+        // Up/down-arrow send history - only hijacks the arrow while the box is empty or already mid-
+        // browse, so a normal multi-line message (Shift+Enter) still lets Up/Down move the cursor
+        // between its own lines like any ordinary InputText, untouched, until the box is emptied again.
+        if (ImGui.IsItemFocused() && (ImGui.IsKeyPressed(ImGuiKey.UpArrow, false) || ImGui.IsKeyPressed(ImGuiKey.DownArrow, false)))
+        {
+            var up = ImGui.IsKeyPressed(ImGuiKey.UpArrow, false);
+            var tracker = GetSendHistory(tab.Id);
+            if (tracker.IsBrowsing || string.IsNullOrEmpty(inputText))
+            {
+                var replacement = tracker.Navigate(up, inputText);
+                if (replacement != null)
+                {
+                    inputText = replacement;
+                    // Same "still-focused widget silently ignores an external mutation" gotcha the
+                    // Enter-key handling above already works around - see the inputGeneration field
+                    // comment.
+                    inputGeneration++;
+                    refocusInput = true;
+                }
+            }
+        }
+
+        // Tab opens the auto-translate dictionary picker - the same key the native chat box uses to
+        // bring up its own (numbered/paginated) phrase browser. Search-driven here instead of
+        // replicating that exact native menu (see AutoTranslatePicker's own doc comment). Pre-filled
+        // with whatever's already typed (the trailing word, so "night<Tab>" starts the picker already
+        // filtered to "night") rather than always opening empty - reported as unhelpful otherwise
+        // ("слово введенное в текстбокс не учитывается"). Left in the compose box either way (not
+        // stripped) - the placeholder just gets appended after it as usual.
+        if (ImGui.IsItemFocused() && ImGui.IsKeyPressed(ImGuiKey.Tab, false))
+        {
+            autoTranslateReplacingWord = ExtractTrailingWord(inputText);
+            autoTranslateSearch = autoTranslateReplacingWord;
+            ImGui.OpenPopup($"AutoTranslatePicker_{tab.Id}");
+        }
+
+        AutoTranslatePicker.Draw($"AutoTranslatePicker_{tab.Id}", plugin.AutoTranslatePhraseService, ref autoTranslateSearch, AttachAutoTranslateLink);
 
         // Right-click the input box to translate what's typed - the whole text, or just the current
         // selection if there is one.
@@ -1252,14 +1552,18 @@ public sealed class MainWindow : Window, IDisposable
 
         EmotePicker.Draw($"EmotePicker_{tab.Id}", plugin.EmoteService, ref emoteSearch, code =>
         {
-            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + code + " ";
+            inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + $":{code}:" + " ";
         });
 
-        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0))
+        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0 || pendingPartyFinderLinks.Count > 0 || pendingAutoTranslateLinks.Count > 0))
         {
-            plugin.SendFromTab(tab, StripWrapNewlines(inputText), pendingItemLinks);
+            var textToSend = StripWrapNewlines(inputText);
+            GetSendHistory(tab.Id).Push(textToSend); // recorded even for a "<link>"/"<pflink>"/"<atlink>" placeholder-only send - the attachment itself isn't preserved for recall, just the typed text
+            plugin.SendFromTab(tab, textToSend, pendingItemLinks, pendingPartyFinderLinks, pendingAutoTranslateLinks);
             inputText = string.Empty;
             pendingItemLinks.Clear();
+            pendingPartyFinderLinks.Clear();
+            pendingAutoTranslateLinks.Clear();
             wrapNewlines.Clear();
             lastWrapSnapshot = Array.Empty<byte>();
         }

@@ -31,7 +31,20 @@ public sealed class GeminiService : IDisposable
     /// frequent, low-stakes call like translating one chat line).</summary>
     public const string DefaultModel = "gemini-3.5-flash-lite";
 
-    private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(20) };
+    /// <summary>Fixed 2026-08-17: reported live as an intermittent <c>SSL connection could not be
+    /// established... Received an unexpected EOF or 0 bytes from the transport stream</c> failure -
+    /// the classic symptom of a long-lived <see cref="HttpClient"/>'s pooled connection going stale
+    /// (a NAT/firewall/idle timeout silently closes the underlying TCP connection while unused between
+    /// translation requests, which only surfaces as an error on the *next* reuse attempt, well after
+    /// the connection actually died). This service's <c>http</c> field lives for the whole plugin
+    /// session, so without this its connection pool can accumulate arbitrarily stale entries.
+    /// <see cref="SocketsHttpHandler.PooledConnectionLifetime"/> proactively recycles connections older
+    /// than this instead of waiting for one to fail - standard .NET guidance for exactly this failure
+    /// mode (see learn.microsoft.com/dotnet/fundamentals/networking/http/httpclient-guidelines).</summary>
+    private readonly HttpClient http = new(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+    {
+        Timeout = TimeSpan.FromSeconds(20),
+    };
     private readonly IPluginLog log;
     private readonly Configuration configuration;
 

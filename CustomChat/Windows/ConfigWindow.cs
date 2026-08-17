@@ -100,12 +100,12 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.Spacing();
         var notifyOnInvalidCommand = configuration.NotifyOnInvalidCommand;
-        if (ImGui.Checkbox("Popup when a typed command doesn't exist", ref notifyOnInvalidCommand))
+        if (ImGui.Checkbox("Popup on chat errors (invalid command, rate-limited, etc.)", ref notifyOnInvalidCommand))
         {
             configuration.NotifyOnInvalidCommand = notifyOnInvalidCommand;
             configuration.Save();
         }
-        ImGui.TextDisabled("Easy to miss the game's own \"command does not exist\" error otherwise, especially with the native chat window hidden (General) or no tab showing the Error channel.");
+        ImGui.TextDisabled("Easy to miss the game's own errors otherwise (e.g. \"command does not exist\", or \"your message was not heard\" after sending /tell, /say, /yell, /shout too fast), especially with the native chat window hidden (General) or no tab showing the Error channel.");
 
         ImGui.Separator();
         ImGui.TextUnformatted("Unread indicator colours");
@@ -177,6 +177,54 @@ public sealed class ConfigWindow : Window, IDisposable
 
         ImGui.Spacing();
         ImGui.TextUnformatted(plugin.GeminiService.IsConfigured ? "Status: configured." : "Status: no API key set.");
+
+        ImGui.Separator();
+        ImGui.TextUnformatted("AI Reply");
+        ImGui.TextDisabled("\"Generate AI Reply\" on a message's right-click menu drafts a reply via Gemini (using the API key/model above) and drops it into the compose box - never sent automatically, just a starting point to review/edit.");
+        ImGui.Spacing();
+
+        var aiReplyPrompt = configuration.AiReplyPrompt;
+        ImGui.SetNextItemWidth(420);
+        if (ImGui.InputTextMultiline("##aiReplyPrompt", ref aiReplyPrompt, 2000, new Vector2(420, 90)))
+        {
+            configuration.AiReplyPrompt = aiReplyPrompt;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Instructions sent to Gemini ahead of the message being replied to - edit this to steer tone/persona.");
+
+        if (ImGui.Button("Reset prompt to default"))
+        {
+            configuration.AiReplyPrompt = AiReplyService.DefaultPrompt;
+            configuration.Save();
+        }
+
+        ImGui.Spacing();
+        var aiReplyMemoryEnabled = configuration.AiReplyMemoryEnabled;
+        if (ImGui.Checkbox("Remember past replies##aiReplyMemory", ref aiReplyMemoryEnabled))
+        {
+            configuration.AiReplyMemoryEnabled = aiReplyMemoryEnabled;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Feeds your own previous (message, reply) pairs back to Gemini as context on every new generation, so replies stay consistent instead of each one starting cold.");
+
+        using (ImRaii.Disabled(!configuration.AiReplyMemoryEnabled))
+        {
+            var aiReplyMemoryLimit = configuration.AiReplyMemoryLimit;
+            ImGui.SetNextItemWidth(120);
+            if (ImGui.InputInt("Remembered exchanges##aiReplyMemoryLimit", ref aiReplyMemoryLimit))
+            {
+                configuration.AiReplyMemoryLimit = Math.Clamp(aiReplyMemoryLimit, 1, 100);
+                configuration.Save();
+            }
+        }
+
+        var memoryCount = plugin.AiReplyService.Memory.Count;
+        ImGui.TextDisabled($"Currently remembering {memoryCount} exchange{(memoryCount == 1 ? "" : "s")}.");
+        using (ImRaii.Disabled(memoryCount == 0))
+        {
+            if (ImGui.Button("Clear AI reply memory"))
+                plugin.AiReplyService.ClearMemory();
+        }
     }
 
     private void DrawGeneral()
@@ -315,6 +363,37 @@ public sealed class ConfigWindow : Window, IDisposable
         if (configuration.TranslationEngine == TranslationEngine.Gemini && !plugin.GeminiService.IsConfigured)
             ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set - see the AI tab.");
 
+        ImGui.Spacing();
+
+        var dialogueWindowEnabled = configuration.EnableDialogueTranslationWindow;
+        if (ImGui.Checkbox("Story & dialogue translation window", ref dialogueWindowEnabled))
+        {
+            configuration.EnableDialogueTranslationWindow = dialogueWindowEnabled;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("A separate window showing only translated NPC dialogue, cutscene lines, and quest toasts - stays visible during cutscenes, unlike the main chat window.");
+
+        using (ImRaii.Disabled(!configuration.EnableDialogueTranslationWindow))
+        {
+            var dialogueAutoHide = configuration.DialogueTranslationAutoHide;
+            if (ImGui.Checkbox("Auto-hide after no new lines##dialogueAutoHide", ref dialogueAutoHide))
+            {
+                configuration.DialogueTranslationAutoHide = dialogueAutoHide;
+                configuration.Save();
+            }
+
+            using (ImRaii.Disabled(!configuration.DialogueTranslationAutoHide))
+            {
+                var dialogueAutoHideSeconds = configuration.DialogueTranslationAutoHideSeconds;
+                ImGui.SetNextItemWidth(150);
+                if (ImGui.InputFloat("Seconds##dialogueAutoHideSeconds", ref dialogueAutoHideSeconds, 1f, 10f, "%.0f"))
+                {
+                    configuration.DialogueTranslationAutoHideSeconds = Math.Clamp(dialogueAutoHideSeconds, 1f, 600f);
+                    configuration.Save();
+                }
+            }
+        }
+
         ImGui.Separator();
 
         var friendMarkerEnabled = configuration.FriendMarkerEnabled;
@@ -375,6 +454,9 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled("Oldest messages are deleted first once this limit is exceeded (emote image cache is separate and not counted here).");
 
+        var currentSizeMb = plugin.ChatHistoryService.GetCurrentSizeBytes() / (1024.0 * 1024.0);
+        ImGui.TextDisabled($"Currently using {currentSizeMb:N1} MiB on disk.");
+
         if (avgBytesPerMessageCache == null || DateTime.UtcNow - avgBytesPerMessageCacheTime > TimeSpan.FromSeconds(10))
         {
             avgBytesPerMessageCache = plugin.ChatHistoryService.EstimateAverageBytesPerMessage();
@@ -392,7 +474,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.Spacing();
         if (ImGui.Button("Reset settings to defaults..."))
             ImGui.OpenPopup("CustomChatResetSettingsConfirm");
-        ImGui.TextDisabled("Resets every setting on this page and the Emotes tab. Tabs (channels, colours, filters) are left alone.");
+        ImGui.TextDisabled("Resets every setting on this page and the Emotes tab, and your tabs back to the five built-in ones.");
 
         DrawClearHistoryConfirmPopup();
         DrawResetSettingsConfirmPopup();
@@ -428,7 +510,7 @@ public sealed class ConfigWindow : Window, IDisposable
             return;
 
         ImGui.TextUnformatted("Reset all settings to their defaults?");
-        ImGui.TextDisabled("Tabs, whisper history, and emote cache are not affected - only preferences on this\npage and the Emotes tab (colours, font size, translation language, notifications, etc).");
+        ImGui.TextDisabled("Also resets your tabs back to the five built-in ones (Party/General/Free\nCompany/Novice Chat/Log) - any custom tabs and per-tab colour overrides are lost. Whisper\nhistory and the emote cache are not affected - only preferences and tabs.");
         ImGui.Spacing();
 
         if (ImGui.Button("Yes, reset everything"))
@@ -840,6 +922,75 @@ public sealed class ConfigWindow : Window, IDisposable
                             configuration.PlayerMessageColors.Remove(playerKey);
                             configuration.Save();
                         }
+                    }
+                }
+            }
+        }
+
+        DrawFriendOnlineNotifications();
+    }
+
+    /// <summary>Settings > Players section for <see cref="Services.FriendOnlineWatcherService"/> - a
+    /// master toggle, "watch every friend" vs. a specific checklist pulled live from
+    /// <see cref="Plugin.FriendListService"/>. The checklist can come back empty if the native friend
+    /// list hasn't been populated yet this session (see that service's own doc comment) - the hint text
+    /// below explains that rather than just showing a silently empty box.</summary>
+    private void DrawFriendOnlineNotifications()
+    {
+        ImGui.Separator();
+        ImGui.TextUnformatted("Friend online/offline notifications");
+
+        var enabled = configuration.FriendOnlineNotifyEnabled;
+        if (ImGui.Checkbox("Notify when a watched friend logs in or out", ref enabled))
+        {
+            configuration.FriendOnlineNotifyEnabled = enabled;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Also briefly opens your own native Friend List window once on login so the list loads fully - feel free to close it, status itself is refreshed every 10 seconds in the background regardless. A friend already online when you enable this notifies right away, not just on a later change. Use '/customchat friends' to bring the window back if you closed it.");
+
+        using (ImRaii.Disabled(!configuration.FriendOnlineNotifyEnabled))
+        {
+            ImGui.Spacing();
+            var watchAll = configuration.FriendOnlineNotifyAll;
+            if (ImGui.Checkbox("Watch every friend##friendonlineall", ref watchAll))
+            {
+                configuration.FriendOnlineNotifyAll = watchAll;
+                configuration.Save();
+            }
+
+            using (ImRaii.Disabled(configuration.FriendOnlineNotifyAll))
+            {
+                ImGui.TextUnformatted("Or pick specific friends:");
+                // Fixed 2026-08-17: this used to call FriendListService.GetAllFriends() - a live
+                // native read - every single ImGui frame this settings tab is open. Reported live as
+                // the checkbox list visibly reshuffling/reloading while trying to click through it,
+                // making it impossible to configure normally - a live read every frame is both
+                // wasteful and exposed to the same "briefly empty/reordered while a background
+                // RequestRefresh() is in flight" issue fixed elsewhere in FriendOnlineWatcherService.
+                // GetCachedFriendKeys() reads the same stable snapshot that service already maintains
+                // (refreshed on its own controlled timer, not live here), sorted for a fixed display
+                // order - Key and DisplayName are identical strings in GetAllFriends() too, so nothing
+                // is lost by building the pair straight from the cached key set.
+                var friends = plugin.FriendListService.GetCachedFriendKeys().OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+                using (var child = ImRaii.Child("FriendOnlineList", new Vector2(0, 180), true))
+                {
+                    if (child.Success)
+                    {
+                        foreach (var key in friends)
+                        {
+                            var isSelected = configuration.FriendOnlineNotifyKeys.Contains(key);
+                            if (ImGui.Checkbox($"{key}##friendonline_{key}", ref isSelected))
+                            {
+                                if (isSelected)
+                                    configuration.FriendOnlineNotifyKeys.Add(key);
+                                else
+                                    configuration.FriendOnlineNotifyKeys.Remove(key);
+                                configuration.Save();
+                            }
+                        }
+
+                        if (friends.Count == 0)
+                            ImGui.TextDisabled("No friends found yet - this plugin auto-opens your Friend List briefly after your next login to load this (see above), or open it yourself once this session.");
                     }
                 }
             }

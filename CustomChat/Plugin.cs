@@ -32,6 +32,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static IClientState ClientState { get; private set; } = null!;
+    [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
     private const string CommandName = "/customchat";
@@ -62,9 +64,15 @@ public sealed class Plugin : IDalamudPlugin
     public ItemTooltipService ItemTooltipService { get; }
     public ItemContextService ItemContextService { get; }
     public PartyFinderLinkService PartyFinderLinkService { get; }
+    public DialogueTranslationService DialogueTranslationService { get; }
+    public AutoTranslatePhraseService AutoTranslatePhraseService { get; }
+    public FriendOnlineWatcherService FriendOnlineWatcherService { get; }
+    public AiReplyService AiReplyService { get; }
+    public AutoReplyService AutoReplyService { get; }
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
+    private readonly NativePartyFinderLinkWatcher nativePartyFinderLinkWatcher;
     private readonly LinkshellWatcherService linkshellWatcherService;
     private readonly EnterToChatService enterToChatService;
 
@@ -72,6 +80,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MainWindow mainWindow;
     private readonly ConfigWindow configWindow;
     private readonly NotificationOverlay notificationOverlay;
+    private readonly DialogueTranslationWindow dialogueTranslationWindow;
     private readonly Dictionary<Guid, DetachedTabWindow> detachedWindows = new();
     private readonly CommandInfo commandInfo;
 
@@ -101,6 +110,12 @@ public sealed class Plugin : IDalamudPlugin
         ItemTooltipService = new ItemTooltipService(GameGui, Log);
         ItemContextService = new ItemContextService(Log);
         PartyFinderLinkService = new PartyFinderLinkService(Log);
+        DialogueTranslationService = new DialogueTranslationService(Framework, GameGui, ToastGui, Log, Configuration, TranslationService);
+        AutoTranslatePhraseService = new AutoTranslatePhraseService(DataManager, Log);
+        AutoTranslatePhraseService.Preload(); // off the main thread - expanding every dictionary category can be slow enough to hitch the UI if it first happened on-demand when Tab is pressed
+        FriendOnlineWatcherService = new FriendOnlineWatcherService(Framework, ClientState, GameGui, Log, Configuration, FriendListService, NotificationService);
+        AiReplyService = new AiReplyService(PluginInterface.ConfigDirectory.FullName, GeminiService, Configuration, Log, NotificationService);
+        AutoReplyService = new AutoReplyService(ChatCaptureService, ChatSendService, Configuration, NotificationService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -108,13 +123,16 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
         notificationOverlay = new NotificationOverlay(NotificationService, mainWindow);
+        dialogueTranslationWindow = new DialogueTranslationWindow(Configuration, DialogueTranslationService);
         WindowSystem.AddWindow(mainWindow);
         WindowSystem.AddWindow(configWindow);
         WindowSystem.AddWindow(notificationOverlay);
+        WindowSystem.AddWindow(dialogueTranslationWindow);
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
         nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, GameGui, Log, AttachItemLink);
+        nativePartyFinderLinkWatcher = new NativePartyFinderLinkWatcher(Framework, GameGui, Log, AttachPartyFinderLink);
         linkshellWatcherService = new LinkshellWatcherService(Framework, Log, Configuration, TabManager);
 
         foreach (var tab in TabManager.Tabs)
@@ -125,7 +143,7 @@ public sealed class Plugin : IDalamudPlugin
 
         commandInfo = new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the Custom Chat window. Use '/customchat config' for settings, '/customchat version' to check the loaded build.",
+            HelpMessage = "Open the Custom Chat window. Use '/customchat config' for settings, '/customchat version' to check the loaded build, '/customchat frienddebug' to test friend online/offline notifications, '/customchat friends' to bring the (normally off-screen) Friend List window into view.",
         };
         CommandManager.AddHandler(CommandName, commandInfo);
 
@@ -150,19 +168,45 @@ public sealed class Plugin : IDalamudPlugin
     private void OnMessageRouted(ChatTabConfig tab, ChatMessageRecord record)
     {
         TabMessageBuffer.Append(tab, record);
-        mainWindow.NotifyUnread(tab);
+
+        // Fixed 2026-08-17: this used to increment unconditionally, including for the player's own
+        // outgoing tells (every send echoes back through the same capture pipeline as an incoming
+        // message). For a whisper tab that's not just wrong "unread" accounting - MainWindow's
+        // sidebar bubbles a PM tab with UnreadCount > 0 to the top of the PM group (see DrawSidebar's
+        // OrderBy/ThenBy), and the visibility-based decay (see the "Discord-style unread tracking"
+        // system) usually brings it back to 0 within a frame or two once the just-sent message
+        // scrolls into view - net effect: sending a tell to a friend briefly bumped that tab to the
+        // top of the list and back, reported live as the sidebar/chat "blinking" specifically on
+        // send, for whisper tabs only (regular channel tabs aren't reordered by unread at all, so the
+        // same bug there was invisible). Only channel tabs never hit this path for their own outgoing
+        // messages in the first place (SendFromTab doesn't loop the sent text back through capture
+        // for non-PM tabs), so this check only ever actually matters for whispers - kept general
+        // rather than gated on tab.IsPmTab so it can't silently regress if that changes.
+        if (!IsOwnMessage(record))
+            mainWindow.NotifyUnread(tab);
+    }
+
+    /// <summary>Whether a captured message is the local player's own outgoing message - same check
+    /// <see cref="Windows.ChatMessageRenderer.DrawMessage"/> uses to show "You" instead of a name.</summary>
+    private static bool IsOwnMessage(ChatMessageRecord record)
+    {
+        var localPlayerKey = GetLocalPlayerKey();
+        var localPlayerName = localPlayerKey?.Split('@')[0];
+        return record.ChatType == XivChatType.TellOutgoing ||
+               (!string.IsNullOrEmpty(localPlayerKey) && record.SenderKey == localPlayerKey) ||
+               (!string.IsNullOrEmpty(localPlayerName) && record.SenderName == localPlayerName);
     }
 
     /// <summary>Sends text typed into a tab's input box, routed through that tab's outgoing channel
     /// command (or plain text if none is set). For whisper tabs, also primes
     /// <see cref="ChatCaptureService.PendingOutgoingTellTarget"/> so the sent tell round-trips back
     /// into the same conversation even if the game's own echo doesn't resolve a player payload.</summary>
-    public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null)
+    public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null)
     {
         if (tab.IsPmTab && tab.PmPartnerKey != null)
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
-        ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments);
+        ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments, partyFinderAttachments, autoTranslateAttachments);
     }
 
     /// <summary>Queues an item link and inserts a "&lt;link&gt;" placeholder into the compose box -
@@ -178,6 +222,12 @@ public sealed class Plugin : IDalamudPlugin
         var name = ResolveItemName(itemId) ?? $"Item #{itemId}";
         mainWindow.AttachItemLink(new PendingItemLink(itemId, isHq, name, rawPayloadBytes));
     }
+
+    /// <summary>Queues a Party Finder listing link and inserts a "&lt;pflink&gt;" placeholder into the
+    /// compose box - the native Party Finder window's own "Relay" action's handler (see
+    /// <see cref="NativePartyFinderLinkWatcher"/>).</summary>
+    private void AttachPartyFinderLink(ulong listingId, string leaderName, byte[]? rawPayloadBytes) =>
+        mainWindow.AttachPartyFinderLink(new PendingPartyFinderLink(listingId, leaderName, rawPayloadBytes));
 
     private static string? ResolveItemName(uint itemId)
     {
@@ -435,13 +485,15 @@ public sealed class Plugin : IDalamudPlugin
         TabMessageBuffer.ClearAll();
     }
 
-    /// <summary>Resets every setting (not tabs - see <see cref="Configuration.ResetToDefaults"/>) to
-    /// its default value and reapplies the handful that have side effects elsewhere beyond just being
-    /// read live each frame - the Settings "Reset settings to defaults" handler.</summary>
+    /// <summary>Resets every setting to its default value, reapplies the handful that have side effects
+    /// elsewhere beyond just being read live each frame, and - per explicit user request, 2026-08-17 -
+    /// also resets <see cref="TabManager"/> back to the five built-in tabs a brand-new install starts
+    /// with (see <see cref="Services.TabManager.ResetToDefaults"/>; any custom tabs, and any per-tab
+    /// colour override, are gone after this). The Settings "Reset settings to defaults" handler.</summary>
     public void ResetSettingsToDefaults()
     {
         Configuration.ResetToDefaults();
-        Configuration.ResetTabColors();
+        TabManager.ResetToDefaults();
         Configuration.Save();
 
         ApplyNativeChatHidden();
@@ -518,6 +570,10 @@ public sealed class Plugin : IDalamudPlugin
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
         nativeItemLinkWatcher.Dispose();
+        nativePartyFinderLinkWatcher.Dispose();
+        DialogueTranslationService.Dispose();
+        FriendOnlineWatcherService.Dispose();
+        AutoReplyService.Dispose();
         linkshellWatcherService.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();
@@ -539,6 +595,18 @@ public sealed class Plugin : IDalamudPlugin
         if (trimmed.Equals("version", StringComparison.OrdinalIgnoreCase))
         {
             PrintVersion();
+            return;
+        }
+
+        if (trimmed.Equals("frienddebug", StringComparison.OrdinalIgnoreCase))
+        {
+            FriendOnlineWatcherService.DebugCheckAndNotify();
+            return;
+        }
+
+        if (trimmed.Equals("friends", StringComparison.OrdinalIgnoreCase))
+        {
+            FriendOnlineWatcherService.ShowOnScreen();
             return;
         }
 

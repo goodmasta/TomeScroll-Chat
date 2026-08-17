@@ -28,6 +28,7 @@ public static class ChatMessageRenderer
     private static readonly Vector4 MapLinkColor = new(0.55f, 0.85f, 0.55f, 1f);
     private static readonly Vector4 ItemLinkColor = new(0.85f, 0.65f, 0.3f, 1f);
     private static readonly Vector4 PartyFinderLinkColor = new(0.65f, 0.75f, 1f, 1f);
+    private static readonly Vector4 AutoTranslateColor = new(0.6f, 0.9f, 0.9f, 1f);
     private const string RedactedName = "Player";
 
     private static readonly Dictionary<XivChatType, Vector4> DefaultColors = new()
@@ -63,6 +64,10 @@ public static class ChatMessageRenderer
     /// availability as <paramref name="onSendTell"/>.</param>
     /// <param name="onViewPlate">Called with a "Name@World" key for "View Adventurer Plate" - same
     /// availability as <paramref name="onSendTell"/>.</param>
+    /// <param name="onGenerateAiReply">Called with the whole message record for "Generate AI Reply" -
+    /// same availability as <paramref name="onSendTell"/> (no point suggesting a reply to your own
+    /// message), plus a non-empty body. The callback itself owns the actual (async) generation and
+    /// inserting the result into the compose box - see <see cref="Services.AiReplyService"/>.</param>
     /// <param name="onOpenMapLink">Called when a map/flag coordinate link in a message is clicked -
     /// see <see cref="ChatPayloadLink"/>.</param>
     /// <param name="onOpenPartyFinderLink">Called when a Party Finder listing link in a message is
@@ -71,6 +76,8 @@ public static class ChatMessageRenderer
     /// hovered - see <see cref="Services.ItemTooltipService"/>.</param>
     /// <param name="itemContextService">Backs an item link's left-click context menu (search item/
     /// search recipes/copy name) - see <see cref="Services.ItemContextService"/>.</param>
+    /// <param name="notificationService">Only used for the auto-translate "Fatcat" easter egg (see
+    /// <see cref="DrawAutoTranslateSpan"/>) - not threaded further than needed for that.</param>
     /// <param name="localPlayerKey">The local character's own "Name@World" (see
     /// <see cref="Plugin.GetLocalPlayerKey"/>), used to show "You" instead of the player's own name.</param>
     /// <param name="isFriend">Whether a "Name@World" key is on the friends list, for the marker prefix.</param>
@@ -81,7 +88,7 @@ public static class ChatMessageRenderer
     /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -96,7 +103,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onReply, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onReply, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onGenerateAiReply, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, notificationService, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -135,7 +142,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -212,7 +219,7 @@ public static class ChatMessageRenderer
         // "just make every message body in this tab one colour" instead of tuning each channel.
         var bodyColor = tab.MessageTextColorOverride ?? channelColor;
         ImGui.PushStyleColor(ImGuiCol.Text, bodyColor);
-        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, index);
+        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, notificationService, index);
         ImGui.PopStyleColor();
 
         // Settings > Tabs "Auto-translate" - fires the same request the manual "Translate" menu item
@@ -292,6 +299,15 @@ public static class ChatMessageRenderer
             // quick-<pos> button.
             if (!isOwn && !string.IsNullOrEmpty(msg.SenderName) && ImGui.MenuItem("Reply"))
                 onReply(msg.SenderName.Split(' ', 2)[0]);
+
+            // Generates via Gemini and inserts the result into the compose box once it lands (the
+            // callback owns that async round-trip - see Services.AiReplyService) - never sent
+            // automatically, just a starting point the player reviews/edits like anything else typed.
+            // Hidden entirely (not just disabled) without a Gemini API key configured, per explicit
+            // user request - same check GeminiService.IsConfigured itself does, inlined here rather
+            // than threading GeminiService all the way down just for this one flag.
+            if (!isOwn && !string.IsNullOrWhiteSpace(msg.Body) && !string.IsNullOrWhiteSpace(config.GeminiApiKey) && ImGui.MenuItem("Generate AI Reply"))
+                onGenerateAiReply(msg);
 
             if (ImGui.MenuItem("Copy message"))
                 ImGui.SetClipboardText(BuildCopyText(msg));
@@ -407,8 +423,11 @@ public static class ChatMessageRenderer
 
     /// <summary>Whether <paramref name="body"/> name-drops <paramref name="localPlayerName"/> - the
     /// full "First Last" name, or either half of it on its own (so a message just saying "Firstname"
-    /// or just "Lastname" still counts as a mention, not only the exact full name).</summary>
-    private static bool ContainsMention(string body, string localPlayerName)
+    /// or just "Lastname" still counts as a mention, not only the exact full name). Internal (not
+    /// private) so <see cref="Services.AutoReplyService"/> can reuse the exact same detection for its
+    /// "reply when mentioned" trigger, per its own doc comment ("по аналогии с тегом" - the same
+    /// mention concept as this file's own highlight, not a separate reimplementation).</summary>
+    internal static bool ContainsMention(string body, string localPlayerName)
     {
         if (string.IsNullOrEmpty(body))
             return false;
@@ -448,7 +467,7 @@ public static class ChatMessageRenderer
     /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
     /// single-token placement.
     /// </summary>
-    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, int messageIndex)
+    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, int messageIndex)
     {
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
@@ -522,10 +541,15 @@ public static class ChatMessageRenderer
                     if (word.Length == 0)
                         continue;
 
-                    if (emotes.IsKnownEmote(word))
+                    // Fixed 2026-08-17, per explicit user request: emote codes now have to be
+                    // colon-wrapped (":cat:") to render as an image, matching Discord/Slack
+                    // convention - previously a bare word like "cat" rendered as the emote
+                    // unconditionally, which could silently swallow an ordinary English word that
+                    // happened to collide with a known emote code.
+                    if (word.Length > 2 && word[0] == ':' && word[^1] == ':' && emotes.IsKnownEmote(word[1..^1]))
                     {
                         FlushPlain();
-                        DrawEmote(word, config, emotes, rightEdge, canInline);
+                        DrawEmote(word[1..^1], word, config, emotes, rightEdge, canInline);
                         canInline = true; // a single small image/fallback token, never wraps
                     }
                     else
@@ -565,6 +589,8 @@ public static class ChatMessageRenderer
                     DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, canInline),
                 { Type: ChatPayloadLinkType.PartyFinder, PartyFinder: not null } =>
                     DrawPartyFinderLink(linkText, link.PartyFinder, onOpenPartyFinderLink, rightEdge, canInline),
+                { Type: ChatPayloadLinkType.AutoTranslate } =>
+                    DrawAutoTranslateSpan(linkText, notificationService, rightEdge, canInline),
                 _ => DrawItemLink(linkText, link.Item, itemTooltipService, itemContextService, $"itemlinkctx_{messageIndex}_{link.Start}", rightEdge, canInline),
             };
 
@@ -577,10 +603,14 @@ public static class ChatMessageRenderer
         FlushPlain();
     }
 
-    /// <summary>Draws one emote token, inlining after the previous item only when that's known-safe.</summary>
-    private static void DrawEmote(string token, Configuration config, EmoteService emotes, float rightEdge, bool canInline)
+    /// <summary>Draws one emote token, inlining after the previous item only when that's known-safe.
+    /// <paramref name="code"/> (no colons) is what actually looks up the texture; <paramref
+    /// name="originalToken"/> (the colon-wrapped ":cat:" as typed) is only used for the "texture not
+    /// loaded yet" fallback text, so that momentary state still reads as the emote the player typed
+    /// rather than the bare code with its colons silently stripped.</summary>
+    private static void DrawEmote(string code, string originalToken, Configuration config, EmoteService emotes, float rightEdge, bool canInline)
     {
-        var texture = emotes.TryGetTexture(token);
+        var texture = emotes.TryGetTexture(code);
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
         var size = new Vector2(lineHeight, lineHeight);
 
@@ -595,7 +625,7 @@ public static class ChatMessageRenderer
         if (texture != null)
             ImGui.Image(texture.Handle, size);
         else
-            ImGui.TextUnformatted(token);
+            ImGui.TextUnformatted(originalToken);
     }
 
     /// <summary>
@@ -654,6 +684,40 @@ public static class ChatMessageRenderer
     /// native chat log would.</summary>
     private static bool DrawPartyFinderLink(string text, PartyFinderPayload payload, Action<PartyFinderPayload> onOpenPartyFinderLink, float rightEdge, bool canInline) =>
         DrawColoredLinkToken(text, PartyFinderLinkColor, "Open this Party Finder listing", () => onOpenPartyFinderLink(payload), rightEdge, canInline);
+
+    /// <summary>The minion name added as an easter egg (2026-08-17) after it turned out to be missing
+    /// from the auto-translate picker entirely before the sheet-expansion work - see
+    /// <see cref="Services.AutoTranslatePhraseService"/>. Two words ("Fat Cat"), not one - confirmed
+    /// live via exact codepoint logging (since removed) after the first version (one word, "fatcat")
+    /// never matched. That same investigation found the real root cause wasn't this comparison at all -
+    /// see <see cref="Services.ChatCaptureService.StripNativeAutoTranslateBrackets"/> for the actual
+    /// bug (the game's own native bracket-icon glyphs weren't being stripped before this plugin added
+    /// its own) - fixed there, so <paramref name="text"/> reaching here is already clean.</summary>
+    private const string FatcatEasterEggPhrase = "fat cat";
+
+    /// <summary>Draws an auto-translate dictionary phrase - <paramref name="text"/> already includes
+    /// the guillemets (see <see cref="Services.ChatCaptureService.BuildBodyAndPayloadLinks"/>), just
+    /// coloured distinctly so it reads as a game phrase rather than something the sender typed.
+    /// Clicking always copies the text to clipboard like any other coloured token here, plus a small
+    /// easter egg: the "Fat Cat" phrase specifically also pops a notification.</summary>
+    private static bool DrawAutoTranslateSpan(string text, NotificationService notificationService, float rightEdge, bool canInline)
+    {
+        void OnClick()
+        {
+            ImGui.SetClipboardText(text);
+
+            var normalized = text.Trim('《', '》').Trim();
+            if (normalized.Equals(FatcatEasterEggPhrase, StringComparison.OrdinalIgnoreCase))
+                // No emoji here deliberately - Dalamud's UI font has no glyphs for most emoji
+                // pictographs, confirmed live (reported rendering as a fallback "=" glyph) the same
+                // way it was already confirmed once before for the friend-marker feature (see
+                // Configuration.FriendMarkerEmoji's own doc comment) - the NotificationSeverity.Success
+                // checkmark icon this already shows is the only "special" visual marker here.
+                notificationService.Show("Meow! You found the Fat Cat easter egg.", NotificationSeverity.Success);
+        }
+
+        return DrawColoredLinkToken(text, AutoTranslateColor, "Auto-translate phrase\nClick to copy", OnClick, rightEdge, canInline);
+    }
 
     /// <summary>Draws an item link - hovering it opens the real native item detail/tooltip window
     /// (see <see cref="Services.ItemTooltipService"/>); left-clicking opens a small context menu
