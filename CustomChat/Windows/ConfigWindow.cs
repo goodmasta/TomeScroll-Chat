@@ -71,11 +71,64 @@ public sealed class ConfigWindow : Window, IDisposable
                 DrawAi();
         }
 
+        using (var notifications = ImRaii.TabItem("Notifications"))
+        {
+            if (notifications.Success)
+                DrawNotifications();
+        }
+
         using (var emotes = ImRaii.TabItem("Emotes"))
         {
             if (emotes.Success)
                 DrawEmotes();
         }
+    }
+
+    /// <summary>Every "tell me about something" setting in one place: the OS-level tray balloon
+    /// (<see cref="Services.WindowsNotificationService"/>), the in-game popup toast
+    /// (<see cref="Services.NotificationService"/>), and the default unread blink/count colours tabs
+    /// fall back to when they haven't set their own (see Tabs > "Notification colours").</summary>
+    private void DrawNotifications()
+    {
+        var notifyWhisperInWindows = configuration.NotifyWhisperInWindows;
+        if (ImGui.Checkbox("Show a Windows notification on incoming tells", ref notifyWhisperInWindows))
+        {
+            configuration.NotifyWhisperInWindows = notifyWhisperInWindows;
+            configuration.Save();
+            plugin.WindowsNotificationService.Enabled = notifyWhisperInWindows;
+        }
+        ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
+
+        ImGui.Spacing();
+        if (ImGui.Button("Test popup notification"))
+            plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);
+        ImGui.TextDisabled("A small popup in the top-right corner of the game window itself, not the Windows tray notification above - general-purpose, used to inform you of things as this plugin grows more features.");
+
+        ImGui.Separator();
+        ImGui.TextUnformatted("Unread indicator colours");
+
+        var channelBlink = configuration.ChannelBlinkColor;
+        if (ImGui.ColorEdit4("Default channel blink colour", ref channelBlink))
+        {
+            configuration.ChannelBlinkColor = channelBlink;
+            configuration.Save();
+        }
+
+        var channelCount = configuration.ChannelUnreadCountColor;
+        if (ImGui.ColorEdit4("Default channel unread count colour", ref channelCount))
+        {
+            configuration.ChannelUnreadCountColor = channelCount;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Used by tabs with \"Blink + red unread count on new messages\" enabled that haven't set their own colour (see Tabs).");
+
+        var whisperColor = configuration.WhisperNotifyColor;
+        if (ImGui.ColorEdit4("Default whisper blink + unread colour", ref whisperColor))
+        {
+            configuration.WhisperNotifyColor = whisperColor;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Whisper tabs always blink/show an unread count, and share one colour for both, unless overridden per-tab (see Tabs).");
     }
 
     /// <summary>AI agent configuration - currently just Gemini (<see cref="Services.GeminiService"/>),
@@ -216,20 +269,6 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
-        var notifyWhisperInWindows = configuration.NotifyWhisperInWindows;
-        if (ImGui.Checkbox("Show a Windows notification on incoming tells", ref notifyWhisperInWindows))
-        {
-            configuration.NotifyWhisperInWindows = notifyWhisperInWindows;
-            configuration.Save();
-            plugin.WindowsNotificationService.Enabled = notifyWhisperInWindows;
-        }
-        ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
-
-        ImGui.Spacing();
-        if (ImGui.Button("Test popup notification"))
-            plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);
-        ImGui.TextDisabled("A small popup in the top-right corner of the game window itself, not the Windows tray notification above - general-purpose, used to inform you of things as this plugin grows more features.");
-
         ImGui.Separator();
         ImGui.TextUnformatted("Translation");
 
@@ -268,32 +307,6 @@ public sealed class ConfigWindow : Window, IDisposable
 
         if (configuration.TranslationEngine == TranslationEngine.Gemini && !plugin.GeminiService.IsConfigured)
             ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set - see the AI tab.");
-
-        ImGui.Separator();
-        ImGui.TextUnformatted("Unread notifications");
-
-        var channelBlink = configuration.ChannelBlinkColor;
-        if (ImGui.ColorEdit4("Default channel blink colour", ref channelBlink))
-        {
-            configuration.ChannelBlinkColor = channelBlink;
-            configuration.Save();
-        }
-
-        var channelCount = configuration.ChannelUnreadCountColor;
-        if (ImGui.ColorEdit4("Default channel unread count colour", ref channelCount))
-        {
-            configuration.ChannelUnreadCountColor = channelCount;
-            configuration.Save();
-        }
-        ImGui.TextDisabled("Used by tabs with \"Blink + red unread count on new messages\" enabled that haven't set their own colour (see Tabs).");
-
-        var whisperColor = configuration.WhisperNotifyColor;
-        if (ImGui.ColorEdit4("Default whisper blink + unread colour", ref whisperColor))
-        {
-            configuration.WhisperNotifyColor = whisperColor;
-            configuration.Save();
-        }
-        ImGui.TextDisabled("Whisper tabs always blink/show an unread count, and share one colour for both, unless overridden per-tab (see Tabs).");
 
         ImGui.Separator();
 
