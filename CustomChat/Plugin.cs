@@ -43,6 +43,11 @@ public sealed class Plugin : IDalamudPlugin
     public ChatCaptureService ChatCaptureService { get; }
     public ChatSendService ChatSendService { get; }
     public EmoteService EmoteService { get; }
+
+    /// <summary>General-purpose Gemini API wrapper - see its own doc comment. Public so future
+    /// features beyond translation can use it directly, not just <see cref="TranslationService"/>.</summary>
+    public GeminiService GeminiService { get; }
+
     public TranslationService TranslationService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
@@ -78,7 +83,8 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, TabManager, ChatHistoryService);
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
-        TranslationService = new TranslationService(Log, ChatHistoryService);
+        GeminiService = new GeminiService(Log, Configuration);
+        TranslationService = new TranslationService(Log, Configuration, ChatHistoryService, GeminiService);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
         FriendListService = new FriendListService(worldIdResolver, Log);
@@ -512,6 +518,7 @@ public sealed class Plugin : IDalamudPlugin
         enterToChatService.Dispose();
         EmoteService.Dispose();
         TranslationService.Dispose();
+        GeminiService.Dispose();
         WindowsNotificationService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();

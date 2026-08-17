@@ -5,6 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
+using CustomChat.Services;
 using CustomChat.Utility;
 
 namespace CustomChat.Windows;
@@ -196,6 +197,50 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.EndCombo();
         }
         ImGui.TextDisabled("Used by the \"Translate\" item in a message's right-click menu. Source language is always detected automatically.");
+
+        ImGui.Spacing();
+
+        var engineNames = new[] { "Google (free)", "MyMemory (free)", "Gemini" };
+        var engineIndex = (int)configuration.TranslationEngine;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.Combo("Translation engine", ref engineIndex, engineNames, engineNames.Length))
+        {
+            configuration.TranslationEngine = (TranslationEngine)engineIndex;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Google (free): the default, no key needed - automatically detours through MyMemory for a while after a few requests fail in a row (likely a rate limit), then goes back to trying Google again. MyMemory: always uses that one directly. Gemini: needs an API key below.");
+
+        if (configuration.TranslationEngine == TranslationEngine.Gemini && !plugin.GeminiService.IsConfigured)
+            ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set below - translations will silently fail until one is.");
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Gemini API (optional - also usable by future AI features here, not just translation)");
+
+        var geminiKey = configuration.GeminiApiKey;
+        ImGui.SetNextItemWidth(320);
+        if (ImGui.InputText("API key##geminiKey", ref geminiKey, 200, ImGuiInputTextFlags.Password))
+        {
+            configuration.GeminiApiKey = geminiKey;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("From Google AI Studio (aistudio.google.com/apikey). Stored in this plugin's own config file, nowhere else.");
+
+        var geminiModel = configuration.GeminiModel;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.InputText("Model##geminiModel", ref geminiModel, 100))
+        {
+            configuration.GeminiModel = geminiModel;
+            configuration.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(configuration.GeminiModel == GeminiService.DefaultModel))
+        {
+            if (ImGui.SmallButton("Use default##geminiModelReset"))
+            {
+                configuration.GeminiModel = GeminiService.DefaultModel;
+                configuration.Save();
+            }
+        }
 
         ImGui.Separator();
         ImGui.TextUnformatted("Unread notifications");

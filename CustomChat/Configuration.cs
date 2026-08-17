@@ -84,6 +84,21 @@ public class Configuration : IPluginConfiguration
     /// auto-detected per message, only the target is configurable.</summary>
     public string TranslateTargetLanguage { get; set; } = "en";
 
+    /// <summary>Which backend <see cref="Services.TranslationService"/> uses - see
+    /// <see cref="Models.TranslationEngine"/> for what each option means.</summary>
+    public TranslationEngine TranslationEngine { get; set; } = TranslationEngine.GoogleFree;
+
+    /// <summary>Google Gemini API key (Settings > General) - required for
+    /// <see cref="Models.TranslationEngine.Gemini"/> and any future AI-backed feature built on
+    /// <see cref="Services.GeminiService"/>. Deliberately excluded from <see cref="ResetToDefaults"/> -
+    /// a credential the user typed in, not a preference to silently wipe on a settings reset.</summary>
+    public string GeminiApiKey { get; set; } = string.Empty;
+
+    /// <summary>Gemini model id used for every <see cref="Services.GeminiService"/> call - see
+    /// <see cref="Services.GeminiService.DefaultModel"/> for the built-in default. A plain editable
+    /// string rather than a hardcoded choice, since Google's current model lineup will keep moving on.</summary>
+    public string GeminiModel { get; set; } = Services.GeminiService.DefaultModel;
+
     /// <summary>Fades the main chat window and any popped-out tab windows to
     /// <see cref="InactiveWindowAlpha"/> while they don't have keyboard focus - same idea as the
     /// game's own native chat log fading out when you're not actively looking at it.</summary>
@@ -158,6 +173,8 @@ public class Configuration : IPluginConfiguration
         FriendMarkerEnabled = defaults.FriendMarkerEnabled;
         FriendMarkerEmoji = defaults.FriendMarkerEmoji;
         TranslateTargetLanguage = defaults.TranslateTargetLanguage;
+        TranslationEngine = defaults.TranslationEngine;
+        GeminiModel = defaults.GeminiModel;
         FadeWindowWhenInactive = defaults.FadeWindowWhenInactive;
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
