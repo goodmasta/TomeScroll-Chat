@@ -23,9 +23,13 @@ namespace CustomChat.Services;
 public sealed class GeminiService : IDisposable
 {
     /// <summary>A fast, low-cost model - reasonable for short, frequent calls like translating a
-    /// single chat line. Editable in Settings (<see cref="Configuration.GeminiModel"/>) since Google's
-    /// current model lineup will keep moving on from whatever's hardcoded here.</summary>
-    public const string DefaultModel = "gemini-2.5-flash";
+    /// single chat line. Picked from Settings > AI (see <see cref="Configuration.GeminiModel"/> and
+    /// <see cref="Utility.GeminiModelCatalog"/> for the full curated list) rather than hardcoded
+    /// permanently, since Google's current model lineup will keep moving on from whatever's default
+    /// here (verified against the real model list at ai.google.dev/gemini-api/docs/models as of
+    /// 2026-08-17 - "Flash-Lite" is that page's own fastest/cheapest tier, a good fit for a short,
+    /// frequent, low-stakes call like translating one chat line).</summary>
+    public const string DefaultModel = "gemini-3.5-flash-lite";
 
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(20) };
     private readonly IPluginLog log;

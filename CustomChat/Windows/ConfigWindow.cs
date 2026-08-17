@@ -99,23 +99,25 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled("From Google AI Studio (aistudio.google.com/apikey). Stored in this plugin's own config file, nowhere else.");
 
-        var geminiModel = configuration.GeminiModel;
-        ImGui.SetNextItemWidth(220);
-        if (ImGui.InputText("Model##geminiModel", ref geminiModel, 100))
+        var models = GeminiModelCatalog.Entries;
+        var currentModelIndex = Array.FindIndex(models, m => m.Id == configuration.GeminiModel);
+        var currentModelLabel = currentModelIndex >= 0 ? models[currentModelIndex].Label : configuration.GeminiModel;
+
+        ImGui.SetNextItemWidth(280);
+        if (ImGui.BeginCombo("Model##geminiModel", currentModelLabel))
         {
-            configuration.GeminiModel = geminiModel;
-            configuration.Save();
-        }
-        ImGui.SameLine();
-        using (ImRaii.Disabled(configuration.GeminiModel == GeminiService.DefaultModel))
-        {
-            if (ImGui.SmallButton("Use default##geminiModelReset"))
+            foreach (var (id, label) in models)
             {
-                configuration.GeminiModel = GeminiService.DefaultModel;
-                configuration.Save();
+                if (ImGui.Selectable(label, id == configuration.GeminiModel))
+                {
+                    configuration.GeminiModel = id;
+                    configuration.Save();
+                }
             }
+
+            ImGui.EndCombo();
         }
-        ImGui.TextDisabled($"Default: {GeminiService.DefaultModel}. Editable since Google's current model lineup will keep moving on past whatever's hardcoded here.");
+        ImGui.TextDisabled("Curated list of plain text-generation models from ai.google.dev/gemini-api/docs/models - image/video/audio/agent-specific models aren't listed here since this plugin only ever sends/expects plain text.");
 
         ImGui.Spacing();
         ImGui.TextUnformatted(plugin.GeminiService.IsConfigured ? "Status: configured." : "Status: no API key set.");
