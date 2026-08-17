@@ -1278,6 +1278,8 @@ public sealed class MainWindow : Window, IDisposable
         var translated = await plugin.TranslationService.TranslateRawAsync(original, targetLanguage).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(translated))
             pendingInputSplice = (start, length, translated);
+        else
+            plugin.NotificationService.Show("Translation failed - check /xllog for details.", NotificationSeverity.Warning);
     }
 
     /// <summary>Marks a tab's unread counter - called by <see cref="Plugin"/> for every incoming

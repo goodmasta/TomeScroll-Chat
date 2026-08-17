@@ -68,6 +68,7 @@ public sealed class TranslationService : IDisposable
     private readonly Configuration configuration;
     private readonly ChatHistoryService historyService;
     private readonly GeminiService geminiService;
+    private readonly NotificationService notificationService;
     private readonly ConcurrentDictionary<ChatMessageRecord, (string Text, string Language)> results = new();
     private readonly ConcurrentDictionary<ChatMessageRecord, byte> pendingOrInFlight = new();
     private readonly Channel<TranslateJob> queue = Channel.CreateUnbounded<TranslateJob>(new UnboundedChannelOptions
@@ -80,12 +81,13 @@ public sealed class TranslationService : IDisposable
 
     private readonly record struct TranslateJob(ChatMessageRecord Message, string TargetLanguage);
 
-    public TranslationService(IPluginLog log, Configuration configuration, ChatHistoryService historyService, GeminiService geminiService)
+    public TranslationService(IPluginLog log, Configuration configuration, ChatHistoryService historyService, GeminiService geminiService, NotificationService notificationService)
     {
         this.log = log;
         this.configuration = configuration;
         this.historyService = historyService;
         this.geminiService = geminiService;
+        this.notificationService = notificationService;
         workerTask = Task.Run(() => WorkerLoopAsync(cts.Token));
     }
 
@@ -167,6 +169,13 @@ public sealed class TranslationService : IDisposable
                     }
                     else
                     {
+                        // Only the *first* failure in a streak pops a toast - every backoff retry
+                        // after that would otherwise spam one per attempt while it keeps failing.
+                        // A later success (consecutiveFailures reset to 0 above) lets the next
+                        // failure notify again as a fresh streak.
+                        if (consecutiveFailures == 0)
+                            notificationService.Show("Translation failed - check /xllog for details.", NotificationSeverity.Warning);
+
                         consecutiveFailures++;
                     }
 

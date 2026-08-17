@@ -99,6 +99,14 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
 
+        using (ImRaii.Disabled(!configuration.NotifyWhisperInWindows))
+        {
+            if (ImGui.Button("Test Windows notification"))
+                plugin.WindowsNotificationService.ShowTest();
+        }
+        if (!configuration.NotifyWhisperInWindows)
+            ImGui.TextDisabled("Enable the checkbox above first.");
+
         ImGui.Spacing();
         if (ImGui.Button("Test popup notification"))
             plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);

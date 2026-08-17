@@ -91,7 +91,7 @@ public sealed class Plugin : IDalamudPlugin
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         GeminiService = new GeminiService(Log, Configuration);
-        TranslationService = new TranslationService(Log, Configuration, ChatHistoryService, GeminiService);
+        TranslationService = new TranslationService(Log, Configuration, ChatHistoryService, GeminiService, NotificationService);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
         FriendListService = new FriendListService(worldIdResolver, Log);
@@ -551,10 +551,13 @@ public sealed class Plugin : IDalamudPlugin
         ToggleMainUi();
     }
 
-    /// <summary>"/customchat version" - prints the loaded assembly's version *and* its on-disk build
-    /// time to chat. Same string also gets logged once at startup (see the constructor) so which build
+    /// <summary>"/customchat version" - shows the loaded assembly's version and its on-disk build time
+    /// as a popup toast (<see cref="NotificationService"/>), not a chat line - easier to actually
+    /// notice, and doesn't get lost/scrolled past in whichever tab happens to be selected. Given a
+    /// longer-than-default duration since this is diagnostic text meant to actually be read, not just
+    /// glanced at. Same string also gets logged once at startup (see the constructor) so which build
     /// is actually running is visible in /xllog without needing to run this command at all.</summary>
-    private void PrintVersion() => ChatGui.Print(BuildVersionString());
+    private void PrintVersion() => NotificationService.Show(BuildVersionString(), NotificationSeverity.Info, TimeSpan.FromSeconds(12));
 
     /// <summary>Builds the "/customchat version" string. The assembly's Version rarely changes between
     /// commits in this project (it's not bumped per-build), so on its own it can't answer "is this

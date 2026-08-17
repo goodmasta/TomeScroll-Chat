@@ -643,6 +643,8 @@ public sealed class DetachedTabWindow : Window, IDisposable
         var translated = await plugin.TranslationService.TranslateRawAsync(original, targetLanguage).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(translated))
             pendingInputSplice = (start, length, translated);
+        else
+            plugin.NotificationService.Show("Translation failed - check /xllog for details.", NotificationSeverity.Warning);
     }
 
     /// <summary>Same behaviour as MainWindow.DrawSearchBar - see there for the reasoning.</summary>

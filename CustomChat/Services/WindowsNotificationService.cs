@@ -153,6 +153,41 @@ public sealed class WindowsNotificationService : IDisposable
         });
     }
 
+    /// <summary>"Test Windows notification" button's handler (Settings > Notifications) - shows a
+    /// balloon immediately, bypassing <see cref="ShowTell"/>'s <see cref="ShouldNotify"/> gate (which
+    /// normally suppresses the balloon while the game window is actually focused - true almost by
+    /// definition while clicking a button in this plugin's own settings window, which would otherwise
+    /// make the test silently do nothing). Still requires the tray icon to actually be visible
+    /// (<see cref="Enabled"/>/<see cref="Configuration.NotifyWhisperInWindows"/>) - the caller is
+    /// expected to gate the button on that rather than this method forcing it, since toggling
+    /// <see cref="NotifyIcon.Visible"/> just for a test risks the balloon disappearing again before
+    /// Windows has actually shown it.</summary>
+    public void ShowTest()
+    {
+        if (messageForm == null || messageForm.IsDisposed)
+        {
+            log.Warning("CustomChat: can't show a Windows notification - the tray icon never finished setting up");
+            return;
+        }
+
+        messageForm.BeginInvoke(() =>
+        {
+            try
+            {
+                if (notifyIcon is not { Visible: true })
+                    return;
+
+                notifyIcon.BalloonTipTitle = "Custom Chat";
+                notifyIcon.BalloonTipText = "This is a test Windows notification.";
+                notifyIcon.ShowBalloonTip(5000);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "CustomChat: failed to show a test Windows notification");
+            }
+        });
+    }
+
     /// <summary>A Dalamud plugin runs in-process with the game, so the current process's own main
     /// window *is* the game window - no need to find/match it by title or anything else. Checks two
     /// things, either of which counts as "not what the player is looking at": the window is actually
