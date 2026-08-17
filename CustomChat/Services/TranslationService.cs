@@ -26,15 +26,20 @@ namespace CustomChat.Services;
 /// go through a single-consumer queue rather than firing immediately: <see cref="WorkerLoopAsync"/>
 /// processes one at a time with a baseline delay between requests, plus exponential backoff stacked
 /// on top after consecutive failures (none of these free-tier backends reliably distinguish a rate
-/// limit from any other failure, so any failure is treated as a possible one). While on
-/// <see cref="TranslationEngine.GoogleFree"/> specifically, enough consecutive failures also switches
-/// that request (and subsequent ones, until one succeeds) over to <see cref="TranslationEngine.MyMemory"/>
-/// instead - a likely-rate-limited gtx endpoint gets a rest instead of being retried into the ground.
-/// This queue matters specifically because of <see cref="ChatTabConfig.AutoTranslate"/>: opening a tab
-/// with hundreds of untranslated backlog messages would otherwise fire that many requests in the same
-/// frame. <see cref="TranslateRawAsync"/> (translating the player's own not-yet-sent input box text)
-/// deliberately bypasses this queue - it's a rare, manual, one-off action, not the bursty case this
-/// exists for - though it still respects whichever engine is configured.</para>
+/// limit from any other failure, so any failure is treated as a possible one). Enough consecutive
+/// failures on the current engine also switches the *active* engine to the next one in
+/// <see cref="EngineFallbackOrder"/> (wrapping, skipping <see cref="TranslationEngine.Gemini"/> if it
+/// isn't configured) - regardless of which engine that was, not just <see cref="TranslationEngine.GoogleFree"/>
+/// - with a <see cref="NotificationService"/> toast announcing the switch, so it's not silent. The
+/// *active* engine (what's actually used right now) is distinct from <see cref="Configuration.TranslationEngine"/>
+/// (the player's own preference) - picking a different engine in Settings resets the active one back
+/// to that preference immediately, overriding whatever it had auto-switched to. This queue matters
+/// specifically because of <see cref="ChatTabConfig.AutoTranslate"/>: opening a tab with hundreds of
+/// untranslated backlog messages would otherwise fire that many requests in the same frame.
+/// <see cref="TranslateRawAsync"/> (translating the player's own not-yet-sent input box text)
+/// deliberately bypasses the queue/backoff/switch-on-failure logic - it's a rare, manual, one-off
+/// action, not the bursty case this exists for - but still uses whichever engine is currently active,
+/// same as the queued path.</para>
 ///
 /// <para>Results are cached by the <see cref="ChatMessageRecord"/> instance itself (reference
 /// identity, not <see cref="ChatMessageRecord.Id"/> - that's the SQLite rowid and reads back 0 for
@@ -55,10 +60,19 @@ public sealed class TranslationService : IDisposable
     /// characters) - requests over this are truncated rather than left to fail outright.</summary>
     private const int MyMemoryMaxBytes = 500;
 
-    /// <summary>Consecutive failures on <see cref="TranslationEngine.GoogleFree"/> before a request
-    /// detours through <see cref="TranslationEngine.MyMemory"/> instead - low enough to react quickly
-    /// to a real rate limit, high enough that a single transient blip doesn't trigger it.</summary>
-    private const int GoogleFallbackAfterFailures = 2;
+    /// <summary>Consecutive failures on the *active* engine before switching to the next one in
+    /// <see cref="EngineFallbackOrder"/> - low enough to react quickly to a real rate limit, high
+    /// enough that a single transient blip doesn't trigger it.</summary>
+    private const int SwitchEngineAfterFailures = 2;
+
+    /// <summary>Fixed rotation <see cref="WorkerLoopAsync"/> cycles through on repeated failure -
+    /// <see cref="TranslationEngine.Gemini"/> is skipped (see <see cref="NextEngine"/>) unless
+    /// <see cref="GeminiService.IsConfigured"/>, since switching *to* an engine that's guaranteed to
+    /// fail immediately for lack of an API key wouldn't help.</summary>
+    private static readonly TranslationEngine[] EngineFallbackOrder =
+    {
+        TranslationEngine.GoogleFree, TranslationEngine.MyMemory, TranslationEngine.Gemini,
+    };
 
     private const int BaseDelayMs = 350;
     private const int MaxBackoffSeconds = 60;
@@ -79,6 +93,15 @@ public sealed class TranslationService : IDisposable
     private readonly CancellationTokenSource cts = new();
     private readonly Task workerTask;
 
+    /// <summary>The engine actually in use right now - starts at, and resets to,
+    /// <see cref="Configuration.TranslationEngine"/> (see <see cref="WorkerLoopAsync"/>'s own check for
+    /// when the player changes that in Settings), but can drift away from it via the auto-switch-on-
+    /// failure logic. Read from both the worker thread and whichever thread calls
+    /// <see cref="TranslateRawAsync"/> directly (a one-off input-box translate) - a bare enum field
+    /// read/write is atomic enough for this without extra locking (worst case a caller sees last
+    /// frame's value, not a torn one).</summary>
+    private volatile TranslationEngine activeEngine;
+
     private readonly record struct TranslateJob(ChatMessageRecord Message, string TargetLanguage);
 
     public TranslationService(IPluginLog log, Configuration configuration, ChatHistoryService historyService, GeminiService geminiService, NotificationService notificationService)
@@ -88,6 +111,7 @@ public sealed class TranslationService : IDisposable
         this.historyService = historyService;
         this.geminiService = geminiService;
         this.notificationService = notificationService;
+        activeEngine = configuration.TranslationEngine;
         workerTask = Task.Run(() => WorkerLoopAsync(cts.Token));
     }
 
@@ -120,7 +144,7 @@ public sealed class TranslationService : IDisposable
     {
         if (string.IsNullOrWhiteSpace(message.Body) || TryGetTranslation(message, targetLanguage) != null)
             return;
-        if (configuration.TranslationEngine == TranslationEngine.Gemini && !geminiService.IsConfigured)
+        if (activeEngine == TranslationEngine.Gemini && !geminiService.IsConfigured)
             return;
         if (!pendingOrInFlight.TryAdd(message, 0))
             return;
@@ -144,21 +168,23 @@ public sealed class TranslationService : IDisposable
     private async Task WorkerLoopAsync(CancellationToken token)
     {
         var consecutiveFailures = 0;
+        var lastConfiguredEngine = configuration.TranslationEngine;
         try
         {
             while (await queue.Reader.WaitToReadAsync(token).ConfigureAwait(false))
             {
                 while (queue.Reader.TryRead(out var job))
                 {
-                    // Only GoogleFree ever detours to MyMemory mid-stream - MyMemory/Gemini picked
-                    // explicitly as the configured engine just use themselves, nothing to fall back to.
-                    var useMyMemoryFallback = configuration.TranslationEngine == TranslationEngine.GoogleFree &&
-                                               consecutiveFailures >= GoogleFallbackAfterFailures;
+                    // The player picking a different engine in Settings always wins over whatever
+                    // this had auto-switched to - treated as a fresh start, not just another failure.
+                    if (configuration.TranslationEngine != lastConfiguredEngine)
+                    {
+                        lastConfiguredEngine = configuration.TranslationEngine;
+                        activeEngine = lastConfiguredEngine;
+                        consecutiveFailures = 0;
+                    }
 
-                    var translated = useMyMemoryFallback
-                        ? await TranslateViaMyMemoryAsync(job.Message.Body, job.TargetLanguage).ConfigureAwait(false)
-                        : await TranslateRawAsync(job.Message.Body, job.TargetLanguage).ConfigureAwait(false);
-
+                    var translated = await TranslateRawAsync(job.Message.Body, job.TargetLanguage).ConfigureAwait(false);
                     pendingOrInFlight.TryRemove(job.Message, out _);
 
                     if (!string.IsNullOrEmpty(translated))
@@ -174,9 +200,21 @@ public sealed class TranslationService : IDisposable
                         // A later success (consecutiveFailures reset to 0 above) lets the next
                         // failure notify again as a fresh streak.
                         if (consecutiveFailures == 0)
-                            notificationService.Show("Translation failed - check /xllog for details.", NotificationSeverity.Warning);
+                            notificationService.Show($"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details.", NotificationSeverity.Warning);
 
                         consecutiveFailures++;
+
+                        if (consecutiveFailures >= SwitchEngineAfterFailures)
+                        {
+                            var next = NextEngine(activeEngine);
+                            if (next != activeEngine)
+                            {
+                                notificationService.Show($"Switched translation engine: {EngineLabel(activeEngine)} → {EngineLabel(next)} after repeated failures.", NotificationSeverity.Warning);
+                                activeEngine = next;
+                            }
+
+                            consecutiveFailures = 0; // give the new engine a fresh streak/backoff, not an inherited one
+                        }
                     }
 
                     // Baseline gap between every request, plus exponential backoff stacked on top
@@ -199,11 +237,38 @@ public sealed class TranslationService : IDisposable
         }
     }
 
-    /// <summary>Translates via whichever engine is currently configured - the shared dispatcher both
-    /// the queued per-message path and one-off callers (e.g. translating the player's own not-yet-sent
-    /// input box text) go through. A single attempt, no retry/backoff/fallback logic of its own - see
-    /// <see cref="WorkerLoopAsync"/> for that, layered on top for the queued path only.</summary>
-    public Task<string?> TranslateRawAsync(string text, string targetLanguage) => configuration.TranslationEngine switch
+    /// <summary>Next engine in <see cref="EngineFallbackOrder"/> after <paramref name="current"/>,
+    /// wrapping around, skipping <see cref="TranslationEngine.Gemini"/> if it isn't configured.
+    /// Returns <paramref name="current"/> unchanged only if nothing else is viable (Gemini unconfigured
+    /// and somehow also the only other option, which can't happen with the current 3-entry order, but
+    /// guarded anyway rather than looping forever).</summary>
+    private TranslationEngine NextEngine(TranslationEngine current)
+    {
+        var startIndex = Math.Max(0, Array.IndexOf(EngineFallbackOrder, current));
+        for (var offset = 1; offset <= EngineFallbackOrder.Length; offset++)
+        {
+            var candidate = EngineFallbackOrder[(startIndex + offset) % EngineFallbackOrder.Length];
+            if (candidate != TranslationEngine.Gemini || geminiService.IsConfigured)
+                return candidate;
+        }
+
+        return current;
+    }
+
+    private static string EngineLabel(TranslationEngine engine) => engine switch
+    {
+        TranslationEngine.MyMemory => "MyMemory",
+        TranslationEngine.Gemini => "Gemini",
+        _ => "Google",
+    };
+
+    /// <summary>Translates via whichever engine is currently *active* (see the class doc comment for
+    /// how that differs from the player's raw <see cref="Configuration.TranslationEngine"/> choice) -
+    /// the shared dispatcher both the queued per-message path and one-off callers (e.g. translating the
+    /// player's own not-yet-sent input box text) go through. A single attempt, no retry/backoff/
+    /// switch-on-failure logic of its own - see <see cref="WorkerLoopAsync"/> for that, layered on top
+    /// for the queued path only.</summary>
+    public Task<string?> TranslateRawAsync(string text, string targetLanguage) => activeEngine switch
     {
         TranslationEngine.MyMemory => TranslateViaMyMemoryAsync(text, targetLanguage),
         TranslationEngine.Gemini => TranslateViaGeminiAsync(text, targetLanguage),
