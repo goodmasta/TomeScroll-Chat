@@ -88,11 +88,18 @@ public sealed class ChatTabConfig
     /// unless <see cref="IsAutoLinkshellTab"/>.</summary>
     public int LinkshellIndex { get; set; }
 
-    /// <summary>Whether new messages make this tab blink and show a red unread count in the sidebar.
-    /// Whisper tabs always behave this way regardless of this flag (see
-    /// <see cref="ChatTabConfig.ShouldNotify"/>) - this only matters for regular tabs, where it's an
-    /// opt-in setting.</summary>
+    /// <summary>Whether new messages make this tab's name blink in the sidebar. Whisper tabs always
+    /// blink regardless of this flag (see <see cref="ChatTabConfig.ShouldNotify"/>) - this only
+    /// matters for regular tabs, where it's an opt-in setting. Doesn't affect whether the "(N)" unread
+    /// count itself is shown at all - see <see cref="MuteUnreadIndicator"/> for that.</summary>
     public bool NotifyOnNewMessage { get; set; }
+
+    /// <summary>Fully mutes this tab's unread indicator in the sidebar - no "(N)" count, no blink,
+    /// regardless of <see cref="NotifyOnNewMessage"/>/<see cref="ShouldNotify"/> or whether it's a
+    /// whisper tab (which otherwise always notifies). <see cref="UnreadCount"/> itself keeps
+    /// incrementing as normal underneath - only the *display* is suppressed, so nothing's lost if
+    /// this gets turned back off later.</summary>
+    public bool MuteUnreadIndicator { get; set; }
 
     /// <summary>Unread counter shown in the sidebar. Persisted so it survives a plugin reload/game
     /// restart - see <see cref="Plugin.Dispose"/> (saved on unload) and the places in

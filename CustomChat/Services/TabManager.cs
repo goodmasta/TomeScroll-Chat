@@ -68,6 +68,38 @@ public sealed class TabManager
         TabRemoved?.Invoke(tab);
     }
 
+    /// <summary>True if <see cref="MoveTab"/> would actually move <paramref name="tab"/> - i.e. it's
+    /// not already first/last among tabs sharing its own <see cref="ChatTabConfig.IsPmTab"/> value.
+    /// Backs the "Move up"/"Move down" buttons' disabled state.</summary>
+    public bool CanMoveTab(ChatTabConfig tab, int direction)
+    {
+        var group = configuration.Tabs.Where(t => t.IsPmTab == tab.IsPmTab).ToList();
+        var groupIndex = group.IndexOf(tab);
+        return groupIndex >= 0 && groupIndex + direction >= 0 && groupIndex + direction < group.Count;
+    }
+
+    /// <summary>Reorders the sidebar - swaps <paramref name="tab"/> with its neighbour (-1 = up/earlier,
+    /// +1 = down/later) *within its own group* (PM tabs vs. regular tabs), not just the raw next/
+    /// previous entry in <see cref="Configuration.Tabs"/>: whisper tabs are always sorted separately
+    /// from regular ones in the sidebar (see <c>MainWindow.DrawSidebar</c>), so swapping raw list
+    /// positions with an interspersed opposite-group tab would silently do nothing visible - this
+    /// finds the actual same-group neighbour first, wherever it happens to sit in the raw list, and
+    /// swaps *that* pair's raw positions instead.</summary>
+    public void MoveTab(ChatTabConfig tab, int direction)
+    {
+        var group = configuration.Tabs.Where(t => t.IsPmTab == tab.IsPmTab).ToList();
+        var groupIndex = group.IndexOf(tab);
+        var targetGroupIndex = groupIndex + direction;
+        if (groupIndex < 0 || targetGroupIndex < 0 || targetGroupIndex >= group.Count)
+            return;
+
+        var other = group[targetGroupIndex];
+        var rawIndexA = configuration.Tabs.IndexOf(tab);
+        var rawIndexB = configuration.Tabs.IndexOf(other);
+        (configuration.Tabs[rawIndexA], configuration.Tabs[rawIndexB]) = (configuration.Tabs[rawIndexB], configuration.Tabs[rawIndexA]);
+        configuration.Save();
+    }
+
     public void SetDetached(ChatTabConfig tab, bool detached)
     {
         if (tab.IsDetached == detached)

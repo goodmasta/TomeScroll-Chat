@@ -239,6 +239,13 @@ public sealed class MainWindow : Window, IDisposable
             TitleBarButtons.Remove(hideChatButton);
         hideChatButton.Icon = isChatHidden ? FontAwesomeIcon.EyeSlash : FontAwesomeIcon.Eye;
 
+        // The eye button is the *only* way to un-hide (see its Click handler/the auto-hide comment
+        // below) - if it's turned off in Settings there'd be no way back at all, whether already
+        // hidden right now or auto-hidden later. Force-expand immediately when that happens, and
+        // don't let auto-hide trigger at all while the button that would be needed to undo it is off.
+        if (!showButton && isChatHidden)
+            isChatHidden = false;
+
         // Auto-hide timer - resets the instant the window is genuinely focused, accumulates
         // otherwise. Only the eye button (manual, see its Click handler) ever un-hides once this
         // trips - just refocusing the (still-shrunk) title bar resets the timer but deliberately
@@ -249,7 +256,7 @@ public sealed class MainWindow : Window, IDisposable
         else
             inactiveSeconds += ImGui.GetIO().DeltaTime;
 
-        if (Plugin.Configuration.AutoHideChatWhenInactive && inactiveSeconds >= Plugin.Configuration.AutoHideChatSeconds)
+        if (showButton && Plugin.Configuration.AutoHideChatWhenInactive && inactiveSeconds >= Plugin.Configuration.AutoHideChatSeconds)
             isChatHidden = true;
 
         if (isChatHidden)
@@ -501,7 +508,7 @@ public sealed class MainWindow : Window, IDisposable
                              ? playerTabColor
                              : BlinkBase);
 
-        var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify;
+        var isBlinking = tab.UnreadCount > 0 && tab.ShouldNotify && !tab.MuteUnreadIndicator;
         var nameColor = isBlinking
             ? Vector4.Lerp(restColor, blinkColor, (MathF.Sin((float)ImGui.GetTime() * 4f) + 1f) / 2f)
             : restColor;
@@ -551,7 +558,7 @@ public sealed class MainWindow : Window, IDisposable
         var namePos = new Vector2(textX, textY);
         drawList.AddText(namePos, ImGui.ColorConvertFloat4ToU32(nameColor), tab.Name);
 
-        if (tab.UnreadCount > 0)
+        if (tab.UnreadCount > 0 && !tab.MuteUnreadIndicator)
         {
             var countPos = new Vector2(namePos.X + ImGui.CalcTextSize(tab.Name).X + 4, textY);
             drawList.AddText(countPos, ImGui.ColorConvertFloat4ToU32(countColor), $"({tab.UnreadCount})");
@@ -569,6 +576,28 @@ public sealed class MainWindow : Window, IDisposable
                     dividerIndex = -1;
                 plugin.TabManager.Save();
             }
+        }
+
+        if (ImGui.MenuItem(tab.MuteUnreadIndicator ? "Unmute unread indicator" : "Mute unread indicator"))
+        {
+            tab.MuteUnreadIndicator = !tab.MuteUnreadIndicator;
+            plugin.TabManager.Save();
+        }
+
+        ImGui.Separator();
+
+        // Moves within this tab's own group (whisper vs. regular) - see TabManager.MoveTab for why a
+        // raw-list swap alone wouldn't reliably do anything visible.
+        using (ImRaii.Disabled(!plugin.TabManager.CanMoveTab(tab, -1)))
+        {
+            if (ImGui.MenuItem("Move up"))
+                plugin.TabManager.MoveTab(tab, -1);
+        }
+
+        using (ImRaii.Disabled(!plugin.TabManager.CanMoveTab(tab, 1)))
+        {
+            if (ImGui.MenuItem("Move down"))
+                plugin.TabManager.MoveTab(tab, 1);
         }
 
         ImGui.Separator();

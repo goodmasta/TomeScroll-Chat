@@ -387,6 +387,19 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.TabManager.Save();
         }
 
+        // Sidebar order - within this tab's own group (whisper vs. regular), see TabManager.MoveTab.
+        using (ImRaii.Disabled(!plugin.TabManager.CanMoveTab(tab, -1)))
+        {
+            if (ImGui.SmallButton($"Move up##moveup_{tab.Id}"))
+                plugin.TabManager.MoveTab(tab, -1);
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(!plugin.TabManager.CanMoveTab(tab, 1)))
+        {
+            if (ImGui.SmallButton($"Move down##movedown_{tab.Id}"))
+                plugin.TabManager.MoveTab(tab, 1);
+        }
+
         // A real emote image next to the tab name in the sidebar, not literal Unicode text - typing
         // an emoji character into the Name field above wouldn't render (Dalamud's UI font has no
         // colour-emoji glyphs), same reasoning as the friend marker in Settings > General.
@@ -457,6 +470,16 @@ public sealed class ConfigWindow : Window, IDisposable
             }
         }
         ImGui.TextDisabled("Overrides the per-channel colours below for every message body in this tab.");
+
+        ImGui.Spacing();
+
+        var mute = tab.MuteUnreadIndicator;
+        if (ImGui.Checkbox($"Mute unread indicator##mute_{tab.Id}", ref mute))
+        {
+            tab.MuteUnreadIndicator = mute;
+            plugin.TabManager.Save();
+        }
+        ImGui.TextDisabled("No \"(N)\" count or blink in the sidebar for this tab, even for whisper tabs (which otherwise always notify). Messages are still counted, just not shown.");
 
         ImGui.Spacing();
         ImGui.TextUnformatted("Notification colours (this tab)");
