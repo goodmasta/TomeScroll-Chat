@@ -48,6 +48,11 @@ public sealed class Plugin : IDalamudPlugin
     /// features beyond translation can use it directly, not just <see cref="TranslationService"/>.</summary>
     public GeminiService GeminiService { get; }
 
+    /// <summary>General-purpose in-plugin popup notifications (<see cref="Windows.NotificationOverlay"/>
+    /// draws whatever's queued here) - public so any future feature can call
+    /// <c>plugin.NotificationService.Show(...)</c> directly, same reasoning as <see cref="GeminiService"/>.</summary>
+    public NotificationService NotificationService { get; }
+
     public TranslationService TranslationService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
@@ -66,6 +71,7 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("CustomChat");
     private readonly MainWindow mainWindow;
     private readonly ConfigWindow configWindow;
+    private readonly NotificationOverlay notificationOverlay;
     private readonly Dictionary<Guid, DetachedTabWindow> detachedWindows = new();
     private readonly CommandInfo commandInfo;
 
@@ -85,6 +91,7 @@ public sealed class Plugin : IDalamudPlugin
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
         GeminiService = new GeminiService(Log, Configuration);
         TranslationService = new TranslationService(Log, Configuration, ChatHistoryService, GeminiService);
+        NotificationService = new NotificationService();
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
         FriendListService = new FriendListService(worldIdResolver, Log);
@@ -100,8 +107,10 @@ public sealed class Plugin : IDalamudPlugin
 
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
+        notificationOverlay = new NotificationOverlay(NotificationService);
         WindowSystem.AddWindow(mainWindow);
         WindowSystem.AddWindow(configWindow);
+        WindowSystem.AddWindow(notificationOverlay);
 
         enterToChatService = new EnterToChatService(Framework, KeyState, mainWindow.RequestFocusInput);
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);

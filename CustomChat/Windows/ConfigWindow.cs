@@ -225,6 +225,11 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
 
+        ImGui.Spacing();
+        if (ImGui.Button("Test popup notification"))
+            plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);
+        ImGui.TextDisabled("A small popup in the top-right corner of the game window itself, not the Windows tray notification above - general-purpose, used to inform you of things as this plugin grows more features.");
+
         ImGui.Separator();
         ImGui.TextUnformatted("Translation");
 
