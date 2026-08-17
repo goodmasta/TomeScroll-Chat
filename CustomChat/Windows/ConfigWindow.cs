@@ -503,6 +503,14 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled($"Translates every message into \"{configuration.TranslateTargetLanguage}\" (Settings > General) automatically - same as picking \"Translate\" by hand per message, just for all of them. Only togglable here, not per-message or from the sidebar.");
 
+        var disableLogging = tab.DisableLogging;
+        if (ImGui.Checkbox($"Don't save this tab's messages to disk##disablelogging_{tab.Id}", ref disableLogging))
+        {
+            tab.DisableLogging = disableLogging;
+            plugin.TabManager.Save();
+        }
+        ImGui.TextDisabled("Messages still show up normally for the rest of this session - they just won't be written to history, so they won't survive a reload/restart and won't be included in \"Export to file\". Already-saved history isn't deleted by turning this on.");
+
         ImGui.Spacing();
         ImGui.TextUnformatted("Notification colours (this tab)");
 

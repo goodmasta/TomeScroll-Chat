@@ -102,7 +102,8 @@ public sealed class ChatCaptureService : IDisposable
                 RoutingKey = tab.Id.ToString(),
                 PayloadLinks = payloadLinks,
             };
-            historyService.Enqueue(record);
+            if (!tab.DisableLogging)
+                historyService.Enqueue(record);
             MessageRouted?.Invoke(tab, record);
         }
 
@@ -134,7 +135,8 @@ public sealed class ChatCaptureService : IDisposable
             RoutingKey = partnerKey,
             PayloadLinks = payloadLinks,
         };
-        historyService.Enqueue(record);
+        if (!tab.DisableLogging)
+            historyService.Enqueue(record);
         MessageRouted?.Invoke(tab, record);
     }
 

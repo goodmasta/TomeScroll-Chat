@@ -109,6 +109,16 @@ public sealed class ChatTabConfig
     /// message) enough that it shouldn't be one accidental click away.</summary>
     public bool AutoTranslate { get; set; }
 
+    /// <summary>Stops this tab's messages from being persisted to the on-disk SQLite history at all
+    /// (see <see cref="Services.ChatCaptureService"/>) - they still show up live for the rest of the
+    /// current session (this only gates the database write, not <see cref="Services.TabMessageBuffer"/>/
+    /// the UI), they just won't survive a reload/restart and won't be included in "Export to file".
+    /// Each tab writes its own independent row per message (even when several tabs match the same raw
+    /// chat line), so this only affects this specific tab, not anything else the same message also
+    /// routed to. Existing already-saved history isn't touched when this is turned on - only future
+    /// messages stop being written.</summary>
+    public bool DisableLogging { get; set; }
+
     /// <summary>Unread counter shown in the sidebar. Persisted so it survives a plugin reload/game
     /// restart - see <see cref="Plugin.Dispose"/> (saved on unload) and the places in
     /// <c>Windows/MainWindow.cs</c> that clear it (saved immediately, since those are infrequent
