@@ -102,6 +102,10 @@ public sealed class TranslationService : IDisposable
     /// frame's value, not a torn one).</summary>
     private volatile TranslationEngine activeEngine;
 
+    /// <summary>Read-only view of <see cref="activeEngine"/> for Settings to show "actually using X
+    /// right now" next to the player's own engine choice, e.g. after an auto-switch-on-failure.</summary>
+    public TranslationEngine ActiveEngine => activeEngine;
+
     private readonly record struct TranslateJob(ChatMessageRecord Message, string TargetLanguage);
 
     public TranslationService(IPluginLog log, Configuration configuration, ChatHistoryService historyService, GeminiService geminiService, NotificationService notificationService)
@@ -255,7 +259,10 @@ public sealed class TranslationService : IDisposable
         return current;
     }
 
-    private static string EngineLabel(TranslationEngine engine) => engine switch
+    /// <summary>Short display name for an engine - shared by the switch-notification text above and
+    /// Settings' "currently using" indicator (<see cref="ActiveEngine"/>), so both describe engines
+    /// the same way.</summary>
+    public static string EngineLabel(TranslationEngine engine) => engine switch
     {
         TranslationEngine.MyMemory => "MyMemory",
         TranslationEngine.Gemini => "Gemini",

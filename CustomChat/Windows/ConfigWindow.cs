@@ -320,7 +320,11 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.TranslationEngine = (TranslationEngine)engineIndex;
             configuration.Save();
         }
-        ImGui.TextDisabled("Google (free): the default, no key needed - automatically detours through MyMemory for a while after a few requests fail in a row (likely a rate limit), then goes back to trying Google again. MyMemory: always uses that one directly. Gemini: needs an API key below.");
+        ImGui.TextDisabled("Your preference - automatically switches to the next engine in the rotation (Google -> MyMemory -> Gemini) after a few requests fail in a row (likely a rate limit), and stays there (even once it's working again) until it also fails enough times, or you pick something here yourself. Gemini needs an API key below.");
+
+        var activeEngine = plugin.TranslationService.ActiveEngine;
+        if (activeEngine != configuration.TranslationEngine)
+            ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f), $"Currently using {TranslationService.EngineLabel(activeEngine)} instead, after repeated failures on {TranslationService.EngineLabel(configuration.TranslationEngine)}. Pick an engine above to switch back explicitly.");
 
         if (configuration.TranslationEngine == TranslationEngine.Gemini && !plugin.GeminiService.IsConfigured)
             ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set - see the AI tab.");
