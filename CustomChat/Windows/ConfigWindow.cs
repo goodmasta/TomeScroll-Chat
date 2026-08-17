@@ -481,6 +481,14 @@ public sealed class ConfigWindow : Window, IDisposable
         }
         ImGui.TextDisabled("No \"(N)\" count or blink in the sidebar for this tab, even for whisper tabs (which otherwise always notify). Messages are still counted, just not shown.");
 
+        var autoTranslate = tab.AutoTranslate;
+        if (ImGui.Checkbox($"Auto-translate all messages in this tab##autotranslate_{tab.Id}", ref autoTranslate))
+        {
+            tab.AutoTranslate = autoTranslate;
+            plugin.TabManager.Save();
+        }
+        ImGui.TextDisabled($"Translates every message into \"{configuration.TranslateTargetLanguage}\" (Settings > General) automatically - same as picking \"Translate\" by hand per message, just for all of them. Only togglable here, not per-message or from the sidebar.");
+
         ImGui.Spacing();
         ImGui.TextUnformatted("Notification colours (this tab)");
 

@@ -212,8 +212,16 @@ public static class ChatMessageRenderer
         DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, itemTooltipService, itemContextService, index);
         ImGui.PopStyleColor();
 
+        // Settings > Tabs "Auto-translate" - fires the same request the manual "Translate" menu item
+        // does, just unconditionally instead of waiting for a click. RequestTranslate is already
+        // idempotent (safe to call every single draw - it only actually kicks off a fetch once per
+        // message, guarded internally), so no extra state needs tracking here.
+        if (tab.AutoTranslate && !string.IsNullOrWhiteSpace(msg.Body))
+            translation.RequestTranslate(msg, config.TranslateTargetLanguage);
+
         // Drawn under the same hanging indent as the body above it, on its own line - "Translate"
-        // (see the context menu below) fetches this lazily, so most messages never pay for it at all.
+        // (see the context menu below) fetches this lazily, so most messages never pay for it at all
+        // unless auto-translate (above) is on for this tab.
         var translatedText = translation.TryGetTranslation(msg);
         if (translatedText != null)
         {

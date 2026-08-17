@@ -101,6 +101,14 @@ public sealed class ChatTabConfig
     /// this gets turned back off later.</summary>
     public bool MuteUnreadIndicator { get; set; }
 
+    /// <summary>Auto-requests a translation (into <see cref="Configuration.TranslateTargetLanguage"/>)
+    /// for every message drawn in this tab, instead of needing "Translate" picked by hand per message
+    /// from the right-click menu - that manual path still exists and still works regardless.
+    /// Deliberately only toggleable from Settings > Tabs, not the per-message menu or a sidebar
+    /// quick-toggle - a "translate everything" switch is coarse/expensive (kicks off an API call per
+    /// message) enough that it shouldn't be one accidental click away.</summary>
+    public bool AutoTranslate { get; set; }
+
     /// <summary>Unread counter shown in the sidebar. Persisted so it survives a plugin reload/game
     /// restart - see <see cref="Plugin.Dispose"/> (saved on unload) and the places in
     /// <c>Windows/MainWindow.cs</c> that clear it (saved immediately, since those are infrequent
