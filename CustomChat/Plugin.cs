@@ -59,7 +59,6 @@ public sealed class Plugin : IDalamudPlugin
     public PartyInviteService PartyInviteService { get; }
     public FriendRequestService FriendRequestService { get; }
     public AdventurerPlateService AdventurerPlateService { get; }
-    public WindowsNotificationService WindowsNotificationService { get; }
     public ItemTooltipService ItemTooltipService { get; }
     public ItemContextService ItemContextService { get; }
     private readonly NativeChatHider nativeChatHider;
@@ -98,7 +97,6 @@ public sealed class Plugin : IDalamudPlugin
         PartyInviteService = new PartyInviteService(worldIdResolver, Log);
         FriendRequestService = new FriendRequestService(ObjectTable, TargetManager, ChatSendService);
         AdventurerPlateService = new AdventurerPlateService(ObjectTable, FriendListService);
-        WindowsNotificationService = new WindowsNotificationService(Log) { Enabled = Configuration.NotifyWhisperInWindows };
         ItemTooltipService = new ItemTooltipService(GameGui, Log);
         ItemContextService = new ItemContextService(Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
@@ -151,14 +149,6 @@ public sealed class Plugin : IDalamudPlugin
     {
         TabMessageBuffer.Append(tab, record);
         mainWindow.NotifyUnread(tab);
-
-        // Only the incoming half - an outgoing tell echoing back into the same PM tab shouldn't
-        // notify about a message the player just sent themselves.
-        if (record.ChatType == XivChatType.TellIncoming)
-        {
-            var senderName = string.IsNullOrEmpty(record.SenderName) ? "Unknown" : record.SenderName;
-            WindowsNotificationService.ShowTell(senderName, record.Body);
-        }
     }
 
     /// <summary>Sends text typed into a tab's input box, routed through that tab's outgoing channel
@@ -450,7 +440,6 @@ public sealed class Plugin : IDalamudPlugin
 
         ApplyNativeChatHidden();
         ChatHistoryService.SetMaxBytes(Configuration.MaxHistoryBytes);
-        WindowsNotificationService.Enabled = Configuration.NotifyWhisperInWindows;
     }
 
     /// <summary>Startup load: uses the disk-cached manifest if it's still within the configured TTL,
@@ -528,7 +517,6 @@ public sealed class Plugin : IDalamudPlugin
         EmoteService.Dispose();
         TranslationService.Dispose();
         GeminiService.Dispose();
-        WindowsNotificationService.Dispose();
         ChatCaptureService.Dispose();
         ChatHistoryService.Dispose();
     }

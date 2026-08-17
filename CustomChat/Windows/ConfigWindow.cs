@@ -84,33 +84,19 @@ public sealed class ConfigWindow : Window, IDisposable
         }
     }
 
-    /// <summary>Every "tell me about something" setting in one place: the OS-level tray balloon
-    /// (<see cref="Services.WindowsNotificationService"/>), the in-game popup toast
-    /// (<see cref="Services.NotificationService"/>), and the default unread blink/count colours tabs
-    /// fall back to when they haven't set their own (see Tabs > "Notification colours").</summary>
+    /// <summary>Every "tell me about something" setting in one place: the in-game popup toast
+    /// (<see cref="Services.NotificationService"/>) and the default unread blink/count colours tabs
+    /// fall back to when they haven't set their own (see Tabs > "Notification colours"). A native
+    /// Windows tray-balloon notification was tried and removed (2026-08-17) - <c>NotifyIcon.ShowBalloonTip</c>
+    /// turned out to be silently suppressed by Windows itself in practice (tray icon showed up fine,
+    /// balloon never did), and the actually-reliable modern replacement (Windows App SDK's
+    /// <c>AppNotificationManager</c>) needs a runtime dependency most players won't have installed -
+    /// not worth the added weight/risk for what this in-game popup already covers.</summary>
     private void DrawNotifications()
     {
-        var notifyWhisperInWindows = configuration.NotifyWhisperInWindows;
-        if (ImGui.Checkbox("Show a Windows notification on incoming tells", ref notifyWhisperInWindows))
-        {
-            configuration.NotifyWhisperInWindows = notifyWhisperInWindows;
-            configuration.Save();
-            plugin.WindowsNotificationService.Enabled = notifyWhisperInWindows;
-        }
-        ImGui.TextDisabled("Needs a small system tray icon to stay present while this is on - a Windows requirement for showing notifications.");
-
-        using (ImRaii.Disabled(!configuration.NotifyWhisperInWindows))
-        {
-            if (ImGui.Button("Test Windows notification"))
-                plugin.WindowsNotificationService.ShowTest();
-        }
-        if (!configuration.NotifyWhisperInWindows)
-            ImGui.TextDisabled("Enable the checkbox above first.");
-
-        ImGui.Spacing();
         if (ImGui.Button("Test popup notification"))
             plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);
-        ImGui.TextDisabled("A small popup in the top-right corner of the game window itself, not the Windows tray notification above - general-purpose, used to inform you of things as this plugin grows more features.");
+        ImGui.TextDisabled("A small popup next to the chat window's own title bar - general-purpose, used to inform you of things as this plugin grows more features.");
 
         ImGui.Spacing();
         var notifyOnInvalidCommand = configuration.NotifyOnInvalidCommand;

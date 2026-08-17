@@ -9,11 +9,13 @@ namespace CustomChat.Services;
 /// as a small stack of auto-dismissing toasts - not tied to chat/translation/any one feature, meant to
 /// be called from anywhere in the plugin (including future features) via <see cref="Plugin.NotificationService"/>,
 /// same reasoning as <see cref="GeminiService"/> being exposed generically rather than baked into one
-/// caller. Distinct from the two notification paths that already existed before this: <c>IToastGui</c>
-/// (Dalamud's native, game-styled toast - plain text only, no colour/icon/click control) and
-/// <see cref="WindowsNotificationService"/> (an OS-level tray balloon, only used for incoming tells
-/// while the game window is minimized). This one is for anything worth telling the player about while
-/// they're actually looking at the game, with more control than a native toast allows.
+/// caller. Distinct from <c>IToastGui</c> (Dalamud's native, game-styled toast - plain text only, no
+/// colour/icon/click control, already used for a few one-off confirmations) - this one is for anything
+/// worth telling the player about with more control than a native toast allows. An OS-level Windows
+/// tray-balloon notification (for incoming tells while minimized) was also tried and removed
+/// (2026-08-17) - <c>NotifyIcon.ShowBalloonTip</c> turned out to be silently suppressed by Windows
+/// itself in practice, and the actually-reliable modern replacement needs a runtime dependency most
+/// players won't have installed; this in-game popup is the one general-purpose option going forward.
 ///
 /// <para>Thread-safe (<see cref="Show"/> can be called from a background thread - most callers this
 /// was built for, e.g. a translation failure or a linkshell being auto-joined, happen off the main
