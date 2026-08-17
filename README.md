@@ -8,11 +8,42 @@ A fully custom, tab-based replacement for FFXIV's in-game chat window, built as 
 
 Not affiliated with Square Enix, Twitch, BetterTTV, 7TV or Google.
 
+## Quick install
+
+1. In-game: `/xlsettings` → **Experimental** → **Custom Plugin Repositories** → add:
+   `https://raw.githubusercontent.com/goodmasta/TomeScroll-Chat/main/pluginmaster.json`
+2. `/xlplugins` → find **TomeScroll Chat** → Install.
+3. Use `/tomescroll` to bring up the chat window, `/tomescroll config` for settings.
+
+Details and building from source: see [Installing](#installing) below.
+
 ## Requirements
 
 - FFXIV with XIVLauncher/Dalamud installed.
-- Currently installed as a **dev plugin** (not yet published to a plugin repo) - point Dalamud's dev plugin location at this project's build output.
 - Optional: a free [Google Gemini](https://ai.google.dev/) API key to unlock the AI features (translation and the rest of the chat window work without one).
+
+## Installing
+
+### As a custom repository (recommended for regular use)
+
+1. In-game: `/xlsettings` → **Experimental** → **Custom Plugin Repositories**.
+2. Add: `https://raw.githubusercontent.com/goodmasta/TomeScroll-Chat/main/pluginmaster.json`
+3. Save, then find "TomeScroll Chat" in `/xlplugins` and install it like any other plugin. Updates are picked up automatically like any other plugin.
+
+`.github/workflows/release.yml` rebuilds and republishes automatically on every push to `main`: it bumps `pluginmaster.json`'s version/timestamp to match the `<Version>` in the `.csproj`, moves a rolling `latest` tag, and updates the `latest` GitHub Release with the freshly packaged zip. Bumping the version only requires editing `<Version>` in `TomeScrollChat/TomeScrollChat.csproj` and pushing.
+
+### As a dev plugin (for local development)
+
+1. **Build it:**
+   ```
+   git clone https://github.com/goodmasta/TomeScroll-Chat.git
+   cd TomeScroll-Chat/TomeScrollChat
+   dotnet build -c Debug
+   ```
+   Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download). Produces `TomeScrollChat/bin/x64/Debug/TomeScrollChat.dll` (use `-c Release` for `bin/x64/Release/TomeScrollChat.dll` instead, if you'd rather run a release build).
+2. In-game: `/xlsettings` → **Experimental** → **Dev Plugin Locations** → add the path to the `TomeScrollChat.dll` built above.
+3. `/xlplugins` → **Dev Tools** → **Installed Dev Plugins** → enable TomeScroll Chat. Dalamud loads it immediately - no restart needed.
+4. Rebuilding after pulling changes is enough to update it - with "Automatic Reloading" left on for the dev plugin entry (the default), Dalamud picks up the new build the next time it changes.
 
 ## Commands
 
@@ -108,4 +139,3 @@ All AI actions only ever fill the compose box - none of them send anything autom
 
 - Per-Twitch-channel BTTV/7TV emotes (global sets only).
 - Animated emote playback (static frame only).
-- A plugin icon / listing on a public plugin repo - currently dev-plugin only.
