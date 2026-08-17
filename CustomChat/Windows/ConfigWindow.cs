@@ -19,6 +19,11 @@ public sealed class ConfigWindow : Window, IDisposable
     private string tabIconSearch = string.Empty;
     private string playerColorNicknameInput = string.Empty;
 
+    // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
+    // so this is throttled rather than hit on every single draw while the slider's just sitting there.
+    private double? avgBytesPerMessageCache;
+    private DateTime avgBytesPerMessageCacheTime;
+
     public ConfigWindow(Plugin plugin)
         : base("Custom Chat Settings###CustomChatConfigWindow")
     {
@@ -277,6 +282,15 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.ChatHistoryService.SetMaxBytes(configuration.MaxHistoryBytes);
         }
         ImGui.TextDisabled("Oldest messages are deleted first once this limit is exceeded (emote image cache is separate and not counted here).");
+
+        if (avgBytesPerMessageCache == null || DateTime.UtcNow - avgBytesPerMessageCacheTime > TimeSpan.FromSeconds(10))
+        {
+            avgBytesPerMessageCache = plugin.ChatHistoryService.EstimateAverageBytesPerMessage();
+            avgBytesPerMessageCacheTime = DateTime.UtcNow;
+        }
+
+        var estimatedMessages = (long)(configuration.MaxHistoryBytes / avgBytesPerMessageCache.Value);
+        ImGui.TextDisabled($"≈ {estimatedMessages:N0} messages at this size (based on your own average message size so far, ~{avgBytesPerMessageCache.Value:N0} bytes/message - a generic guess until there's real history to measure).");
 
         ImGui.Spacing();
         if (ImGui.Button("Clear history..."))

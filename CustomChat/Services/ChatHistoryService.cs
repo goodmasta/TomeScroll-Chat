@@ -345,6 +345,49 @@ public sealed class ChatHistoryService : IDisposable
         return results;
     }
 
+    /// <summary>Generic guess (schema overhead - id/routing_key/timestamp/chat_type/sender columns -
+    /// plus a short chat line) used only until there's real stored data to measure from instead - see
+    /// <see cref="EstimateAverageBytesPerMessage"/>.</summary>
+    private const double FallbackAverageBytesPerMessage = 200d;
+
+    /// <summary>Rough on-disk bytes-per-message average, computed from the *actual* current database
+    /// (current file size on disk / total row count) rather than a fixed guess - backs the "≈N
+    /// messages fit in this many MiB" estimate next to the history size slider in Settings > General,
+    /// nothing else depends on this being precise. Falls back to <see cref="FallbackAverageBytesPerMessage"/>
+    /// when there's no data yet to measure from (fresh install, or right after "Clear history"). Opens
+    /// its own short-lived read-only connection rather than touching <see cref="writerConnection"/> -
+    /// same reasoning as <see cref="LoadRecent"/> (that connection belongs to the background writer
+    /// thread; WAL mode allows a concurrent reader like this one without contention).</summary>
+    public double EstimateAverageBytesPerMessage()
+    {
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            connection.Open();
+
+            long count;
+            using (var countCmd = connection.CreateCommand())
+            {
+                countCmd.CommandText = "SELECT COUNT(*) FROM messages;";
+                count = Convert.ToInt64(countCmd.ExecuteScalar());
+            }
+
+            if (count <= 0)
+                return FallbackAverageBytesPerMessage;
+
+            var fileInfo = new FileInfo(dbPath);
+            var walInfo = new FileInfo(dbPath + "-wal");
+            var currentSize = (fileInfo.Exists ? fileInfo.Length : 0) + (walInfo.Exists ? walInfo.Length : 0);
+
+            return currentSize > 0 ? (double)currentSize / count : FallbackAverageBytesPerMessage;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to estimate average message size");
+            return FallbackAverageBytesPerMessage;
+        }
+    }
+
     /// <summary>Deletes the oldest rows in batches until the database file is back under <see cref="maxBytes"/>.</summary>
     private void EnforceSizeCap()
     {
