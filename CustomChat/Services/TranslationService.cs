@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using CustomChat.Models;
@@ -18,70 +20,151 @@ namespace CustomChat.Services;
 /// oversight. Source language is always "auto" - only the target is user-configurable
 /// (<see cref="Configuration.TranslateTargetLanguage"/>).
 ///
-/// Results are cached by the <see cref="ChatMessageRecord"/> instance itself (reference identity,
-/// not <see cref="ChatMessageRecord.Id"/> - that's the SQLite rowid and reads back 0 for any
-/// message not yet flushed to disk by the background writer, which would collide across distinct
-/// messages if used as a cache key). <see cref="ChatCaptureService"/> already creates one distinct
-/// record instance per tab a message matches, so this also naturally scopes a translation to the
-/// specific tab it was requested from.
+/// <para>Per-message requests (<see cref="RequestTranslate"/>/<see cref="ForceRetranslate"/> - the
+/// per-message cache path used by the message context menu and <see cref="ChatTabConfig.AutoTranslate"/>)
+/// go through a single-consumer queue rather than firing immediately: <see cref="WorkerLoopAsync"/>
+/// processes one at a time with a baseline delay between requests, plus exponential backoff stacked
+/// on top after consecutive failures (the free endpoint's most likely failure mode is a rate limit,
+/// even though it never returns a distinguishable status - any failure is treated as a possible one).
+/// This matters specifically because of <see cref="ChatTabConfig.AutoTranslate"/>: opening a tab with
+/// hundreds of untranslated backlog messages would otherwise fire that many requests in the same
+/// frame. <see cref="TranslateRawAsync"/> (translating the player's own not-yet-sent input box text)
+/// deliberately bypasses this queue - it's a rare, manual, one-off action, not the bursty case this
+/// exists for.</para>
+///
+/// <para>Results are cached by the <see cref="ChatMessageRecord"/> instance itself (reference
+/// identity, not <see cref="ChatMessageRecord.Id"/> - that's the SQLite rowid and reads back 0 for
+/// any message not yet flushed to disk by the background writer, which would collide across
+/// distinct messages if used as a cache key). <see cref="ChatCaptureService"/> already creates one
+/// distinct record instance per tab a message matches, so this also naturally scopes a translation
+/// to the specific tab it was requested from. A successful translation is also persisted back to
+/// history (<see cref="ChatHistoryService.SaveTranslation"/>), and <see cref="ChatMessageRecord.PersistedTranslation"/>
+/// (set only when a record is loaded from disk) is checked as a cache hit before ever queuing a new
+/// request - so re-opening a tab, or a plugin restart, doesn't re-translate what's already been
+/// translated before. The cached/persisted language is tracked alongside the text so switching
+/// <see cref="Configuration.TranslateTargetLanguage"/> doesn't show a stale translation into the
+/// previous target language.</para>
 /// </summary>
 public sealed class TranslationService : IDisposable
 {
     private readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private readonly IPluginLog log;
-    private readonly ConcurrentDictionary<ChatMessageRecord, string> results = new();
-    private readonly ConcurrentDictionary<ChatMessageRecord, byte> inFlight = new();
+    private readonly ChatHistoryService historyService;
+    private readonly ConcurrentDictionary<ChatMessageRecord, (string Text, string Language)> results = new();
+    private readonly ConcurrentDictionary<ChatMessageRecord, byte> pendingOrInFlight = new();
+    private readonly Channel<TranslateJob> queue = Channel.CreateUnbounded<TranslateJob>(new UnboundedChannelOptions
+    {
+        SingleReader = true,
+        SingleWriter = false,
+    });
+    private readonly CancellationTokenSource cts = new();
+    private readonly Task workerTask;
 
-    public TranslationService(IPluginLog log)
+    private const int BaseDelayMs = 350;
+    private const int MaxBackoffSeconds = 60;
+
+    private readonly record struct TranslateJob(ChatMessageRecord Message, string TargetLanguage);
+
+    public TranslationService(IPluginLog log, ChatHistoryService historyService)
     {
         this.log = log;
+        this.historyService = historyService;
+        workerTask = Task.Run(() => WorkerLoopAsync(cts.Token));
     }
 
-    public string? TryGetTranslation(ChatMessageRecord message) =>
-        results.TryGetValue(message, out var text) ? text : null;
+    public string? TryGetTranslation(ChatMessageRecord message, string targetLanguage)
+    {
+        if (results.TryGetValue(message, out var cached) && cached.Language == targetLanguage)
+            return cached.Text;
 
-    public bool IsTranslating(ChatMessageRecord message) => inFlight.ContainsKey(message);
+        if (!string.IsNullOrEmpty(message.PersistedTranslation) && message.PersistedTranslationLanguage == targetLanguage)
+        {
+            results[message] = (message.PersistedTranslation, targetLanguage);
+            return message.PersistedTranslation;
+        }
+
+        return null;
+    }
+
+    public bool IsTranslating(ChatMessageRecord message) => pendingOrInFlight.ContainsKey(message);
 
     public void ClearTranslation(ChatMessageRecord message) => results.TryRemove(message, out _);
 
-    /// <summary>Kicks off a background translation if this message hasn't already been translated
-    /// (or isn't already being translated). Safe to call repeatedly, e.g. on every "Translate" click.</summary>
+    /// <summary>Queues a background translation if this message hasn't already been translated (in
+    /// this session or a previous one, see <see cref="TryGetTranslation"/>) or isn't already
+    /// queued/in flight. Safe to call repeatedly, e.g. on every "Translate" click or every draw while
+    /// <see cref="ChatTabConfig.AutoTranslate"/> is on - actually dispatching happens on
+    /// <see cref="WorkerLoopAsync"/>'s own throttled schedule, not immediately.</summary>
     public void RequestTranslate(ChatMessageRecord message, string targetLanguage)
     {
-        if (string.IsNullOrWhiteSpace(message.Body) || results.ContainsKey(message) || !inFlight.TryAdd(message, 0))
+        if (string.IsNullOrWhiteSpace(message.Body) || TryGetTranslation(message, targetLanguage) != null || !pendingOrInFlight.TryAdd(message, 0))
             return;
 
-        _ = TranslateAsync(message, targetLanguage);
+        queue.Writer.TryWrite(new TranslateJob(message, targetLanguage));
     }
 
     /// <summary>Always re-fetches, even if a translation is already cached - "Retranslate" in the
     /// message context menu, for when the target language was changed after the fact or the first
-    /// result just looked wrong. A no-op while one's already in flight for this message.</summary>
+    /// result just looked wrong. A no-op while one's already queued/in flight for this message.</summary>
     public void ForceRetranslate(ChatMessageRecord message, string targetLanguage)
     {
-        if (string.IsNullOrWhiteSpace(message.Body) || !inFlight.TryAdd(message, 0))
+        if (string.IsNullOrWhiteSpace(message.Body) || !pendingOrInFlight.TryAdd(message, 0))
             return;
 
-        _ = TranslateAsync(message, targetLanguage);
+        queue.Writer.TryWrite(new TranslateJob(message, targetLanguage));
     }
 
-    private async Task TranslateAsync(ChatMessageRecord message, string targetLanguage)
+    /// <summary>Single consumer for every queued per-message translation - see the class doc comment
+    /// for why this exists instead of firing each request immediately.</summary>
+    private async Task WorkerLoopAsync(CancellationToken token)
     {
+        var consecutiveFailures = 0;
         try
         {
-            var translated = await TranslateRawAsync(message.Body, targetLanguage).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(translated))
-                results[message] = translated;
+            while (await queue.Reader.WaitToReadAsync(token).ConfigureAwait(false))
+            {
+                while (queue.Reader.TryRead(out var job))
+                {
+                    var translated = await TranslateRawAsync(job.Message.Body, job.TargetLanguage).ConfigureAwait(false);
+                    pendingOrInFlight.TryRemove(job.Message, out _);
+
+                    if (!string.IsNullOrEmpty(translated))
+                    {
+                        results[job.Message] = (translated, job.TargetLanguage);
+                        historyService.SaveTranslation(job.Message, translated, job.TargetLanguage);
+                        consecutiveFailures = 0;
+                    }
+                    else
+                    {
+                        consecutiveFailures++;
+                    }
+
+                    // Baseline gap between every request, plus exponential backoff stacked on top
+                    // after consecutive failures - the free endpoint never distinguishes "rate
+                    // limited" from any other failure, so any failure is treated as a possible one.
+                    // Capped so a bad patch can't back off forever.
+                    var delay = TimeSpan.FromMilliseconds(BaseDelayMs);
+                    if (consecutiveFailures > 0)
+                    {
+                        var backoffSeconds = Math.Min(MaxBackoffSeconds, 2 * Math.Pow(2, Math.Min(consecutiveFailures - 1, 5)));
+                        delay += TimeSpan.FromSeconds(backoffSeconds);
+                        log.Warning("CustomChat: translation failed ({Count} in a row) - backing off {Delay:0}s before the next request", consecutiveFailures, delay.TotalSeconds);
+                    }
+
+                    await Task.Delay(delay, token).ConfigureAwait(false);
+                }
+            }
         }
-        finally
+        catch (OperationCanceledException)
         {
-            inFlight.TryRemove(message, out _);
+            // Shutting down.
         }
     }
 
-    /// <summary>The same translation call, without the per-message cache - used for one-off
-    /// translations that aren't tied to a received <see cref="ChatMessageRecord"/>, e.g. translating
-    /// the player's own not-yet-sent text in the message input box.</summary>
+    /// <summary>The same translation call, without the per-message cache or the queue/throttle above -
+    /// used for one-off translations that aren't tied to a received <see cref="ChatMessageRecord"/>,
+    /// e.g. translating the player's own not-yet-sent text in the message input box. A rare, manual,
+    /// single action, not the bursty case the queue exists for.</summary>
     public async Task<string?> TranslateRawAsync(string text, string targetLanguage)
     {
         try
@@ -127,5 +210,20 @@ public sealed class TranslationService : IDisposable
         return sb.Length > 0 ? sb.ToString() : null;
     }
 
-    public void Dispose() => http.Dispose();
+    public void Dispose()
+    {
+        cts.Cancel();
+        queue.Writer.TryComplete();
+        try
+        {
+            workerTask.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+            // Best-effort - shutting down anyway.
+        }
+
+        cts.Dispose();
+        http.Dispose();
+    }
 }

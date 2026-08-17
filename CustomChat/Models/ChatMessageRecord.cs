@@ -33,4 +33,17 @@ public sealed class ChatMessageRecord
     /// <see cref="ChatPayloadLink"/>. Persisted to (and restored from) history as of 2026-08-13, so
     /// links stay clickable across a plugin restart, not just for the session that received them.</summary>
     public IReadOnlyList<ChatPayloadLink> PayloadLinks { get; init; } = Array.Empty<ChatPayloadLink>();
+
+    /// <summary>Translation already saved to history for this exact message, if any - set only when
+    /// loaded from disk (see <see cref="Services.ChatHistoryService.LoadRecent"/>/
+    /// <see cref="Services.ChatHistoryService.SaveTranslation"/>), never for a freshly-captured live
+    /// message. <see cref="Services.TranslationService"/> treats this as a cache hit, avoiding a
+    /// repeat network request for a message that was already translated in an earlier session.</summary>
+    public string? PersistedTranslation { get; init; }
+
+    /// <summary>Target language <see cref="PersistedTranslation"/> was translated into - compared
+    /// against the currently-configured target language before trusting the persisted value, so
+    /// changing <see cref="Configuration.TranslateTargetLanguage"/> doesn't silently show a
+    /// translation into the *previous* target language.</summary>
+    public string? PersistedTranslationLanguage { get; init; }
 }

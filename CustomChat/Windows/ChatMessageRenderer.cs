@@ -222,7 +222,7 @@ public static class ChatMessageRenderer
         // Drawn under the same hanging indent as the body above it, on its own line - "Translate"
         // (see the context menu below) fetches this lazily, so most messages never pay for it at all
         // unless auto-translate (above) is on for this tab.
-        var translatedText = translation.TryGetTranslation(msg);
+        var translatedText = translation.TryGetTranslation(msg, config.TranslateTargetLanguage);
         if (translatedText != null)
         {
             ImGui.PushStyleColor(ImGuiCol.Text, TranslationColor);

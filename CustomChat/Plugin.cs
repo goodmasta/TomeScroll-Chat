@@ -78,7 +78,7 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, TabManager, ChatHistoryService);
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
-        TranslationService = new TranslationService(Log);
+        TranslationService = new TranslationService(Log, ChatHistoryService);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
         FriendListService = new FriendListService(worldIdResolver, Log);

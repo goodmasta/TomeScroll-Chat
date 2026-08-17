@@ -102,33 +102,36 @@ public sealed class ChatHistoryService : IDisposable
             cmd.ExecuteNonQuery();
         }
 
-        // payload_links wasn't part of the original schema - added later (2026-08-13) so map/item
-        // links survive a plugin restart instead of losing their clickability. CREATE TABLE IF NOT
-        // EXISTS above only matters for a brand new database file; an already-existing one needs an
-        // explicit migration, and SQLite has no "ADD COLUMN IF NOT EXISTS", so check first.
+        // Columns added after the original schema (payload_links, then translation/translation_lang)
+        // need an explicit migration for an already-existing database file - CREATE TABLE IF NOT
+        // EXISTS above only matters for a brand new one, and SQLite has no "ADD COLUMN IF NOT
+        // EXISTS", so check what's already there first.
+        var existingColumns = new HashSet<string>(StringComparer.Ordinal);
         using (var checkCmd = connection.CreateCommand())
         {
             checkCmd.CommandText = "PRAGMA table_info(messages);";
-            var hasColumn = false;
-            using (var reader = checkCmd.ExecuteReader())
-            {
-                while (reader.Read())
-                {
-                    if (string.Equals(reader.GetString(1), "payload_links", StringComparison.Ordinal))
-                    {
-                        hasColumn = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!hasColumn)
-            {
-                using var alterCmd = connection.CreateCommand();
-                alterCmd.CommandText = "ALTER TABLE messages ADD COLUMN payload_links TEXT;";
-                alterCmd.ExecuteNonQuery();
-            }
+            using var reader = checkCmd.ExecuteReader();
+            while (reader.Read())
+                existingColumns.Add(reader.GetString(1));
         }
+
+        void AddColumnIfMissing(string name, string sqlType)
+        {
+            if (existingColumns.Contains(name))
+                return;
+
+            using var alterCmd = connection.CreateCommand();
+            alterCmd.CommandText = $"ALTER TABLE messages ADD COLUMN {name} {sqlType};";
+            alterCmd.ExecuteNonQuery();
+        }
+
+        AddColumnIfMissing("payload_links", "TEXT");
+
+        // translation/translation_lang (2026-08-17) - lets a translation survive a tab reopen/plugin
+        // restart instead of re-requesting it from the translation endpoint every time, see
+        // SaveTranslation/LoadRecent and TranslationService.
+        AddColumnIfMissing("translation", "TEXT");
+        AddColumnIfMissing("translation_lang", "TEXT");
     }
 
     /// <summary>Enqueues a message for background persistence. Non-blocking.</summary>
@@ -316,7 +319,7 @@ public sealed class ChatHistoryService : IDisposable
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links
+            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links, translation, translation_lang
             FROM messages
             WHERE routing_key = $routingKey
             ORDER BY id DESC
@@ -338,11 +341,50 @@ public sealed class ChatHistoryService : IDisposable
                 Body = reader.GetString(5),
                 RoutingKey = routingKey,
                 PayloadLinks = DeserializePayloadLinks(reader.IsDBNull(6) ? null : reader.GetString(6)),
+                PersistedTranslation = reader.IsDBNull(7) ? null : reader.GetString(7),
+                PersistedTranslationLanguage = reader.IsDBNull(8) ? null : reader.GetString(8),
             });
         }
 
         results.Reverse();
         return results;
+    }
+
+    /// <summary>Persists a completed translation so it doesn't need to be re-requested from the
+    /// translation endpoint the next time this message is loaded (a tab reopen, or a plugin restart) -
+    /// called by <see cref="TranslationService"/> after a successful fetch. Matched by
+    /// (routing_key, timestamp_utc, sender_key, body) rather than <see cref="ChatMessageRecord.Id"/>,
+    /// which is still 0 at this point for a just-captured live message (the background writer may not
+    /// have flushed it yet) - see that field's own doc comment. A no-op if the row hasn't actually
+    /// been written yet (rare timing case: translation finished faster than the batched history
+    /// write) - the translation still displays for the rest of this session either way via
+    /// TranslationService's own in-memory cache, it just won't survive a reload this one time. Opens
+    /// its own connection rather than touching <see cref="writerConnection"/> - this runs on
+    /// TranslationService's own background worker thread, not the history writer's.</summary>
+    public void SaveTranslation(ChatMessageRecord record, string translatedText, string targetLanguage)
+    {
+        try
+        {
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = """
+                UPDATE messages
+                SET translation = $translation, translation_lang = $lang
+                WHERE routing_key = $routingKey AND timestamp_utc = $timestamp AND sender_key = $senderKey AND body = $body;
+                """;
+            cmd.Parameters.AddWithValue("$translation", translatedText);
+            cmd.Parameters.AddWithValue("$lang", targetLanguage);
+            cmd.Parameters.AddWithValue("$routingKey", record.RoutingKey);
+            cmd.Parameters.AddWithValue("$timestamp", new DateTimeOffset(record.TimestampUtc).ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("$senderKey", record.SenderKey);
+            cmd.Parameters.AddWithValue("$body", record.Body);
+            cmd.ExecuteNonQuery();
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "CustomChat: failed to persist a translation to history");
+        }
     }
 
     /// <summary>Generic guess (schema overhead - id/routing_key/timestamp/chat_type/sender columns -
