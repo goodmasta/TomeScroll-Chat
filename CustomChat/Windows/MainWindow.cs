@@ -365,8 +365,25 @@ public sealed class MainWindow : Window, IDisposable
         inputText += ItemLinkPlaceholder;
     }
 
+    /// <summary>This window's actual current on-screen position/size, in the same coordinate space as
+    /// <see cref="ImGuiHelpers.MainViewport"/> - captured here (inside <c>Draw()</c>, the only place
+    /// this window's own <c>ImGui.GetWindowPos/Size()</c> queries are valid, *before* Begin()/End() -
+    /// PreDraw runs too early, PostDraw runs after End(), see <see cref="NotificationOverlay"/>'s own
+    /// doc comment for why that distinction matters) so <see cref="NotificationOverlay"/> can anchor
+    /// itself to this window instead of a fixed screen corner. Updated every frame regardless of
+    /// <see cref="isChatHidden"/> (below), unlike <see cref="lastKnownSize"/>, which deliberately does
+    /// *not* update while hidden - these serve different purposes: this is "where is the window right
+    /// now" (should reflect the truth even collapsed to just its title bar), that one is "what size to
+    /// restore to later".</summary>
+    public Vector2 ScreenPosition { get; private set; }
+
+    public Vector2 ScreenSize { get; private set; }
+
     public override void Draw()
     {
+        ScreenPosition = ImGui.GetWindowPos();
+        ScreenSize = ImGui.GetWindowSize();
+
         // Nothing drawn while hidden - the title bar (and the eye button on it) still renders
         // regardless, since that happens as part of Begin() itself, outside this method entirely.
         if (isChatHidden)

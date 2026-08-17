@@ -107,7 +107,7 @@ public sealed class Plugin : IDalamudPlugin
 
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
-        notificationOverlay = new NotificationOverlay(NotificationService);
+        notificationOverlay = new NotificationOverlay(NotificationService, mainWindow);
         WindowSystem.AddWindow(mainWindow);
         WindowSystem.AddWindow(configWindow);
         WindowSystem.AddWindow(notificationOverlay);

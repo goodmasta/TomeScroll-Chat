@@ -12,10 +12,13 @@ namespace CustomChat.Windows;
 
 /// <summary>
 /// Draws whatever's currently queued in <see cref="NotificationService"/> as a small stack of toasts
-/// anchored to the top-right of the game window. Always registered but only actually drawn while
-/// there's at least one notification live (see <see cref="DrawConditions"/>), same "always open,
-/// closing is refused" shape as <c>MainWindow</c> - nothing about this window is meant to be
-/// user-closable, it just has nothing to draw most of the time.
+/// anchored just to the right of <c>MainWindow</c>'s own title bar (see <see cref="MainWindow.ScreenPosition"/>/
+/// <see cref="MainWindow.ScreenSize"/>, captured there for exactly this) - not a fixed screen corner,
+/// so it moves/hides along with the chat window itself rather than sitting in some unrelated part of
+/// the screen. Always registered but only actually drawn while there's at least one notification live
+/// (see <see cref="DrawConditions"/>), same "always open, closing is refused" shape as <c>MainWindow</c>
+/// - nothing about this window is meant to be user-closable, it just has nothing to draw most of the
+/// time.
 ///
 /// <para><b>Sizing is fully manual</b> (<see cref="PreDraw"/> measures every card's wrapped-text height
 /// via <see cref="ImGui.CalcTextSize(string, bool, float)"/> and forces an exact <c>Size</c> every
@@ -48,11 +51,13 @@ public sealed class NotificationOverlay : Window
     private static readonly Vector4 ErrorColor = new(1f, 0.4f, 0.4f, 1f);
 
     private readonly NotificationService notifications;
+    private readonly MainWindow mainWindow;
 
-    public NotificationOverlay(NotificationService notifications)
+    public NotificationOverlay(NotificationService notifications, MainWindow mainWindow)
         : base("###CustomChatNotificationOverlay")
     {
         this.notifications = notifications;
+        this.mainWindow = mainWindow;
 
         IsOpen = true;
         ShowCloseButton = false;
@@ -80,10 +85,17 @@ public sealed class NotificationOverlay : Window
             totalHeight += cardHeight + CardSpacing;
         }
 
-        var viewport = ImGuiHelpers.MainViewport;
         Size = new Vector2(Width, Math.Max(totalHeight, 1f));
         SizeCondition = ImGuiCond.Always;
-        Position = new Vector2(viewport.Pos.X + viewport.Size.X - Width - Margin, viewport.Pos.Y + Margin);
+
+        // Anchored just right of MainWindow's own title bar - roughly level with its "Custom Chat"
+        // title text - rather than a fixed screen corner, so this moves with the chat window instead
+        // of sitting in some unrelated spot. Clamped to the viewport's right edge so it can't be
+        // pushed off-screen if MainWindow itself is already flush against it.
+        var viewport = ImGuiHelpers.MainViewport;
+        var desiredX = mainWindow.ScreenPosition.X + mainWindow.ScreenSize.X + Margin;
+        var maxX = viewport.Pos.X + viewport.Size.X - Width - Margin;
+        Position = new Vector2(Math.Min(desiredX, maxX), mainWindow.ScreenPosition.Y);
         PositionCondition = ImGuiCond.Always;
     }
 
