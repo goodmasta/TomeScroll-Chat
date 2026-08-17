@@ -4,7 +4,6 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Utility;
-using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using CustomChat.Models;
 using CustomChat.Services;
@@ -13,20 +12,35 @@ namespace CustomChat.Windows;
 
 /// <summary>
 /// Draws whatever's currently queued in <see cref="NotificationService"/> as a small stack of toasts
-/// anchored to the top-right of the game window - fixed width (so its X position is knowable without
-/// first drawing its content, avoiding the "need the size to compute the position, need the position
-/// drawn to know the size" trap other windows in this project have hit before), height grows freely
-/// per-card via <see cref="ImGuiWindowFlags.AlwaysAutoResize"/> as notifications stack up. Always
-/// registered but only actually drawn while there's at least one notification live (see
-/// <see cref="DrawConditions"/>), same "always open, closing is refused" shape as <c>MainWindow</c>
-/// (nothing about this window is meant to be user-closable - it just has nothing to draw most of the
-/// time).
+/// anchored to the top-right of the game window. Always registered but only actually drawn while
+/// there's at least one notification live (see <see cref="DrawConditions"/>), same "always open,
+/// closing is refused" shape as <c>MainWindow</c> - nothing about this window is meant to be
+/// user-closable, it just has nothing to draw most of the time.
+///
+/// <para><b>Sizing is fully manual</b> (<see cref="PreDraw"/> measures every card's wrapped-text height
+/// via <see cref="ImGui.CalcTextSize(string, bool, float)"/> and forces an exact <c>Size</c> every
+/// frame) rather than <c>ImGuiWindowFlags.AlwaysAutoResize</c>, which was tried first and produced a
+/// badly oversized window in practice (reported - filled almost the whole screen). Root cause not
+/// pinned down, but this window sharing <c>IsTopMost</c> with the *other* thing in this project that
+/// hit an unexplained sizing/state quirk (<c>MainWindow</c>'s <c>Collapsed</c> handling, see memory) is
+/// the prime suspect - rather than debug auto-resize further, this just measures content up front and
+/// forces the result directly, the same "don't trust automatic sizing here, compute and force it"
+/// approach that fixed that earlier issue too.</para>
+///
+/// <para>Each card's actual on-screen rectangle is captured via <c>GetItemRectMin/Max</c> right after
+/// drawing its real content (icon + wrapped text), then painted behind it via
+/// <see cref="ImDrawListPtr.ChannelsSplit"/> - the exact same "measure what was actually drawn, paint
+/// the background behind it" technique <c>ChatMessageRenderer.DrawMessage</c>'s own row highlight
+/// already uses successfully in this project, reused here instead of inventing a new approach.</para>
 /// </summary>
 public sealed class NotificationOverlay : Window
 {
     private const float Width = 320f;
     private const float Margin = 16f;
     private const float FadeSeconds = 0.6f;
+    private const float CardPadding = 8f;
+    private const float CardSpacing = 6f;
+    private const float IconColumnWidth = 22f;
 
     private static readonly Vector4 InfoColor = new(0.55f, 0.8f, 1f, 1f);
     private static readonly Vector4 SuccessColor = new(0.5f, 1f, 0.6f, 1f);
@@ -48,15 +62,7 @@ public sealed class NotificationOverlay : Window
 
         Flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove |
                 ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse |
-                ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoBackground |
-                ImGuiWindowFlags.AlwaysAutoResize;
-
-        // Width fixed, height free - see the class doc comment for why this specific split matters.
-        SizeConstraints = new WindowSizeConstraints
-        {
-            MinimumSize = new Vector2(Width, 10),
-            MaximumSize = new Vector2(Width, float.MaxValue),
-        };
+                ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoBackground;
     }
 
     public override void OnClose() => IsOpen = true;
@@ -65,7 +71,18 @@ public sealed class NotificationOverlay : Window
 
     public override void PreDraw()
     {
+        var wrapWidth = Width - (CardPadding * 2) - IconColumnWidth;
+        var totalHeight = CardPadding;
+        foreach (var n in notifications.Active)
+        {
+            var textHeight = ImGui.CalcTextSize(n.Message, false, wrapWidth).Y;
+            var cardHeight = Math.Max(textHeight, ImGui.GetTextLineHeight()) + (CardPadding * 2);
+            totalHeight += cardHeight + CardSpacing;
+        }
+
         var viewport = ImGuiHelpers.MainViewport;
+        Size = new Vector2(Width, Math.Max(totalHeight, 1f));
+        SizeCondition = ImGuiCond.Always;
         Position = new Vector2(viewport.Pos.X + viewport.Size.X - Width - Margin, viewport.Pos.Y + Margin);
         PositionCondition = ImGuiCond.Always;
     }
@@ -74,6 +91,8 @@ public sealed class NotificationOverlay : Window
     {
         var toShow = notifications.Active;
         List<NotificationService.Notification>? toDismiss = null;
+        var drawList = ImGui.GetWindowDrawList();
+        var wrapWidth = Width - (CardPadding * 2) - IconColumnWidth;
 
         for (var i = 0; i < toShow.Count; i++)
         {
@@ -89,33 +108,38 @@ public sealed class NotificationOverlay : Window
                 _ => (InfoColor, FontAwesomeIcon.InfoCircle),
             };
 
-            // One shared alpha for the whole card (background, border, icon, text) rather than tinting
-            // each colour individually - simpler, and nothing here needs independent per-element alpha.
+            drawList.ChannelsSplit(2);
+            drawList.ChannelsSetCurrent(1); // foreground: real content, drawn first so its rect is known
+
             ImGui.PushStyleVar(ImGuiStyleVar.Alpha, alpha);
-            ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(accent.X * 0.15f, accent.Y * 0.15f, accent.Z * 0.15f, 0.9f));
-            ImGui.PushStyleColor(ImGuiCol.Border, accent);
+            ImGui.Indent(CardPadding);
+            ImGui.Dummy(new Vector2(0, 1)); // top inset before the content, tiny since ItemSpacing already adds most of it
+            ImGui.BeginGroup();
 
-            using (ImRaii.PushId(i))
-            using (var child = ImRaii.Child($"notif_{i}", new Vector2(-1, 0), true, ImGuiWindowFlags.AlwaysAutoResize))
-            {
-                if (child.Success)
-                {
-                    ImGui.PushStyleColor(ImGuiCol.Text, accent);
-                    using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
-                        ImGui.TextUnformatted(icon.ToIconString());
-                    ImGui.PopStyleColor();
+            ImGui.PushStyleColor(ImGuiCol.Text, accent);
+            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+                ImGui.TextUnformatted(icon.ToIconString());
+            ImGui.PopStyleColor();
+            ImGui.SameLine();
 
-                    ImGui.SameLine();
-                    ImGui.PushTextWrapPos(ImGui.GetWindowContentRegionMax().X);
-                    ImGui.TextUnformatted(notification.Message);
-                    ImGui.PopTextWrapPos();
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + wrapWidth);
+            ImGui.TextUnformatted(notification.Message);
+            ImGui.PopTextWrapPos();
 
-                    if (ImGui.IsWindowHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
-                        (toDismiss ??= new List<NotificationService.Notification>()).Add(notification);
-                }
-            }
+            ImGui.EndGroup();
+            ImGui.Unindent(CardPadding);
 
-            ImGui.PopStyleColor(2);
+            var cardMin = ImGui.GetItemRectMin() - new Vector2(CardPadding, CardPadding);
+            var cardMax = ImGui.GetItemRectMax() + new Vector2(CardPadding, CardPadding);
+
+            if (ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(cardMin, cardMax) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+                (toDismiss ??= new List<NotificationService.Notification>()).Add(notification);
+
+            drawList.ChannelsSetCurrent(0); // background: painted after, but rendered behind the content
+            drawList.AddRectFilled(cardMin, cardMax, ImGui.GetColorU32(new Vector4(accent.X * 0.15f, accent.Y * 0.15f, accent.Z * 0.15f, 0.9f)), 4f);
+            drawList.AddRect(cardMin, cardMax, ImGui.GetColorU32(accent), 4f);
+            drawList.ChannelsMerge();
+
             ImGui.PopStyleVar();
             ImGui.Spacing();
         }
