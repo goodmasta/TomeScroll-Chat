@@ -137,10 +137,23 @@ public sealed class MainWindow : Window, IDisposable
     private string searchQuery = string.Empty;
     private bool focusSearchInput;
 
-    // Eye-button/auto-hide state (see PreDraw) - collapses the window down to just the title bar
+    // Eye-button/auto-hide state (see PreDraw/Draw) - shrinks the window down to just the title bar
     // rather than actually closing it, since nothing is allowed to close this window (see the
     // constructor). Not persisted - always starts visible on a fresh plugin load.
+    //
+    // Deliberately NOT implemented via Window.Collapsed/CollapsedCondition, despite that being the
+    // "correct"-looking API for this (confirmed via Dalamud's own WindowHost.cs source that
+    // ApplyConditionals does call ImGui.SetNextWindowCollapsed every frame, and via ImGui's own
+    // source that NoCollapse only blocks the *user's* double-click toggle, not the API) - live
+    // testing showed it simply has no visible effect on this window regardless (root cause not
+    // pinned down - IsTopMost's multi-viewport OS-window path is the prime suspect, but unconfirmed).
+    // This instead directly forces Size down to just one frame-height tall while hidden (and back up
+    // to whatever it was before, once) - a mechanism this window already relies on for its normal
+    // size anyway, so it's known to actually work rather than depending on Collapsed's unconfirmed
+    // behaviour in this environment.
     private bool isChatHidden;
+    private bool wasChatHiddenLastFrame;
+    private Vector2 lastKnownSize = new(640, 420); // matches the constructor's initial Size
     private float inactiveSeconds;
     private readonly TitleBarButton hideChatButton;
 
@@ -182,7 +195,9 @@ public sealed class MainWindow : Window, IDisposable
         // Kept as a field (rather than only ever living inside TitleBarButtons) so PreDraw can add/
         // remove this *one* button by reference as Configuration.ShowHideChatButton is toggled live,
         // without touching the Cog button above. Icon is updated live in PreDraw too (Eye/EyeSlash) -
-        // this button stays visible even while the window is collapsed, since it's the only way back.
+        // this button stays visible even while the window is hidden (title bar buttons render as part
+        // of Begin() itself, independent of whether Draw() draws a body that frame), since it's the
+        // only way back.
         hideChatButton = new TitleBarButton
         {
             Icon = FontAwesomeIcon.Eye,
@@ -193,11 +208,6 @@ public sealed class MainWindow : Window, IDisposable
                 isChatHidden = !isChatHidden;
                 if (!isChatHidden)
                     inactiveSeconds = 0f; // don't let a stale timer immediately re-trigger auto-hide
-
-                // Temporary breadcrumb while diagnosing a report that clicking this doesn't visibly
-                // hide the chat - confirms the click is even reaching this handler and what value it
-                // computed, without needing to guess blind. Safe to remove once confirmed working.
-                Plugin.Log.Info($"CustomChat: hide-chat button clicked, isChatHidden is now {isChatHidden}");
             },
         };
         if (Plugin.Configuration.ShowHideChatButton)
@@ -231,8 +241,8 @@ public sealed class MainWindow : Window, IDisposable
 
         // Auto-hide timer - resets the instant the window is genuinely focused, accumulates
         // otherwise. Only the eye button (manual, see its Click handler) ever un-hides once this
-        // trips - just refocusing the (still-collapsed) title bar resets the timer but deliberately
-        // doesn't un-collapse on its own, so a stray click near it can't silently undo an intentional
+        // trips - just refocusing the (still-shrunk) title bar resets the timer but deliberately
+        // doesn't un-hide on its own, so a stray click near it can't silently undo an intentional
         // auto-hide.
         if (IsFocused)
             inactiveSeconds = 0f;
@@ -242,11 +252,35 @@ public sealed class MainWindow : Window, IDisposable
         if (Plugin.Configuration.AutoHideChatWhenInactive && inactiveSeconds >= Plugin.Configuration.AutoHideChatSeconds)
             isChatHidden = true;
 
-        // Forces this exact state every frame (unconditionally overriding anything else, including
-        // ImGui's own internal collapse tracking) - safe since NoCollapse (see the constructor)
-        // already means nothing but this code can ever change it.
-        Collapsed = isChatHidden;
-        CollapsedCondition = ImGuiCond.Always;
+        if (isChatHidden)
+        {
+            // Forced every single frame while hidden - width stays whatever it was, height shrinks to
+            // one frame's worth (about as close to "just the title bar" as a real body region can get).
+            // SizeConstraints has to be relaxed too, or the 260px MinimumSize set below would just
+            // clamp this straight back up.
+            Size = new Vector2(lastKnownSize.X, ImGui.GetFrameHeight());
+            SizeCondition = ImGuiCond.Always;
+            SizeConstraints = null;
+        }
+        else if (wasChatHiddenLastFrame)
+        {
+            // One-shot restore, the single frame right after un-hiding - forcing this with Always every
+            // frame indefinitely would permanently lock the size and block the player's own manual
+            // resizing, so this reverts back to "don't have an opinion" (Size = null) immediately after.
+            Size = lastKnownSize;
+            SizeCondition = ImGuiCond.Always;
+            SizeConstraints = new WindowSizeConstraints
+            {
+                MinimumSize = new Vector2(420, 260),
+                MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
+            };
+        }
+        else
+        {
+            Size = null;
+        }
+
+        wasChatHiddenLastFrame = isChatHidden;
 
         var fading = !IsFocused && Plugin.Configuration.FadeWindowWhenInactive;
         BgAlpha = fading ? Plugin.Configuration.InactiveWindowAlpha : null;
@@ -326,6 +360,16 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        // Nothing drawn while hidden - the title bar (and the eye button on it) still renders
+        // regardless, since that happens as part of Begin() itself, outside this method entirely.
+        if (isChatHidden)
+            return;
+
+        // Captured every frame the body is actually visible - this is what PreDraw restores the
+        // window to the moment it's un-hidden, so shrinking it while hidden doesn't lose whatever
+        // size the player last had it at (including their own manual resizing).
+        lastKnownSize = ImGui.GetWindowSize();
+
         using var table = ImRaii.Table("CustomChatLayout", 2, ImGuiTableFlags.Resizable);
         if (!table.Success)
             return;
