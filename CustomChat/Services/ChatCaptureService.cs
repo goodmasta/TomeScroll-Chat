@@ -62,22 +62,12 @@ public sealed class ChatCaptureService : IDisposable
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
         var body = message.Message.TextValue;
-        var payloadLinks = ExtractPayloadLinks(message.Message, log);
+        var payloadLinks = ExtractPayloadLinks(message.Message);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
         // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
         // so this uses wall-clock time at the moment the message is actually handled instead - for
         // a live chat capture that's effectively the same instant anyway.
         var timestamp = DateTime.UtcNow;
-
-        // TEMPORARY diagnostic (2026-08-13) - a report came in that a sent "<flag>" message doesn't
-        // appear in this plugin's chat at all, even though ChatSendService confirmed the native
-        // ProcessChatBoxEntry call happened without throwing. This logs every message this event
-        // actually captures (including the local player's own outgoing echo, which should normally
-        // come back through this same event) unconditionally, so the next test can show whether the
-        // echo reaches this handler at all - and if it does, whether it just isn't matching any tab
-        // (see the routedCount log below) rather than never being captured in the first place. Remove
-        // once the actual gap is found.
-        log.Warning("CustomChat: captured message - type={ChatType}, body=\"{Body}\"", chatType, Truncate(body));
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
@@ -85,13 +75,11 @@ public sealed class ChatCaptureService : IDisposable
             return;
         }
 
-        var routedCount = 0;
         foreach (var tab in tabManager.Tabs)
         {
             if (tab.IsPmTab || !tab.Channels.Contains(chatType) || !MatchesFilter(tab, body))
                 continue;
 
-            routedCount++;
             var record = new ChatMessageRecord
             {
                 TimestampUtc = timestamp,
@@ -106,13 +94,7 @@ public sealed class ChatCaptureService : IDisposable
                 historyService.Enqueue(record);
             MessageRouted?.Invoke(tab, record);
         }
-
-        // TEMPORARY diagnostic (2026-08-13) - see the matching comment above.
-        if (routedCount == 0)
-            log.Warning("CustomChat: message type={ChatType} matched no tab - won't appear anywhere in this plugin's UI", chatType);
     }
-
-    private static string Truncate(string body) => body.Length > 80 ? body[..80] + "..." : body;
 
     private void HandleTell(XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
@@ -157,7 +139,7 @@ public sealed class ChatCaptureService : IDisposable
     /// <see cref="TextPayload"/> into one combined span, only ending it at the first payload that
     /// isn't text or the two "safe" formatting types (<see cref="UIForegroundPayload"/>/
     /// <see cref="UIGlowPayload"/>) that appear between them here.</para></summary>
-    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message, IPluginLog log)
+    private static List<ChatPayloadLink> ExtractPayloadLinks(SeString message)
     {
         var links = new List<ChatPayloadLink>();
         var cursor = 0;
@@ -166,7 +148,6 @@ public sealed class ChatCaptureService : IDisposable
         ItemPayload? pendingItemLink = null;
         var pendingStart = 0;
         var pendingLength = 0;
-        var hasMarker = false;
 
         void CommitPending()
         {
@@ -205,14 +186,12 @@ public sealed class ChatCaptureService : IDisposable
             else if (payload is MapLinkPayload mapLink)
             {
                 CommitPending();
-                hasMarker = true;
                 pendingType = ChatPayloadLinkType.MapLink;
                 pendingMapLink = mapLink;
             }
             else if (payload is ItemPayload itemLink)
             {
                 CommitPending();
-                hasMarker = true;
                 pendingType = ChatPayloadLinkType.Item;
                 pendingItemLink = itemLink;
             }
@@ -225,16 +204,6 @@ public sealed class ChatCaptureService : IDisposable
         }
 
         CommitPending();
-
-        // TEMPORARY diagnostic (2026-08-13) - keeps logging the payload sequence whenever a marker was
-        // seen, so a future report of a *differently*-shaped link (e.g. an item link, which hasn't been
-        // confirmed against a real received message yet either) can be checked the same way this map
-        // link one was. Remove once both link types are confirmed working from real received messages.
-        if (hasMarker)
-        {
-            var payloadTypes = string.Join(", ", message.Payloads.Select(p => p.GetType().Name));
-            log.Warning("CustomChat: payload-link extraction saw a marker - found {Count} link(s); payload sequence: [{Payloads}]", links.Count, payloadTypes);
-        }
 
         return links;
     }

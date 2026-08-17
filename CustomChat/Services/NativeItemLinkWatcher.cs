@@ -83,11 +83,6 @@ public sealed unsafe class NativeItemLinkWatcher : IDisposable
 
             var bytes = span.ToArray();
 
-            // TEMPORARY diagnostic (2026-08-13) - the whole point of capturing these bytes is to fix a
-            // report where the manually-reconstructed version silently failed; this confirms whether
-            // the native box actually had anything in it to capture at all. Remove once confirmed.
-            log.Warning("CustomChat: captured {Bytes} raw bytes from the native chat input after an item link", bytes.Length);
-
             // Cleared immediately so it doesn't leak into NativeChatInputWatcher's own leak-through
             // detection on a later frame - same cleanup this same textbox always needs after reading it.
             addon->TextInput->SetText(string.Empty);
