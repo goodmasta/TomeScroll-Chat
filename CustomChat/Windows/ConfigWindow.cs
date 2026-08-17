@@ -65,11 +65,60 @@ public sealed class ConfigWindow : Window, IDisposable
                 DrawPlayerColors();
         }
 
+        using (var ai = ImRaii.TabItem("AI"))
+        {
+            if (ai.Success)
+                DrawAi();
+        }
+
         using (var emotes = ImRaii.TabItem("Emotes"))
         {
             if (emotes.Success)
                 DrawEmotes();
         }
+    }
+
+    /// <summary>AI agent configuration - currently just Gemini (<see cref="Services.GeminiService"/>),
+    /// kept on its own tab rather than folded into General since it's not translation-specific: any
+    /// future AI-backed feature reuses the same key/model configured here, via
+    /// <see cref="Plugin.GeminiService"/> directly. The "Translation engine" picker itself (which
+    /// backend translation actually uses, Gemini being one option) stays in General's Translation
+    /// section, next to the target-language picker it belongs with.</summary>
+    private void DrawAi()
+    {
+        ImGui.TextUnformatted("Gemini");
+        ImGui.TextDisabled("Powers the \"Gemini\" translation engine (General > Translation) - and, going forward, any other AI-backed feature added to this plugin, all sharing this same key/model.");
+        ImGui.Spacing();
+
+        var geminiKey = configuration.GeminiApiKey;
+        ImGui.SetNextItemWidth(320);
+        if (ImGui.InputText("API key##geminiKey", ref geminiKey, 200, ImGuiInputTextFlags.Password))
+        {
+            configuration.GeminiApiKey = geminiKey;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("From Google AI Studio (aistudio.google.com/apikey). Stored in this plugin's own config file, nowhere else.");
+
+        var geminiModel = configuration.GeminiModel;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.InputText("Model##geminiModel", ref geminiModel, 100))
+        {
+            configuration.GeminiModel = geminiModel;
+            configuration.Save();
+        }
+        ImGui.SameLine();
+        using (ImRaii.Disabled(configuration.GeminiModel == GeminiService.DefaultModel))
+        {
+            if (ImGui.SmallButton("Use default##geminiModelReset"))
+            {
+                configuration.GeminiModel = GeminiService.DefaultModel;
+                configuration.Save();
+            }
+        }
+        ImGui.TextDisabled($"Default: {GeminiService.DefaultModel}. Editable since Google's current model lineup will keep moving on past whatever's hardcoded here.");
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted(plugin.GeminiService.IsConfigured ? "Status: configured." : "Status: no API key set.");
     }
 
     private void DrawGeneral()
@@ -211,36 +260,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled("Google (free): the default, no key needed - automatically detours through MyMemory for a while after a few requests fail in a row (likely a rate limit), then goes back to trying Google again. MyMemory: always uses that one directly. Gemini: needs an API key below.");
 
         if (configuration.TranslationEngine == TranslationEngine.Gemini && !plugin.GeminiService.IsConfigured)
-            ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set below - translations will silently fail until one is.");
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Gemini API (optional - also usable by future AI features here, not just translation)");
-
-        var geminiKey = configuration.GeminiApiKey;
-        ImGui.SetNextItemWidth(320);
-        if (ImGui.InputText("API key##geminiKey", ref geminiKey, 200, ImGuiInputTextFlags.Password))
-        {
-            configuration.GeminiApiKey = geminiKey;
-            configuration.Save();
-        }
-        ImGui.TextDisabled("From Google AI Studio (aistudio.google.com/apikey). Stored in this plugin's own config file, nowhere else.");
-
-        var geminiModel = configuration.GeminiModel;
-        ImGui.SetNextItemWidth(220);
-        if (ImGui.InputText("Model##geminiModel", ref geminiModel, 100))
-        {
-            configuration.GeminiModel = geminiModel;
-            configuration.Save();
-        }
-        ImGui.SameLine();
-        using (ImRaii.Disabled(configuration.GeminiModel == GeminiService.DefaultModel))
-        {
-            if (ImGui.SmallButton("Use default##geminiModelReset"))
-            {
-                configuration.GeminiModel = GeminiService.DefaultModel;
-                configuration.Save();
-            }
-        }
+            ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Gemini is selected but no API key is set - see the AI tab.");
 
         ImGui.Separator();
         ImGui.TextUnformatted("Unread notifications");
