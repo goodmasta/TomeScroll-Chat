@@ -199,13 +199,6 @@ public sealed class TranslationService : IDisposable
                     }
                     else
                     {
-                        // Only the *first* failure in a streak pops a toast - every backoff retry
-                        // after that would otherwise spam one per attempt while it keeps failing.
-                        // A later success (consecutiveFailures reset to 0 above) lets the next
-                        // failure notify again as a fresh streak.
-                        if (consecutiveFailures == 0)
-                            notificationService.Show($"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details.", NotificationSeverity.Warning);
-
                         consecutiveFailures++;
 
                         if (consecutiveFailures >= SwitchEngineAfterFailures)
@@ -218,6 +211,19 @@ public sealed class TranslationService : IDisposable
                             }
 
                             consecutiveFailures = 0; // give the new engine a fresh streak/backoff, not an inherited one
+                        }
+                        else
+                        {
+                            // Fires once per remaining attempt before the switch above actually
+                            // triggers (with SwitchEngineAfterFailures at its current value of 2,
+                            // that's just once per streak - never spammy - but written as a genuine
+                            // countdown rather than a one-off message so it stays correct if that
+                            // threshold ever changes).
+                            var remaining = SwitchEngineAfterFailures - consecutiveFailures;
+                            notificationService.Show(
+                                $"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details. " +
+                                $"{remaining} more failure{(remaining == 1 ? "" : "s")} before switching engines.",
+                                NotificationSeverity.Warning);
                         }
                     }
 
