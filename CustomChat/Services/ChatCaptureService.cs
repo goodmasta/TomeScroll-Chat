@@ -23,10 +23,17 @@ namespace CustomChat.Services;
 /// </summary>
 public sealed class ChatCaptureService : IDisposable
 {
+    /// <summary>Chat types the game routes command-syntax/target errors through - checked against
+    /// both since it's not confirmed which one specifically carries "invalid command" style messages,
+    /// and treating either as a candidate costs nothing (see <see cref="LooksLikeInvalidCommandError"/>).</summary>
+    private static readonly XivChatType[] CommandErrorChatTypes = { XivChatType.ErrorMessage, XivChatType.SystemError };
+
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
+    private readonly Configuration configuration;
     private readonly TabManager tabManager;
     private readonly ChatHistoryService historyService;
+    private readonly NotificationService notificationService;
 
     /// <summary>Whisper partner ("Name@World") the next outgoing tell should be attributed to if the
     /// game's own sender payload for that event doesn't resolve one. Set by <see cref="ChatSendService"/>
@@ -35,12 +42,14 @@ public sealed class ChatCaptureService : IDisposable
 
     public event Action<ChatTabConfig, ChatMessageRecord>? MessageRouted;
 
-    public ChatCaptureService(IChatGui chatGui, IPluginLog log, TabManager tabManager, ChatHistoryService historyService)
+    public ChatCaptureService(IChatGui chatGui, IPluginLog log, Configuration configuration, TabManager tabManager, ChatHistoryService historyService, NotificationService notificationService)
     {
         this.chatGui = chatGui;
         this.log = log;
+        this.configuration = configuration;
         this.tabManager = tabManager;
         this.historyService = historyService;
+        this.notificationService = notificationService;
         chatGui.ChatMessage += OnChatMessage;
     }
 
@@ -68,6 +77,9 @@ public sealed class ChatCaptureService : IDisposable
         // so this uses wall-clock time at the moment the message is actually handled instead - for
         // a live chat capture that's effectively the same instant anyway.
         var timestamp = DateTime.UtcNow;
+
+        if (configuration.NotifyOnInvalidCommand && Array.IndexOf(CommandErrorChatTypes, chatType) >= 0 && LooksLikeInvalidCommandError(body))
+            notificationService.Show(body, NotificationSeverity.Error);
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
@@ -207,6 +219,15 @@ public sealed class ChatCaptureService : IDisposable
 
         return links;
     }
+
+    /// <summary>Best-effort text match for FFXIV's own "invalid slash command" system message
+    /// (something like <c>The command "/xyz" does not exist.</c>) - chat type alone
+    /// (<see cref="CommandErrorChatTypes"/>) isn't specific enough on its own, since the same error
+    /// channels also carry unrelated in-game errors (failed actions, out-of-range targets, etc.) that
+    /// would otherwise make <see cref="Configuration.NotifyOnInvalidCommand"/> noisy well beyond just
+    /// bad commands. English-client text only - not verified against other game languages.</summary>
+    private static bool LooksLikeInvalidCommandError(string body) =>
+        body.Contains("does not exist", StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesFilter(ChatTabConfig tab, string body) => tab.FilterMode switch
     {

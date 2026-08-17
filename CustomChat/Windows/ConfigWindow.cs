@@ -104,6 +104,15 @@ public sealed class ConfigWindow : Window, IDisposable
             plugin.NotificationService.Show("This is a test notification.", NotificationSeverity.Info);
         ImGui.TextDisabled("A small popup in the top-right corner of the game window itself, not the Windows tray notification above - general-purpose, used to inform you of things as this plugin grows more features.");
 
+        ImGui.Spacing();
+        var notifyOnInvalidCommand = configuration.NotifyOnInvalidCommand;
+        if (ImGui.Checkbox("Popup when a typed command doesn't exist", ref notifyOnInvalidCommand))
+        {
+            configuration.NotifyOnInvalidCommand = notifyOnInvalidCommand;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Easy to miss the game's own \"command does not exist\" error otherwise, especially with the native chat window hidden (General) or no tab showing the Error channel.");
+
         ImGui.Separator();
         ImGui.TextUnformatted("Unread indicator colours");
 

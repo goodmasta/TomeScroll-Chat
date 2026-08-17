@@ -120,6 +120,13 @@ public class Configuration : IPluginConfiguration
     /// balloon tips need a visible icon to attach to).</summary>
     public bool NotifyWhisperInWindows { get; set; } = true;
 
+    /// <summary>Pops an in-game popup toast (<see cref="Services.NotificationService"/>) whenever the
+    /// game reports a slash command you typed doesn't exist - easy to miss otherwise, especially with
+    /// <see cref="HideNativeChat"/> on and no tab showing the "Error" channel. See
+    /// <see cref="Services.ChatCaptureService.LooksLikeInvalidCommandError"/> for how this is
+    /// detected (a text match, English clients only).</summary>
+    public bool NotifyOnInvalidCommand { get; set; } = true;
+
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
     /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
     /// one. Turning this off removes every such tab immediately (see
@@ -179,6 +186,7 @@ public class Configuration : IPluginConfiguration
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyWhisperInWindows = defaults.NotifyWhisperInWindows;
+        NotifyOnInvalidCommand = defaults.NotifyOnInvalidCommand;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
         ShowHideChatButton = defaults.ShowHideChatButton;
         AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;
