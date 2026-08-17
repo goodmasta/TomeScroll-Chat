@@ -4,6 +4,7 @@
   "Punchline": "A fully custom, tab-based replacement for the in-game chat window.",
   "Description": "Replaces the default FFXIV chat log with a custom ImGui interface: unlimited freely-configurable tabs (any mix of channels), any tab can be popped out into its own floating window, whispers get their own per-partner tab or window, clickable links, BTTV/7TV emote rendering, and disk-backed history capped at 1 GiB. Not affiliated with Twitch, BetterTTV or 7TV.",
   "ApplicableVersion": "any",
+  "RepoUrl": "https://github.com/goodmasta/TomeScroll-Chat",
   "Tags": [
     "chat",
     "chattwo",
