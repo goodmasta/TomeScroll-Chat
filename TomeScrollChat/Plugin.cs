@@ -143,7 +143,7 @@ public sealed class Plugin : IDalamudPlugin
 
         commandInfo = new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the TomeScroll Chat window. Use '/tomescroll config' for settings, '/tomescroll version' to check the loaded build, '/tomescroll frienddebug' to test friend online/offline notifications, '/tomescroll friends' to bring the (normally off-screen) Friend List window into view.",
+            HelpMessage = "Open the TomeScroll Chat window. Use '/tomescroll config' for settings, '/tomescroll version' to check the loaded build, '/tomescroll frienddebug' to test friend online/offline notifications.",
         };
         CommandManager.AddHandler(CommandName, commandInfo);
 
@@ -601,12 +601,6 @@ public sealed class Plugin : IDalamudPlugin
         if (trimmed.Equals("frienddebug", StringComparison.OrdinalIgnoreCase))
         {
             FriendOnlineWatcherService.DebugCheckAndNotify();
-            return;
-        }
-
-        if (trimmed.Equals("friends", StringComparison.OrdinalIgnoreCase))
-        {
-            FriendOnlineWatcherService.ShowOnScreen();
             return;
         }
 

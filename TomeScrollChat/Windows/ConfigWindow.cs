@@ -955,7 +955,7 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.FriendOnlineNotifyEnabled = enabled;
             configuration.Save();
         }
-        ImGui.TextDisabled("Also briefly opens your own native Friend List window once on login so the list loads fully - feel free to close it, status itself is refreshed every 10 seconds in the background regardless. A friend already online when you enable this notifies right away, not just on a later change. Use '/tomescroll friends' to bring the window back if you closed it.");
+        ImGui.TextDisabled("Also briefly opens your own native Friend List window once on login so the list loads fully - feel free to close it, status itself is refreshed every 10 seconds in the background regardless. A friend already online when you enable this notifies right away, not just on a later change.");
 
         using (ImRaii.Disabled(!configuration.FriendOnlineNotifyEnabled))
         {

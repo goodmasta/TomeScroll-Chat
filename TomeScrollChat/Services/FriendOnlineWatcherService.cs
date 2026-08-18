@@ -37,8 +37,10 @@ namespace TomeScrollChat.Services;
 /// day</b>, once the player confirmed live that closing it after that one initial population still
 /// left status updates working fine (they're driven by <see cref="FriendListService.RequestRefresh"/>
 /// on its own timer, once the underlying entries are loaded - see <see cref="CheckFriends"/>). The
-/// addon is simply left alone now once opened - the player can close it and it stays closed;
-/// <c>/tomescroll friends</c> (<see cref="ShowOnScreen"/>) is the only way to bring it back afterward.
+/// addon is simply left alone now once opened - the player can close it and it stays closed, same as
+/// any other native window; the game's own Social icon reopens it from there, same as before this
+/// plugin ever touched it (no plugin-side command for this anymore - removed once the
+/// hide/force-reopen behaviour above was gone, since native open/close already just works).
 /// <b>Also fixed 2026-08-17</b>: that same periodic <c>RequestRefresh</c> visibly disrupted the
 /// player's own interaction with the native window while it was open (the list reloading/resetting
 /// mid-use) - <see cref="CheckFriends"/> now skips issuing it entirely whenever either addon is
@@ -102,12 +104,6 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
         pendingShowAt = DateTime.UtcNow + delay;
     }
 
-    /// <summary>"/tomescroll friends" - brings the Friend List (and the surrounding Social window it
-    /// lives in) to the front, whether that means un-hiding an already-open-but-closed instance or
-    /// creating it fresh - just calls the same <see cref="OpenAddons"/> the login-driven auto-open
-    /// uses, since <c>ShowAddon()</c> already handles both cases in one call.</summary>
-    public void ShowOnScreen() => OpenAddons();
-
     private bool wasEnabled;
 
     private void OnFrameworkUpdate(IFramework _)
@@ -157,10 +153,9 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
     /// metadata tool) - <c>AgentModule.GetAgentByInternalId</c> returns the generic
     /// <c>AgentInterface*</c> for it, which still exposes <c>ShowAddon()</c>/<c>HideAddon()</c> same as
     /// every other agent. Calling both here is what lets this reliably bring back "Social" too, not
-    /// just "FriendList" - and <c>ShowAddon()</c> itself already handles "doesn't exist yet" (creates
-    /// it) and "exists but closed" (shows it again) in one call, so this same method works for both
-    /// the initial login-driven open (<see cref="HandlePendingOpen"/>) and a manual re-open
-    /// (<see cref="ShowOnScreen"/>) after the player closes it via its own close button.</summary>
+    /// just "FriendList". Only ever called once, from <see cref="HandlePendingOpen"/>'s login-driven
+    /// open - the one-time layout pass this class' own doc comment explains - since the player closing
+    /// it afterward is left as normal native behaviour with no plugin-side re-open path anymore.</summary>
     private void OpenAddons()
     {
         try
