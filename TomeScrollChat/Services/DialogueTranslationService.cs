@@ -11,11 +11,13 @@ namespace TomeScrollChat.Services;
 /// <summary>
 /// Feeds <see cref="Windows.DialogueTranslationWindow"/> - watches three sources for new lines while
 /// <see cref="Configuration.EnableDialogueTranslationWindow"/> is on, translates each via
-/// <see cref="TranslationService.TranslateRawAsync"/> (the same one-off dispatcher the input-box
-/// "Translate" action uses - bypasses the chat-message queue/backoff machinery entirely, deliberately:
-/// that queue exists to survive *bursts* like reopening a tab with hundreds of backlog messages, but
-/// dialogue/cutscene lines only ever advance one at a time at human reading pace, so there's nothing to
-/// throttle here), and appends the result to <see cref="Entries"/>:
+/// <see cref="TranslationService.TranslateDialogueAsync"/> (a one-off dispatcher, sibling to the one the
+/// input-box "Translate" action uses - bypasses the chat-message queue/backoff machinery entirely,
+/// deliberately: that queue exists to survive *bursts* like reopening a tab with hundreds of backlog
+/// messages, but dialogue/cutscene lines only ever advance one at a time at human reading pace, so
+/// there's nothing to throttle here; unlike the input-box path, this one also frames the request as
+/// FFXIV story text and remembers it for context when routed through Gemini - see that method's own doc
+/// comment), and appends the result to <see cref="Entries"/>:
 ///
 /// <list type="bullet">
 /// <item><description><b>NPC dialogue / in-cutscene dialogue</b> - <c>AddonTalk</c> (the game's
@@ -174,7 +176,7 @@ public sealed class DialogueTranslationService : IDisposable
     {
         try
         {
-            var translated = await translationService.TranslateRawAsync(originalText, configuration.TranslateTargetLanguage).ConfigureAwait(false);
+            var translated = await translationService.TranslateDialogueAsync(speaker, originalText, configuration.TranslateTargetLanguage).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(translated))
             {
                 log.Warning("TomeScrollChat: dialogue translation ({Kind}) returned empty/null via {Engine}", kind, TranslationService.EngineLabel(translationService.ActiveEngine));

@@ -392,6 +392,15 @@ public sealed class ConfigWindow : Window, IDisposable
                     configuration.Save();
                 }
             }
+
+            ImGui.Spacing();
+            var dialogueMemoryCount = plugin.TranslationService.DialogueMemory.Count;
+            ImGui.TextDisabled($"When routed through Gemini, story/dialogue translation remembers recent lines of the current scene as context, persisting across restarts. Currently remembering {dialogueMemoryCount} line{(dialogueMemoryCount == 1 ? "" : "s")}.");
+            using (ImRaii.Disabled(dialogueMemoryCount == 0))
+            {
+                if (ImGui.Button("Clear dialogue translation memory"))
+                    plugin.TranslationService.ClearDialogueMemory();
+            }
         }
 
         ImGui.Separator();
