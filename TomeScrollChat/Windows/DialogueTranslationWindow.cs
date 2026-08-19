@@ -24,13 +24,27 @@ namespace TomeScrollChat.Windows;
 /// <para>Deliberately has no cutscene-hiding check (unlike <c>MainWindow</c>/<c>DetachedTabWindow</c>,
 /// which optionally hide via <c>Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ...)</c> - see
 /// <see cref="Configuration.HideChatDuringCutscenes"/>) - simply never adding that check is what keeps
-/// this window visible during cutscenes, which is the whole point of it. <b>Fixed 2026-08-19</b>:
-/// reported live as hiding mid-cutscene anyway, alongside the main chat window - root cause was
-/// <see cref="Configuration.DialogueTranslationAutoHide"/>'s idle timeout, which has no idea a
-/// cutscene is even playing and can easily exceed <see cref="Configuration.DialogueTranslationAutoHideSeconds"/>
-/// during an ordinary dialogue-free cinematic beat, hiding this window right when it matters most -
-/// coincided with the main window's own (unrelated) cutscene-hide, which is what made it look like one
-/// bug. <see cref="DrawConditions"/> now bypasses the idle check entirely while a cutscene is playing.</para>
+/// this window visible during cutscenes, which is the whole point of it.</para>
+///
+/// <para><b>Fixed 2026-08-19, first attempt</b>: reported live as hiding mid-cutscene anyway, alongside
+/// the main chat window - root cause found was <see cref="Configuration.DialogueTranslationAutoHide"/>'s
+/// idle timeout, which has no idea a cutscene is even playing and can easily exceed
+/// <see cref="Configuration.DialogueTranslationAutoHideSeconds"/> during an ordinary dialogue-free
+/// cinematic beat. <see cref="DrawConditions"/> was changed to bypass the idle check entirely while a
+/// cutscene is playing.</para>
+///
+/// <para><b>Fixed 2026-08-19, second attempt - the real root cause</b>: still reported hidden mid-
+/// cutscene after the fix above. Turned out <see cref="DrawConditions"/> was never the actual problem -
+/// Dalamud auto-hides *every* plugin window during cutscenes at the <c>UiBuilder</c> level, upstream of
+/// any individual window's <see cref="DrawConditions"/> ever being consulted, unless
+/// <c>IUiBuilder.DisableCutsceneUiHide</c> is set. <c>Plugin.cs</c> now sets it to <c>true</c> at
+/// startup (next to the pre-existing <c>DisableUserUiHide</c>, same reasoning: a UiBuilder-level force-
+/// hide can't be overridden by any per-window check). The idle-timeout bypass from the first attempt is
+/// still correct/worth keeping - it just wasn't sufficient on its own. **General lesson**: a window
+/// that's supposed to always stay visible during cutscenes/GPose/UI-hide needs both the per-window
+/// <see cref="DrawConditions"/> logic *and* the matching <c>UiBuilder.Disable*UiHide</c> flag - one
+/// without the other silently doesn't work, and the failure looks identical either way (window just
+/// isn't there), so re-check both if this regresses again.</para>
 ///
 /// <para>A title bar search button (magnifying glass, per explicit user request - unlike the per-tab
 /// search in <c>MainWindow</c>/<c>DetachedTabWindow</c>, which hangs off a sidebar context menu or an

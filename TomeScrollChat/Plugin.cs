@@ -164,6 +164,17 @@ public sealed class Plugin : IDalamudPlugin
         // the UiBuilder level rather than per-window.
         PluginInterface.UiBuilder.DisableUserUiHide = true;
 
+        // Fixed 2026-08-19: DialogueTranslationWindow's own DrawConditions() unconditionally returns
+        // true during a cutscene (the whole point of that window), but it still reportedly hid mid-
+        // cutscene anyway - turned out Dalamud auto-hides *every* plugin window during cutscenes at
+        // the UiBuilder level, upstream of any individual window's DrawConditions ever being consulted,
+        // unless disabled here. Same reasoning as DisableUserUiHide just above: has to be a UiBuilder-
+        // level flag, not something any per-window check can override on its own. This also means
+        // MainWindow's own Configuration.HideChatDuringCutscenes toggle is now the *only* thing
+        // deciding whether the main chat hides during cutscenes (as it always should have been) -
+        // Dalamud's own forced hide would have silently overridden that setting when it was off.
+        PluginInterface.UiBuilder.DisableCutsceneUiHide = true;
+
         RefreshEmotes();
 
         // Logs the same info "/tomescroll version" prints to chat, once at startup - so which build is
