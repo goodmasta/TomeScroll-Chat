@@ -73,6 +73,7 @@ public sealed class Plugin : IDalamudPlugin
     public FriendOnlineWatcherService FriendOnlineWatcherService { get; }
     public AiReplyService AiReplyService { get; }
     public AutoReplyService AutoReplyService { get; }
+    private readonly WhisperNotificationService whisperNotificationService;
     private readonly NativeChatHider nativeChatHider;
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
@@ -121,6 +122,7 @@ public sealed class Plugin : IDalamudPlugin
         FriendOnlineWatcherService = new FriendOnlineWatcherService(Framework, ClientState, GameGui, Log, Configuration, FriendListService, NotificationService);
         AiReplyService = new AiReplyService(PluginInterface.ConfigDirectory.FullName, GeminiService, Configuration, Log, NotificationService);
         AutoReplyService = new AutoReplyService(ChatCaptureService, ChatSendService, Configuration, NotificationService, Log);
+        whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
@@ -579,6 +581,7 @@ public sealed class Plugin : IDalamudPlugin
         DialogueTranslationService.Dispose();
         FriendOnlineWatcherService.Dispose();
         AutoReplyService.Dispose();
+        whisperNotificationService.Dispose();
         linkshellWatcherService.Dispose();
         enterToChatService.Dispose();
         EmoteService.Dispose();

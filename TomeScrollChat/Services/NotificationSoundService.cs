@@ -79,22 +79,39 @@ public sealed class NotificationSoundService
     }
 
     /// <summary>Called from <see cref="NotificationService.Show"/> - a no-op while
-    /// <see cref="Configuration.NotificationSoundEnabled"/> is off.</summary>
-    public void PlayIfEnabled()
+    /// <see cref="Configuration.NotificationSoundEnabled"/> is off. <paramref name="overridePath"/>
+    /// (e.g. <see cref="Configuration.CustomWhisperNotificationSoundPath"/>, from
+    /// <see cref="WhisperNotificationService"/>) takes priority over
+    /// <see cref="Configuration.CustomNotificationSoundPath"/> when set - lets one specific kind of
+    /// notification (whispers, per explicit user request) sound different from every other one, while
+    /// everything else still shares the one general sound.</summary>
+    public void PlayIfEnabled(string? overridePath = null)
     {
         if (configuration.NotificationSoundEnabled)
-            Play();
+            Play(overridePath);
     }
 
-    /// <summary>Settings' "Test sound" button - always plays the currently-configured sound (default or
-    /// custom), regardless of <see cref="Configuration.NotificationSoundEnabled"/>, so the player can
-    /// preview a file before actually turning the feature on.</summary>
-    public void PlayPreview() => Play();
+    /// <summary>Settings' "Test sound" buttons - always plays the given (or general, if
+    /// <paramref name="overridePath"/> is null) sound regardless of
+    /// <see cref="Configuration.NotificationSoundEnabled"/>, so the player can preview a file before
+    /// actually turning the feature on.</summary>
+    public void PlayPreview(string? overridePath = null) => Play(overridePath);
 
-    private void Play()
+    private void Play(string? overridePath)
     {
         try
         {
+            if (!string.IsNullOrWhiteSpace(overridePath))
+            {
+                if (File.Exists(overridePath))
+                {
+                    PlaySound(overridePath, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+                    return;
+                }
+
+                log.Warning("TomeScrollChat: override notification sound not found ({Path}) - falling back to the general sound", overridePath);
+            }
+
             var customPath = configuration.CustomNotificationSoundPath;
             if (!string.IsNullOrWhiteSpace(customPath))
             {

@@ -202,6 +202,14 @@ public class Configuration : IPluginConfiguration
     /// detected (a text match, English clients only).</summary>
     public bool NotifyOnInvalidCommand { get; set; } = true;
 
+    /// <summary>Pops an in-game popup toast (sender + a short preview, via
+    /// <see cref="Services.WhisperNotificationService"/>) whenever an incoming whisper arrives - on by
+    /// default per explicit user request ("хочу, чтобы такое уведомление было и когда приходит
+    /// сообщение в личку"). Independent of <see cref="AutoReplyEnabled"/>/<see cref="AutoReplyToWhispers"/> -
+    /// this is "tell me about it", not "send something back", so it's useful on its own without opting
+    /// into the auto-reply feature at all.</summary>
+    public bool NotifyOnWhisper { get; set; } = true;
+
     /// <summary>Whether <see cref="Services.NotificationService.Show"/> plays a short sound alongside
     /// every popup toast, via <see cref="Services.NotificationSoundService"/> - on by default per
     /// explicit user request. Turning this off silences the sound entirely without affecting the popups
@@ -215,6 +223,13 @@ public class Configuration : IPluginConfiguration
     /// <see cref="Services.NotificationSoundService"/> itself just falls back to the default sound for
     /// that one play rather than erroring or silently resetting this setting.</summary>
     public string CustomNotificationSoundPath { get; set; } = string.Empty;
+
+    /// <summary>Same idea as <see cref="CustomNotificationSoundPath"/>, but specifically for whisper
+    /// notifications (<see cref="Services.WhisperNotificationService"/>) - per explicit user request to
+    /// tell whispers apart from every other notification by sound alone. Empty falls back to
+    /// <see cref="CustomNotificationSoundPath"/>/the bundled default, same chain as any other
+    /// notification - this only ever *overrides* that for the whisper case specifically.</summary>
+    public string CustomWhisperNotificationSoundPath { get; set; } = string.Empty;
 
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
     /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
@@ -307,8 +322,10 @@ public class Configuration : IPluginConfiguration
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyOnInvalidCommand = defaults.NotifyOnInvalidCommand;
+        NotifyOnWhisper = defaults.NotifyOnWhisper;
         NotificationSoundEnabled = defaults.NotificationSoundEnabled;
         CustomNotificationSoundPath = defaults.CustomNotificationSoundPath;
+        CustomWhisperNotificationSoundPath = defaults.CustomWhisperNotificationSoundPath;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
         ShowHideChatButton = defaults.ShowHideChatButton;
         AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;

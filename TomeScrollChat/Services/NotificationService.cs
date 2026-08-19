@@ -44,8 +44,10 @@ public sealed class NotificationService
     /// its own after <paramref name="duration"/> (or <see cref="DefaultDuration"/>), fading out over
     /// its last moment rather than vanishing abruptly. Also dismissible early by clicking it. Plays a
     /// sound alongside it via <see cref="NotificationSoundService"/> unless
-    /// <see cref="Configuration.NotificationSoundEnabled"/> is off.</summary>
-    public void Show(string message, NotificationSeverity severity = NotificationSeverity.Info, TimeSpan? duration = null)
+    /// <see cref="Configuration.NotificationSoundEnabled"/> is off - <paramref name="soundOverridePath"/>
+    /// lets a specific caller (currently only <see cref="WhisperNotificationService"/>) use a different
+    /// sound than the general one, e.g. so whispers are audibly distinct from every other notification.</summary>
+    public void Show(string message, NotificationSeverity severity = NotificationSeverity.Info, TimeSpan? duration = null, string? soundOverridePath = null)
     {
         if (string.IsNullOrWhiteSpace(message))
             return;
@@ -53,7 +55,7 @@ public sealed class NotificationService
         lock (gate)
             active.Add(new Notification(message, severity, DateTime.UtcNow + (duration ?? DefaultDuration)));
 
-        soundService.PlayIfEnabled();
+        soundService.PlayIfEnabled(soundOverridePath);
     }
 
     /// <summary>Currently-visible notifications, oldest first - already pruned of anything expired.
