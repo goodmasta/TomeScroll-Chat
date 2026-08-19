@@ -42,13 +42,15 @@ namespace TomeScrollChat.Services;
 /// already-resolved <see cref="SeString"/> text.</description></item>
 /// </list>
 ///
-/// No cutscene-specific hiding logic lives here or in <see cref="Windows.DialogueTranslationWindow"/> -
-/// unlike <c>MainWindow</c>/<c>DetachedTabWindow</c>, which check
-/// <c>Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ...)</c> in their own <c>DrawConditions()</c>
-/// to *optionally* hide during cutscenes (see <see cref="Configuration.HideChatDuringCutscenes"/>).
-/// Simply never adding that check here is what keeps this window visible in cutscenes, per the
-/// explicit ask - confirmed by the fact that turning that other setting off already proves Dalamud
-/// itself doesn't force-hide plugin windows during cutscenes, so there was nothing else to disable.
+/// This service never hides itself during cutscenes - unlike <c>MainWindow</c>/<c>DetachedTabWindow</c>,
+/// which check <c>Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ...)</c> in their own
+/// <c>DrawConditions()</c> to *optionally* hide (see <see cref="Configuration.HideChatDuringCutscenes"/>),
+/// <see cref="Windows.DialogueTranslationWindow"/> always stays up through one - see that class's own
+/// doc comment for the two-part fix this needed (a <c>DrawConditions()</c> bypass *and*
+/// <c>Plugin.PluginInterface.UiBuilder.DisableCutsceneUiHide</c>, since Dalamud force-hides plugin
+/// windows during cutscenes at its own level otherwise). <see cref="IsNativeDialogueOpen"/> is this
+/// service's other contribution to that window's show/hide decision - not cutscene-related, but lets
+/// it hide the instant an NPC conversation actually ends instead of only after an idle timeout.
 /// </summary>
 public sealed class DialogueTranslationService : IDisposable
 {
@@ -77,6 +79,14 @@ public sealed class DialogueTranslationService : IDisposable
 
     public DateTime LastEntryAt { get; private set; } = DateTime.MinValue;
 
+    /// <summary>Whether the native NPC dialogue box (<c>AddonTalk</c>) or cutscene subtitle
+    /// (<c>AddonTalkSubtitle</c>) is currently visible - used by <see cref="Windows.DialogueTranslationWindow"/>
+    /// to hide itself the instant a conversation actually ends, rather than only after
+    /// <see cref="Configuration.DialogueTranslationAutoHideSeconds"/> of idle time (per explicit user
+    /// request, 2026-08-19). Only reflects these two addons, not quest toasts - those have no window
+    /// of their own to signal against, so that case still relies on the idle timeout alone.</summary>
+    public bool IsNativeDialogueOpen { get; private set; }
+
     public unsafe DialogueTranslationService(IFramework framework, IGameGui gameGui, IToastGui toastGui, IPluginLog log, Configuration configuration, TranslationService translationService)
     {
         this.framework = framework;
@@ -93,13 +103,20 @@ public sealed class DialogueTranslationService : IDisposable
     private unsafe void OnFrameworkUpdate(IFramework _)
     {
         if (!configuration.EnableDialogueTranslationWindow)
+        {
+            IsNativeDialogueOpen = false;
             return;
+        }
 
-        CheckTalk();
-        CheckSubtitle();
+        var talkOpen = CheckTalk();
+        var subtitleOpen = CheckSubtitle();
+        IsNativeDialogueOpen = talkOpen || subtitleOpen;
     }
 
-    private unsafe void CheckTalk()
+    /// <summary>Returns whether the addon is currently visible, regardless of whether a new line was
+    /// found this tick - <see cref="IsNativeDialogueOpen"/> needs "is it open right now," which is a
+    /// different question from "did the text change."</summary>
+    private unsafe bool CheckTalk()
     {
         var addon = gameGui.GetAddonByName<AddonTalk>("Talk");
         var visible = addon != null && addon->IsVisible;
@@ -107,16 +124,16 @@ public sealed class DialogueTranslationService : IDisposable
         if (!visible)
         {
             lastTalkText = string.Empty; // next time the box opens (even with the same line) should re-translate
-            return;
+            return false;
         }
 
         var textNode = addon->GetTextNodeById(3);
         if (textNode == null)
-            return;
+            return true;
 
         var text = StripQuotes(textNode->NodeText.ToString());
         if (string.IsNullOrWhiteSpace(text) || text == lastTalkText)
-            return;
+            return true;
 
         lastTalkText = text;
 
@@ -130,6 +147,7 @@ public sealed class DialogueTranslationService : IDisposable
         }
 
         QueueTranslation(DialogueTranslationKind.NpcDialogue, speaker, text);
+        return true;
     }
 
     /// <summary><c>AtkTextNode.NodeText</c> on <c>AddonTalk</c> comes back wrapped in a literal
@@ -139,7 +157,7 @@ public sealed class DialogueTranslationService : IDisposable
     private static string StripQuotes(string text) =>
         text.Length >= 2 && text[0] == '"' && text[^1] == '"' ? text[1..^1] : text;
 
-    private unsafe void CheckSubtitle()
+    private unsafe bool CheckSubtitle()
     {
         var addon = gameGui.GetAddonByName<AddonTalkSubtitle>("TalkSubtitle");
         var visible = addon != null && addon->IsVisible;
@@ -147,15 +165,16 @@ public sealed class DialogueTranslationService : IDisposable
         if (!visible)
         {
             lastSubtitleText = string.Empty;
-            return;
+            return false;
         }
 
         var text = addon->SubtitleText.ToString();
         if (string.IsNullOrWhiteSpace(text) || text == lastSubtitleText)
-            return;
+            return true;
 
         lastSubtitleText = text;
         QueueTranslation(DialogueTranslationKind.CutsceneSubtitle, null, text);
+        return true;
     }
 
     private void OnQuestToast(ref SeString message, ref QuestToastOptions options, ref bool isHandled)

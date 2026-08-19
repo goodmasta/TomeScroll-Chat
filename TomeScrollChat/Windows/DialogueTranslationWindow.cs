@@ -50,6 +50,14 @@ namespace TomeScrollChat.Windows;
 /// search in <c>MainWindow</c>/<c>DetachedTabWindow</c>, which hangs off a sidebar context menu or an
 /// inline button since there's no title bar room to spare there) filters the shown lines by speaker,
 /// translated text, or original text, case-insensitively - see <see cref="DrawSearchBar"/>.</para>
+///
+/// <para><b>Added 2026-08-19</b>, per explicit follow-up user request: once
+/// <see cref="Services.DialogueTranslationService.IsNativeDialogueOpen"/> goes false (the NPC dialogue
+/// box/cutscene subtitle actually closed), <see cref="DrawConditions"/> hides this window immediately
+/// rather than waiting out <see cref="Configuration.DialogueTranslationAutoHideSeconds"/> - the user
+/// specifically asked for "hide right away," not another idle-timeout variant. A quest notice (no
+/// native window of its own) still uses the old idle-timeout behaviour, since there's nothing to check
+/// against for that case.</para>
 /// </summary>
 public sealed class DialogueTranslationWindow : Window
 {
@@ -126,7 +134,22 @@ public sealed class DialogueTranslationWindow : Window
         if (Plugin.Condition.Any(ConditionFlag.WatchingCutscene, ConditionFlag.WatchingCutscene78, ConditionFlag.OccupiedInCutSceneEvent))
             return true;
 
+        // Added 2026-08-19, per explicit user request: stay up for as long as the native NPC dialogue
+        // box/cutscene subtitle is actually on screen, regardless of the idle timer - a slow reader or
+        // a long pause between lines shouldn't hide this out from under someone mid-conversation.
+        if (dialogueService.IsNativeDialogueOpen)
+            return true;
+
         if (dialogueService.Entries.Count == 0)
+            return false;
+
+        // The native dialogue box (if any) is confirmed closed at this point. Per explicit user
+        // request, hide immediately rather than riding out the idle timer for dialogue/cutscene-
+        // subtitle content - the conversation visibly just ended, there's nothing to keep it up for.
+        // A quest notice has no native window of its own to signal against, so that case still falls
+        // through to the normal idle-timeout grace period below.
+        var lastEntry = dialogueService.Entries[^1];
+        if (lastEntry.Kind != DialogueTranslationKind.QuestNotice)
             return false;
 
         var idleSeconds = (DateTime.UtcNow - dialogueService.LastEntryAt).TotalSeconds;
