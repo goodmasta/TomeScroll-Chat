@@ -825,17 +825,49 @@ public sealed class MainWindow : Window, IDisposable
     /// via <see cref="MeasureTabContentWidth"/>, computed *before* this call so the strip's own wrap
     /// decision already accounted for it) with the same content painted via <see cref="DrawTabContent"/>
     /// <see cref="DrawTabRow"/> uses for the sidebar - see that method's own doc comment for why one
-    /// shared content-drawing method backs both layouts.</summary>
+    /// shared content-drawing method backs both layouts. The Selectable's own flat background is made
+    /// fully transparent (it's only there for the click/hover hit area) and replaced with a hand-drawn
+    /// rounded-top, bordered frame (see <see cref="DrawBrowserTabFrame"/>) so it actually reads as a
+    /// browser-style tab rather than a plain highlighted row, per explicit user request.</summary>
     private void DrawBrowserTab(ChatTabConfig tab)
     {
         var selected = tab.Id == selectedTabId;
         var width = MeasureTabContentWidth(tab);
         var height = ImGui.GetFrameHeight();
 
-        if (ImGui.Selectable($"##browsertab_{tab.Id}", selected, ImGuiSelectableFlags.None, new Vector2(width, height)))
+        ImGui.PushStyleColor(ImGuiCol.Header, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.HeaderHovered, Vector4.Zero);
+        ImGui.PushStyleColor(ImGuiCol.HeaderActive, Vector4.Zero);
+        var clicked = ImGui.Selectable($"##browsertab_{tab.Id}", selected, ImGuiSelectableFlags.None, new Vector2(width, height));
+        ImGui.PopStyleColor(3);
+        if (clicked)
             selectedTabId = tab.Id;
 
-        DrawTabContent(tab, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+        var itemMin = ImGui.GetItemRectMin();
+        var itemMax = ImGui.GetItemRectMax();
+        DrawBrowserTabFrame(itemMin, itemMax, selected, ImGui.IsItemHovered());
+        DrawTabContent(tab, itemMin, itemMax);
+    }
+
+    /// <summary>Browser-tab-shaped chrome for one <see cref="DrawBrowserTab"/> - a filled rect rounded
+    /// on the top two corners only (square on the bottom, so it sits flush against the tab strip's own
+    /// bottom edge/the divider below it) plus a matching border, drawn *before* <see cref="DrawTabContent"/>
+    /// so the icon/name/count paint on top of it rather than under it. Three visual states, same idea
+    /// as a real browser: the selected tab fills with the window's own background colour (reads as
+    /// "this is the one connected to what's below"), a hovered-but-not-selected tab gets a lighter
+    /// hover tint, and every other tab sits at the theme's normal (slightly darker) frame colour.</summary>
+    private static void DrawBrowserTabFrame(Vector2 itemMin, Vector2 itemMax, bool selected, bool hovered)
+    {
+        const float rounding = 6f;
+        var style = ImGui.GetStyle();
+        var drawList = ImGui.GetWindowDrawList();
+
+        var fill = selected ? style.Colors[(int)ImGuiCol.WindowBg]
+            : hovered ? style.Colors[(int)ImGuiCol.FrameBgHovered]
+            : style.Colors[(int)ImGuiCol.FrameBg];
+
+        drawList.AddRectFilled(itemMin, itemMax, ImGui.ColorConvertFloat4ToU32(fill), rounding, ImDrawFlags.RoundCornersTop);
+        drawList.AddRect(itemMin, itemMax, ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.Border]), rounding, ImDrawFlags.RoundCornersTop);
     }
 
     /// <summary>
