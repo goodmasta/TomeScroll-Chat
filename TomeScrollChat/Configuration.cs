@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Configuration;
 using TomeScrollChat.Models;
 
@@ -240,6 +241,28 @@ public class Configuration : IPluginConfiguration
     /// bundled default - not the general notification sound.</summary>
     public string CustomWhisperNotificationSoundPath { get; set; } = string.Empty;
 
+    /// <summary>The "cycle outgoing channel" hotkey's modifier keys - see
+    /// <see cref="CycleOutgoingChannelHotkeyKey"/> for the full picture. Alt on by default (matching
+    /// the requested Alt+Space default), Ctrl/Shift off. All three are independently toggleable in
+    /// Settings > Tabs, so any modifier combination (including none at all) is possible.</summary>
+    public bool CycleOutgoingChannelHotkeyAlt { get; set; } = true;
+
+    public bool CycleOutgoingChannelHotkeyCtrl { get; set; } = false;
+
+    public bool CycleOutgoingChannelHotkeyShift { get; set; } = false;
+
+    /// <summary>The "cycle outgoing channel" hotkey's main key - <see cref="Utility.ChatChannelCatalog.TryCycleOutgoingChannel"/>
+    /// advances the focused chat window's tab to the next of its own sendable channels
+    /// (<see cref="Models.ChatTabConfig.OutgoingChannelCommand"/>) whenever this key is pressed with
+    /// exactly the configured modifiers held - added per explicit user request for a quick way to
+    /// switch which channel a tab bound to several at once (e.g. Say+Yell+Shout) actually sends to,
+    /// without opening the existing click-to-pick popup every time. Default Alt+Space specifically
+    /// because holding Alt suppresses normal character entry on Windows, so it's safe to fire even
+    /// while the compose box itself has keyboard focus (the main scenario this exists for) - a rebind
+    /// to a bare, unmodified key would still literally type that character into the compose box
+    /// alongside cycling, since nothing here suppresses normal text input.</summary>
+    public ImGuiKey CycleOutgoingChannelHotkeyKey { get; set; } = ImGuiKey.Space;
+
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
     /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
     /// one. Turning this off removes every such tab immediately (see
@@ -336,6 +359,10 @@ public class Configuration : IPluginConfiguration
         NotificationSoundEnabled = defaults.NotificationSoundEnabled;
         CustomNotificationSoundPath = defaults.CustomNotificationSoundPath;
         CustomWhisperNotificationSoundPath = defaults.CustomWhisperNotificationSoundPath;
+        CycleOutgoingChannelHotkeyAlt = defaults.CycleOutgoingChannelHotkeyAlt;
+        CycleOutgoingChannelHotkeyCtrl = defaults.CycleOutgoingChannelHotkeyCtrl;
+        CycleOutgoingChannelHotkeyShift = defaults.CycleOutgoingChannelHotkeyShift;
+        CycleOutgoingChannelHotkeyKey = defaults.CycleOutgoingChannelHotkeyKey;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
         ShowHideChatButton = defaults.ShowHideChatButton;
         AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;

@@ -122,6 +122,11 @@ public sealed class DetachedTabWindow : Window, IDisposable
             plugin.TabManager.Save();
         }
 
+        // Same hotkey handling as MainWindow's version - see ChatChannelCatalog.TryCycleOutgoingChannel's
+        // own doc comment.
+        if (IsFocused && ChatChannelCatalog.TryCycleOutgoingChannel(Tab, Plugin.Configuration, sendable))
+            plugin.TabManager.Save();
+
         if (string.IsNullOrEmpty(Tab.OutgoingChannelCommand))
         {
             ImGui.TextDisabled("No writable channel in this tab - nothing to send to.");

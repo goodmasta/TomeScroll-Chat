@@ -677,6 +677,9 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         ImGui.Separator();
+        DrawCycleOutgoingChannelHotkey();
+
+        ImGui.Separator();
 
         foreach (var tab in plugin.TabManager.Tabs.ToList())
         {
@@ -693,6 +696,69 @@ public sealed class ConfigWindow : Window, IDisposable
 
             DrawTabEditor(tab);
         }
+    }
+
+    /// <summary>See <see cref="Utility.ChatChannelCatalog.TryCycleOutgoingChannel"/> for the full
+    /// reasoning - three independent modifier checkboxes plus a curated key combo, rather than an
+    /// interactive "press any key now" capture, so every combination stays visible/editable at a
+    /// glance and there's no separate "listening" mode to get stuck in.</summary>
+    private void DrawCycleOutgoingChannelHotkey()
+    {
+        ImGui.TextUnformatted("Cycle outgoing channel hotkey");
+        ImGui.TextDisabled("When a tab has more than one sendable channel (e.g. Say+Yell+Shout), this switches which one your next message actually goes to - same as clicking the \"Sending to: ...\" label above the compose box, just from the keyboard. Works while the compose box has focus.");
+
+        var alt = configuration.CycleOutgoingChannelHotkeyAlt;
+        if (ImGui.Checkbox("Alt##hotkeyAlt", ref alt))
+        {
+            configuration.CycleOutgoingChannelHotkeyAlt = alt;
+            configuration.Save();
+        }
+
+        ImGui.SameLine();
+        var ctrl = configuration.CycleOutgoingChannelHotkeyCtrl;
+        if (ImGui.Checkbox("Ctrl##hotkeyCtrl", ref ctrl))
+        {
+            configuration.CycleOutgoingChannelHotkeyCtrl = ctrl;
+            configuration.Save();
+        }
+
+        ImGui.SameLine();
+        var shift = configuration.CycleOutgoingChannelHotkeyShift;
+        if (ImGui.Checkbox("Shift##hotkeyShift", ref shift))
+        {
+            configuration.CycleOutgoingChannelHotkeyShift = shift;
+            configuration.Save();
+        }
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(100);
+        var currentKeyLabel = HotkeyKeyCatalog.Label(configuration.CycleOutgoingChannelHotkeyKey);
+        if (ImGui.BeginCombo("##hotkeyKey", currentKeyLabel))
+        {
+            foreach (var (key, label) in HotkeyKeyCatalog.Entries)
+            {
+                if (ImGui.Selectable(label, key == configuration.CycleOutgoingChannelHotkeyKey))
+                {
+                    configuration.CycleOutgoingChannelHotkeyKey = key;
+                    configuration.Save();
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Reset to Alt+Space##hotkeyReset"))
+        {
+            configuration.CycleOutgoingChannelHotkeyAlt = true;
+            configuration.CycleOutgoingChannelHotkeyCtrl = false;
+            configuration.CycleOutgoingChannelHotkeyShift = false;
+            configuration.CycleOutgoingChannelHotkeyKey = ImGuiKey.Space;
+            configuration.Save();
+        }
+
+        if (!alt && !ctrl && !shift)
+            ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f), "No modifier selected - this key will also type normally into the compose box, on top of cycling.");
     }
 
     private void DrawTabEditor(ChatTabConfig tab)

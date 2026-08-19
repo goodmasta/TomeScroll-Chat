@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Dalamud.Bindings.ImGui;
 using Dalamud.Game.Text;
 
 namespace TomeScrollChat.Utility;
@@ -42,6 +43,39 @@ public static class ChatChannelCatalog
         new(XivChatType.CrossLinkShell5, "CWLS 5", "/cwlinkshell5"), new(XivChatType.CrossLinkShell6, "CWLS 6", "/cwlinkshell6"),
         new(XivChatType.CrossLinkShell7, "CWLS 7", "/cwlinkshell7"), new(XivChatType.CrossLinkShell8, "CWLS 8", "/cwlinkshell8"),
     };
+
+    /// <summary>Advances <paramref name="tab"/>'s <see cref="Models.ChatTabConfig.OutgoingChannelCommand"/>
+    /// to the next entry in <paramref name="sendable"/> (wrapping around) if
+    /// <see cref="Configuration.CycleOutgoingChannelHotkeyKey"/> (default Alt+Space) was pressed this
+    /// frame with exactly the configured modifiers held - <c>MainWindow</c>/<c>DetachedTabWindow</c>
+    /// each call this once per frame from their own <c>DrawOutgoingChannelLabel</c>, gated on that
+    /// specific window currently having focus (so the hotkey only ever affects whichever chat window
+    /// you're actually looking at, and never fires from an unrelated window/plugin having focus
+    /// instead). Added per explicit user request for a quick way to switch which channel a tab bound
+    /// to several at once actually sends to, without opening the existing click-to-pick popup every
+    /// time. Returns whether it actually changed anything, so the caller knows to persist it
+    /// (<c>TabManager.Save()</c>) - deliberately not saved from in here, to keep this a pure "did the
+    /// hotkey fire" check with no I/O side effect of its own. No-op (returns false) with 0 or 1
+    /// sendable channels - nothing to cycle between.</summary>
+    public static bool TryCycleOutgoingChannel(Models.ChatTabConfig tab, Configuration configuration, List<SendableChannel> sendable)
+    {
+        if (sendable.Count <= 1)
+            return false;
+
+        var io = ImGui.GetIO();
+        if (io.KeyAlt != configuration.CycleOutgoingChannelHotkeyAlt ||
+            io.KeyCtrl != configuration.CycleOutgoingChannelHotkeyCtrl ||
+            io.KeyShift != configuration.CycleOutgoingChannelHotkeyShift)
+            return false;
+
+        if (!ImGui.IsKeyPressed(configuration.CycleOutgoingChannelHotkeyKey, false))
+            return false;
+
+        var currentIndex = sendable.FindIndex(c => c.Command == tab.OutgoingChannelCommand);
+        var nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % sendable.Count;
+        tab.OutgoingChannelCommand = sendable[nextIndex].Command;
+        return true;
+    }
 
     public static readonly IReadOnlyList<Group> Groups = new List<Group>
     {

@@ -1287,6 +1287,12 @@ public sealed class MainWindow : Window, IDisposable
             plugin.TabManager.Save();
         }
 
+        // Alt+Space (or whatever it's rebound to, see Settings > Tabs) - gated on this window
+        // currently having focus so the hotkey only ever affects whichever chat window is actually
+        // being looked at. See ChatChannelCatalog.TryCycleOutgoingChannel's own doc comment.
+        if (IsFocused && ChatChannelCatalog.TryCycleOutgoingChannel(tab, Plugin.Configuration, sendable))
+            plugin.TabManager.Save();
+
         if (string.IsNullOrEmpty(tab.OutgoingChannelCommand))
         {
             ImGui.TextDisabled("No writable channel in this tab - nothing to send to.");
