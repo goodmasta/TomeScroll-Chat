@@ -160,14 +160,19 @@ public static class ChatMessageRenderer
 
         var channelColor = GetColor(tab, msg.ChatType);
 
-        // Outgoing tells are authored by the local player but their Sender field carries the *target's*
-        // payload (e.g. "To Name"), not the player's own - so TellOutgoing is its own reliable "this is
-        // me" signal. For every other channel, the game apparently doesn't embed a clickable
-        // PlayerPayload for the *local* player's own name the way it does for other players (there's
-        // nothing to click on yourself), so SenderKey often comes back empty for your own messages -
-        // falling back to a plain-name comparison against the raw sender text catches those too.
+        // msg.IsFromLocalPlayer (Dalamud's own XivChatRelationKind.LocalPlayer, see
+        // ChatMessageRecord.IsFromLocalPlayer) is the authoritative signal, preferred over the string
+        // fallbacks below - those alone were confirmed live to fail to recognize the player's own Party
+        // chat messages (the game's Sender text for own-authored Party messages apparently doesn't
+        // reliably match this comparison the way Say/Yell/etc. do), silently leaving the character's own
+        // name shown instead of "You". Kept as a fallback regardless, for history rows persisted before
+        // this flag existed (they default to false) and as a safety net in case IsFromLocalPlayer itself
+        // ever comes back wrong for some channel. Outgoing tells are authored by the local player but
+        // their Sender field carries the *target's* payload (e.g. "To Name"), not the player's own - so
+        // TellOutgoing is its own reliable "this is me" signal, same as before.
         var localPlayerName = localPlayerKey?.Split('@')[0];
-        var isOwn = msg.ChatType == XivChatType.TellOutgoing ||
+        var isOwn = msg.IsFromLocalPlayer ||
+                    msg.ChatType == XivChatType.TellOutgoing ||
                     (!string.IsNullOrEmpty(localPlayerKey) && msg.SenderKey == localPlayerKey) ||
                     (!string.IsNullOrEmpty(localPlayerName) && msg.SenderName == localPlayerName);
 

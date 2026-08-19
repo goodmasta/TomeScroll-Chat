@@ -121,6 +121,9 @@ public sealed class ConfigWindow : Window, IDisposable
         DrawWhisperNotification();
 
         ImGui.Separator();
+        DrawMentionNotification();
+
+        ImGui.Separator();
         ImGui.TextUnformatted("Unread indicator colours");
 
         var channelBlink = configuration.ChannelBlinkColor;
@@ -256,6 +259,24 @@ public sealed class ConfigWindow : Window, IDisposable
                 : plugin.NotificationSoundService.DefaultWhisperSoundPath;
             plugin.NotificationSoundService.PlayPreview(previewSound);
         }
+    }
+
+    /// <summary>"You were mentioned" notification - see <see cref="Services.MentionNotificationService"/>
+    /// for the full reasoning (same channel set/detection <see cref="Configuration.AutoReplyToMentions"/>
+    /// already uses, but independent of auto-reply being on). Uses the general notification sound above
+    /// rather than its own custom slot - unlike whispers, there was no request to tell mentions apart by
+    /// sound alone.</summary>
+    private void DrawMentionNotification()
+    {
+        ImGui.TextUnformatted("Mention notifications");
+
+        var notifyOnMention = configuration.NotifyOnMention;
+        if (ImGui.Checkbox("Show a popup (with sound) when your name is mentioned", ref notifyOnMention))
+        {
+            configuration.NotifyOnMention = notifyOnMention;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Watches Say/Yell/Shout/Party/Alliance/Free Company/Linkshells for your character's full name, first name, or last name - same channels and detection \"Reply when mentioned\" (title bar auto-reply popup) uses, but works whether or not auto-reply is on.");
     }
 
     /// <summary>AI agent configuration - currently just Gemini (<see cref="Services.GeminiService"/>),

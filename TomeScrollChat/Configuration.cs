@@ -242,6 +242,16 @@ public class Configuration : IPluginConfiguration
     /// notification sound.</summary>
     public bool WhisperSoundEnabled { get; set; } = true;
 
+    /// <summary>Pops an in-game popup toast (with sound, via the normal <see cref="Services.NotificationService.Show"/>
+    /// pipeline - see <see cref="NotificationSoundEnabled"/>) whenever your character's name is
+    /// mentioned by someone else in a conversational chat channel (Say/Yell/Shout/Party/Alliance/FC/
+    /// Linkshells - see <see cref="Services.AutoReplyService.MentionChannels"/>), the same way Discord
+    /// highlights a ping. Matches the local player's full name, first name, or last name
+    /// (case-insensitive substring, not word-bounded) - see
+    /// <see cref="Windows.ChatMessageRenderer.ContainsMention"/>, the same detection
+    /// <see cref="AutoReplyToMentions"/> already uses. On by default.</summary>
+    public bool NotifyOnMention { get; set; } = true;
+
     /// <summary>Whether <see cref="Services.NotificationService.Show"/> plays a short sound alongside
     /// every popup toast, via <see cref="Services.NotificationSoundService"/> - on by default per
     /// explicit user request. Turning this off silences the sound entirely without affecting the popups

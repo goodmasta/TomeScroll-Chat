@@ -132,6 +132,11 @@ public sealed class ChatHistoryService : IDisposable
         // SaveTranslation/LoadRecent and TranslationService.
         AddColumnIfMissing("translation", "TEXT");
         AddColumnIfMissing("translation_lang", "TEXT");
+
+        // is_local_player (2026-08-19) - see ChatMessageRecord.IsFromLocalPlayer. Existing rows default
+        // to 0 (unknown); they just fall back to the same string-matching MainWindow/ChatMessageRenderer
+        // already had before this column existed.
+        AddColumnIfMissing("is_local_player", "INTEGER NOT NULL DEFAULT 0");
     }
 
     /// <summary>Enqueues a message for background persistence. Non-blocking.</summary>
@@ -178,8 +183,8 @@ public sealed class ChatHistoryService : IDisposable
         using var cmd = writerConnection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = """
-            INSERT INTO messages (routing_key, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links)
-            VALUES ($routingKey, $timestamp, $chatType, $senderName, $senderKey, $body, $payloadLinks);
+            INSERT INTO messages (routing_key, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links, is_local_player)
+            VALUES ($routingKey, $timestamp, $chatType, $senderName, $senderKey, $body, $payloadLinks, $isLocalPlayer);
             """;
         var pRouting = cmd.CreateParameter(); pRouting.ParameterName = "$routingKey"; cmd.Parameters.Add(pRouting);
         var pTimestamp = cmd.CreateParameter(); pTimestamp.ParameterName = "$timestamp"; cmd.Parameters.Add(pTimestamp);
@@ -188,6 +193,7 @@ public sealed class ChatHistoryService : IDisposable
         var pSenderKey = cmd.CreateParameter(); pSenderKey.ParameterName = "$senderKey"; cmd.Parameters.Add(pSenderKey);
         var pBody = cmd.CreateParameter(); pBody.ParameterName = "$body"; cmd.Parameters.Add(pBody);
         var pPayloadLinks = cmd.CreateParameter(); pPayloadLinks.ParameterName = "$payloadLinks"; cmd.Parameters.Add(pPayloadLinks);
+        var pIsLocalPlayer = cmd.CreateParameter(); pIsLocalPlayer.ParameterName = "$isLocalPlayer"; cmd.Parameters.Add(pIsLocalPlayer);
 
         foreach (var record in batch)
         {
@@ -198,6 +204,7 @@ public sealed class ChatHistoryService : IDisposable
             pSenderKey.Value = record.SenderKey;
             pBody.Value = record.Body;
             pPayloadLinks.Value = (object?)SerializePayloadLinks(record.PayloadLinks) ?? DBNull.Value;
+            pIsLocalPlayer.Value = record.IsFromLocalPlayer ? 1 : 0;
             cmd.ExecuteNonQuery();
         }
 
@@ -381,7 +388,7 @@ public sealed class ChatHistoryService : IDisposable
         connection.Open();
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
-            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links, translation, translation_lang
+            SELECT id, timestamp_utc, chat_type, sender_name, sender_key, body, payload_links, translation, translation_lang, is_local_player
             FROM messages
             WHERE routing_key = $routingKey
             ORDER BY id DESC
@@ -405,6 +412,7 @@ public sealed class ChatHistoryService : IDisposable
                 PayloadLinks = DeserializePayloadLinks(reader.IsDBNull(6) ? null : reader.GetString(6)),
                 PersistedTranslation = reader.IsDBNull(7) ? null : reader.GetString(7),
                 PersistedTranslationLanguage = reader.IsDBNull(8) ? null : reader.GetString(8),
+                IsFromLocalPlayer = !reader.IsDBNull(9) && reader.GetInt64(9) != 0,
             });
         }
 

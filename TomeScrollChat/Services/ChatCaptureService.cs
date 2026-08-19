@@ -60,8 +60,11 @@ public sealed class ChatCaptureService : IDisposable
     /// <see cref="MessageRouted"/>, which fires once *per matching tab* (so the same incoming "Say"
     /// message could invoke it twice if two tabs both show that channel). <see cref="Services.AutoReplyService"/>
     /// needs an exactly-once signal to avoid double-triggering, which is the whole reason this exists
-    /// separately rather than just reusing <see cref="MessageRouted"/>.</summary>
-    public event Action<XivChatType, string, string, string>? RawMessageReceived;
+    /// separately rather than just reusing <see cref="MessageRouted"/>. The trailing <c>bool</c> is
+    /// <see cref="Models.ChatMessageRecord.IsFromLocalPlayer"/> - see that property's own doc comment
+    /// for why this is the preferred "is this the local player's own message" signal over string-matching
+    /// sender name/key.</summary>
+    public event Action<XivChatType, string, string, string, bool>? RawMessageReceived;
 
     public ChatCaptureService(IChatGui chatGui, IPluginLog log, Configuration configuration, TabManager tabManager, ChatHistoryService historyService, NotificationService notificationService)
     {
@@ -91,6 +94,7 @@ public sealed class ChatCaptureService : IDisposable
         var chatType = message.LogKind;
         var senderText = message.Sender.TextValue;
         var senderKey = ExtractSenderKey(message.Sender);
+        var isFromLocalPlayer = message.SourceKind == XivChatRelationKind.LocalPlayer;
         var (body, payloadLinks) = BuildBodyAndPayloadLinks(message.Message);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
         // this was tested against (every message showed the same UTC-epoch-in-local-time clock),
@@ -98,14 +102,14 @@ public sealed class ChatCaptureService : IDisposable
         // a live chat capture that's effectively the same instant anyway.
         var timestamp = DateTime.UtcNow;
 
-        RawMessageReceived?.Invoke(chatType, senderText, senderKey, body);
+        RawMessageReceived?.Invoke(chatType, senderText, senderKey, body, isFromLocalPlayer);
 
         if (configuration.NotifyOnInvalidCommand && Array.IndexOf(CommandErrorChatTypes, chatType) >= 0 && LooksLikeChatSystemError(body))
             notificationService.Show(body, NotificationSeverity.Error);
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
-            HandleTell(message, chatType, senderText, senderKey, body, payloadLinks, timestamp);
+            HandleTell(message, chatType, senderText, senderKey, isFromLocalPlayer, body, payloadLinks, timestamp);
             return;
         }
 
@@ -120,6 +124,7 @@ public sealed class ChatCaptureService : IDisposable
                 ChatType = chatType,
                 SenderName = senderText,
                 SenderKey = senderKey,
+                IsFromLocalPlayer = isFromLocalPlayer,
                 Body = body,
                 RoutingKey = tab.Id.ToString(),
                 PayloadLinks = payloadLinks,
@@ -137,7 +142,7 @@ public sealed class ChatCaptureService : IDisposable
     /// specifically about the *sound*, so it tracks <see cref="Configuration.WhisperSoundEnabled"/>
     /// alone. Never called for <see cref="XivChatType.TellOutgoing"/> - only ever affects messages
     /// received, never sent.</summary>
-    private void HandleTell(IHandleableChatMessage message, XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
+    private void HandleTell(IHandleableChatMessage message, XivChatType chatType, string senderText, string senderKey, bool isFromLocalPlayer, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
         if (chatType == XivChatType.TellIncoming && configuration.WhisperSoundEnabled)
             message.PreventOriginal();
@@ -157,6 +162,7 @@ public sealed class ChatCaptureService : IDisposable
             ChatType = chatType,
             SenderName = senderText,
             SenderKey = senderKey,
+            IsFromLocalPlayer = isFromLocalPlayer,
             Body = body,
             RoutingKey = partnerKey,
             PayloadLinks = payloadLinks,

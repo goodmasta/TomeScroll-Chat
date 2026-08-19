@@ -49,7 +49,7 @@ public sealed class WhisperNotificationService : IDisposable
         chatCaptureService.RawMessageReceived += OnRawMessage;
     }
 
-    private void OnRawMessage(XivChatType chatType, string senderName, string senderKey, string body)
+    private void OnRawMessage(XivChatType chatType, string senderName, string senderKey, string body, bool isFromLocalPlayer)
     {
         try
         {

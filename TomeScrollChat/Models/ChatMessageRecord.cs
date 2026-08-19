@@ -23,6 +23,16 @@ public sealed class ChatMessageRecord
     /// <summary>"Name@World" when known (players), empty for system/echo/etc.</summary>
     public string SenderKey { get; init; } = string.Empty;
 
+    /// <summary>Whether this message's sender is the local player, per Dalamud's own
+    /// <see cref="Dalamud.Game.Chat.IChatMessage.SourceKind"/> (<c>XivChatRelationKind.LocalPlayer</c>) -
+    /// see <see cref="Services.ChatCaptureService"/> for where this is set. The authoritative signal
+    /// <see cref="Windows.ChatMessageRenderer"/> prefers for showing "You" instead of the sender's name;
+    /// <see cref="SenderName"/>/<see cref="SenderKey"/> string-matching is kept only as a fallback,
+    /// since the game doesn't consistently embed a resolvable <c>PlayerPayload</c>/exact-matching name
+    /// for the local player's own messages across every channel (confirmed live to silently fail for
+    /// Party chat specifically - not reliable enough to depend on alone).</summary>
+    public bool IsFromLocalPlayer { get; init; }
+
     public string Body { get; init; } = string.Empty;
 
     /// <summary>Which history bucket this belongs to: a tab's <see cref="ChatTabConfig.Id"/> (as string) for

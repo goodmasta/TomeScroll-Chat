@@ -87,11 +87,11 @@ public sealed class AutoReplyService : IDisposable
         framework.Update += OnFrameworkUpdate;
     }
 
-    private void OnRawMessage(XivChatType chatType, string senderName, string senderKey, string body)
+    private void OnRawMessage(XivChatType chatType, string senderName, string senderKey, string body, bool isFromLocalPlayer)
     {
         try
         {
-            Handle(chatType, senderName, senderKey, body);
+            Handle(chatType, senderName, senderKey, body, isFromLocalPlayer);
         }
         catch (Exception ex)
         {
@@ -99,7 +99,7 @@ public sealed class AutoReplyService : IDisposable
         }
     }
 
-    private void Handle(XivChatType chatType, string senderName, string senderKey, string body)
+    private void Handle(XivChatType chatType, string senderName, string senderKey, string body, bool isFromLocalPlayer)
     {
         if (!configuration.AutoReplyEnabled || string.IsNullOrEmpty(senderKey) || string.IsNullOrWhiteSpace(configuration.AutoReplyMessage))
             return;
@@ -109,8 +109,12 @@ public sealed class AutoReplyService : IDisposable
 
         // Never reply to the player's own messages - an outgoing tell, or their own name showing up
         // as the "sender" some other way, would otherwise be indistinguishable from someone else
-        // legitimately triggering this.
-        var isOwn = chatType == XivChatType.TellOutgoing ||
+        // legitimately triggering this. isFromLocalPlayer (Dalamud's own XivChatRelationKind.LocalPlayer,
+        // see ChatMessageRecord.IsFromLocalPlayer) is the authoritative check; the string-matching
+        // fallbacks stay in place for the same reason ChatMessageRenderer keeps them (this channel-name
+        // formatting quirk isn't confirmed exhaustive across every channel).
+        var isOwn = isFromLocalPlayer ||
+                    chatType == XivChatType.TellOutgoing ||
                     (!string.IsNullOrEmpty(localPlayerKey) && senderKey == localPlayerKey) ||
                     (!string.IsNullOrEmpty(localPlayerName) && senderName == localPlayerName);
         if (isOwn)
