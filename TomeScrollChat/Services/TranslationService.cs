@@ -322,14 +322,15 @@ public sealed class TranslationService : IDisposable
     /// decision, not just the queue's.</para></summary>
     public async Task<string?> TranslateRawAsync(string text, string targetLanguage)
     {
-        var result = await (activeEngine switch
+        var engineUsed = activeEngine;
+        var result = await (engineUsed switch
         {
             TranslationEngine.MyMemory => TranslateViaMyMemoryAsync(text, targetLanguage),
             TranslationEngine.Gemini => TranslateViaGeminiAsync(text, targetLanguage),
             _ => TranslateViaGoogleGtxAsync(text, targetLanguage),
         }).ConfigureAwait(false);
 
-        TrackEngineHealth(!string.IsNullOrEmpty(result));
+        TrackEngineHealth(engineUsed, !string.IsNullOrEmpty(result));
         return result;
     }
 
@@ -348,14 +349,15 @@ public sealed class TranslationService : IDisposable
     /// it survives a plugin reload or game restart mid-quest.</summary>
     public async Task<string?> TranslateDialogueAsync(string? speaker, string text, string targetLanguage)
     {
-        var result = await (activeEngine switch
+        var engineUsed = activeEngine;
+        var result = await (engineUsed switch
         {
             TranslationEngine.MyMemory => TranslateViaMyMemoryAsync(text, targetLanguage),
             TranslationEngine.Gemini => TranslateDialogueViaGeminiAsync(speaker, text, targetLanguage),
             _ => TranslateViaGoogleGtxAsync(text, targetLanguage),
         }).ConfigureAwait(false);
 
-        TrackEngineHealth(!string.IsNullOrEmpty(result));
+        TrackEngineHealth(engineUsed, !string.IsNullOrEmpty(result));
 
         if (!string.IsNullOrEmpty(result))
             RememberDialogueLine(speaker, text, result);
@@ -367,9 +369,24 @@ public sealed class TranslationService : IDisposable
     /// doc comment for why this lives here rather than only in <see cref="WorkerLoopAsync"/>. Mirrors
     /// that loop's own switch behavior (same threshold, same fallback order, same notification) so
     /// there's exactly one "when do we give up on the current engine" rule regardless of which caller's
-    /// failures actually triggered it.</summary>
-    private void TrackEngineHealth(bool success)
+    /// failures actually triggered it.
+    /// <para><b>Fixed 2026-08-19</b>, per explicit user request ("после свапа движка дальнейшие переводы
+    /// спамят ошибку по прошлому движку"): <paramref name="engineUsed"/> is the engine a specific
+    /// request actually dispatched to (captured by the caller *before* awaiting it), not a fresh read of
+    /// <see cref="activeEngine"/> - callers can run concurrently (queued per-message translations, the
+    /// input-box one-off, and every in-flight retry <see cref="DialogueTranslationService"/> now makes
+    /// per line), so a request that started on the engine *before* a switch could still be landing after
+    /// one, and its late failure has nothing to say about the *new* active engine's health. Counting it
+    /// anyway could immediately increment the new engine's failure count from stale results the moment
+    /// it takes over, occasionally bouncing straight into a second switch before it ever got a real
+    /// chance - the live report matched exactly this: the "past" engine's errors kept showing up even
+    /// though a swap had already happened. Failures against an engine that's no longer active are now
+    /// ignored entirely instead.</para></summary>
+    private void TrackEngineHealth(TranslationEngine engineUsed, bool success)
     {
+        if (engineUsed != activeEngine)
+            return;
+
         if (success)
         {
             Interlocked.Exchange(ref rawConsecutiveFailures, 0);
