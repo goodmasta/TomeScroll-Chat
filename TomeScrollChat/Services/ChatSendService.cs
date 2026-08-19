@@ -24,6 +24,7 @@ public sealed unsafe class ChatSendService
     private const string LinkPlaceholder = "<link>";
     private const string PartyFinderLinkPlaceholder = "<pflink>";
     private const string AutoTranslateLinkPlaceholder = "<atlink>";
+    private const string QuestLinkPlaceholder = "<questlink>";
 
     private readonly IPluginLog log;
 
@@ -52,10 +53,13 @@ public sealed unsafe class ChatSendService
     /// <see cref="Windows.AutoTranslatePicker"/> (Tab in the chat input), consumed the same way by
     /// each literal "&lt;atlink&gt;" placeholder - see <see cref="EncodeAutoTranslate"/> for how these
     /// are actually encoded.</param>
-    public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null)
+    /// <param name="questAttachments">Quest links queued via <see cref="NativeQuestLinkWatcher"/> (the
+    /// native Quest Journal's own "Link in Chat" action), consumed the same way by each literal
+    /// "&lt;questlink&gt;" placeholder.</param>
+    public void Send(string channelCommand, string message, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null, IReadOnlyList<PendingQuestLink>? questAttachments = null)
     {
         message ??= string.Empty;
-        var hasAttachments = attachments is { Count: > 0 } || partyFinderAttachments is { Count: > 0 } || autoTranslateAttachments is { Count: > 0 };
+        var hasAttachments = attachments is { Count: > 0 } || partyFinderAttachments is { Count: > 0 } || autoTranslateAttachments is { Count: > 0 } || questAttachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(message) && !hasAttachments)
             return;
 
@@ -65,7 +69,7 @@ public sealed unsafe class ChatSendService
             : message.Length > 0 ? $"{channelCommand} {message}" : channelCommand;
 
         using var buffer = new MemoryStream();
-        AppendWithPlaceholderExpansion(buffer, full, attachments, partyFinderAttachments, autoTranslateAttachments);
+        AppendWithPlaceholderExpansion(buffer, full, attachments, partyFinderAttachments, autoTranslateAttachments, questAttachments);
 
         if (buffer.Length > MaxUtf8Bytes)
         {
@@ -122,25 +126,27 @@ public sealed unsafe class ChatSendService
     /// other unrecognized token - reliability over the feature, given repeated failures trying to build
     /// this specific payload live. If revisiting, add logging *before* re-attempting the expansion, not
     /// after - this was debugged blind for too many rounds already.</para></summary>
-    private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments)
+    private void AppendWithPlaceholderExpansion(MemoryStream buffer, string text, IReadOnlyList<PendingItemLink>? attachments, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments, IReadOnlyList<PendingQuestLink>? questAttachments)
     {
         var itemIndex = 0;
         var pfIndex = 0;
         var atIndex = 0;
+        var questIndex = 0;
         var pos = 0;
 
         while (pos < text.Length)
         {
-            // None of "<link>"/"<pflink>"/"<atlink>" can ever appear as a substring of one of the
-            // others (each has a distinct character right after "<"), so whichever is found earliest
-            // in the remaining text just wins outright - no need to worry about overlap.
+            // None of "<link>"/"<pflink>"/"<atlink>"/"<questlink>" can ever appear as a substring of
+            // one of the others (each has a distinct character right after "<"), so whichever is found
+            // earliest in the remaining text just wins outright - no need to worry about overlap.
             var linkIndex = text.IndexOf(LinkPlaceholder, pos, StringComparison.Ordinal);
             var pfLinkIndex = text.IndexOf(PartyFinderLinkPlaceholder, pos, StringComparison.Ordinal);
             var atLinkIndex = text.IndexOf(AutoTranslateLinkPlaceholder, pos, StringComparison.Ordinal);
+            var questLinkIndex = text.IndexOf(QuestLinkPlaceholder, pos, StringComparison.Ordinal);
 
             var matchIndex = -1;
             var placeholder = string.Empty;
-            foreach (var (index, candidate) in new[] { (linkIndex, LinkPlaceholder), (pfLinkIndex, PartyFinderLinkPlaceholder), (atLinkIndex, AutoTranslateLinkPlaceholder) })
+            foreach (var (index, candidate) in new[] { (linkIndex, LinkPlaceholder), (pfLinkIndex, PartyFinderLinkPlaceholder), (atLinkIndex, AutoTranslateLinkPlaceholder), (questLinkIndex, QuestLinkPlaceholder) })
             {
                 if (index >= 0 && (matchIndex < 0 || index < matchIndex))
                 {
@@ -166,6 +172,17 @@ public sealed unsafe class ChatSendService
                 byte[]? bytes = null;
                 if (partyFinderAttachments != null && pfIndex < partyFinderAttachments.Count)
                     bytes = partyFinderAttachments[pfIndex++].RawPayloadBytes;
+
+                buffer.Write(bytes ?? Encoding.UTF8.GetBytes(placeholder));
+            }
+            else if (placeholder == QuestLinkPlaceholder)
+            {
+                // Same as PartyFinderLinkPlaceholder - no reconstruction fallback (see
+                // PendingQuestLink's doc comment), missing bytes just leaves the literal placeholder
+                // text in place rather than risking a hand-built payload silently losing its link.
+                byte[]? bytes = null;
+                if (questAttachments != null && questIndex < questAttachments.Count)
+                    bytes = questAttachments[questIndex++].RawPayloadBytes;
 
                 buffer.Write(bytes ?? Encoding.UTF8.GetBytes(placeholder));
             }

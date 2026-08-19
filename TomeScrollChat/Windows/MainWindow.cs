@@ -118,6 +118,11 @@ public sealed class MainWindow : Window, IDisposable
     /// <see cref="AttachPartyFinderLink"/>.</summary>
     private readonly List<PendingPartyFinderLink> pendingPartyFinderLinks = new();
 
+    /// <summary>Quest links queued via the native Quest Journal's own "Link in Chat" action (see
+    /// <see cref="Services.NativeQuestLinkWatcher"/>), consumed in order by each "&lt;questlink&gt;"
+    /// placeholder in <see cref="inputText"/> at send time - see <see cref="AttachQuestLink"/>.</summary>
+    private readonly List<PendingQuestLink> pendingQuestLinks = new();
+
     /// <summary>Auto-translate dictionary phrases picked via <see cref="Windows.AutoTranslatePicker"/>
     /// (Tab in the compose box), consumed in order by each "&lt;atlink&gt;" placeholder in
     /// <see cref="inputText"/> at send time.</summary>
@@ -487,6 +492,24 @@ public sealed class MainWindow : Window, IDisposable
         if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
             inputText += " ";
         inputText += PartyFinderLinkPlaceholder;
+    }
+
+    /// <summary>Placeholder text inserted into the compose box the moment a quest gets linked via the
+    /// native Quest Journal's own "Link in Chat" action - swapped for the real link at send time (see
+    /// <see cref="Services.ChatSendService"/>). Kept in sync with <c>ChatSendService.QuestLinkPlaceholder</c>.</summary>
+    private const string QuestLinkPlaceholder = "<questlink>";
+
+    /// <summary>Queues a quest link and drops a "&lt;questlink&gt;" placeholder into the compose box -
+    /// the <see cref="Services.NativeQuestLinkWatcher"/> handler for the native Quest Journal's own
+    /// "Link in Chat" action. Same shape as <see cref="AttachItemLink"/>/<see cref="AttachPartyFinderLink"/>,
+    /// including landing on the main window's shared compose state regardless of which tab/window last
+    /// had focus, and not stealing focus (linking a quest is as incidental as linking an item).</summary>
+    public void AttachQuestLink(PendingQuestLink link)
+    {
+        pendingQuestLinks.Add(link);
+        if (inputText.Length > 0 && !char.IsWhiteSpace(inputText[^1]))
+            inputText += " ";
+        inputText += QuestLinkPlaceholder;
     }
 
     /// <summary>Queues an auto-translate dictionary phrase and drops a "&lt;atlink&gt;" placeholder
@@ -1757,15 +1780,16 @@ public sealed class MainWindow : Window, IDisposable
             inputText += (inputText.Length > 0 && !inputText.EndsWith(' ') ? " " : string.Empty) + $":{code}:" + " ";
         });
 
-        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0 || pendingPartyFinderLinks.Count > 0 || pendingAutoTranslateLinks.Count > 0))
+        if (send && (!string.IsNullOrWhiteSpace(inputText) || pendingItemLinks.Count > 0 || pendingPartyFinderLinks.Count > 0 || pendingAutoTranslateLinks.Count > 0 || pendingQuestLinks.Count > 0))
         {
             var textToSend = StripWrapNewlines(inputText);
-            GetSendHistory(tab.Id).Push(textToSend); // recorded even for a "<link>"/"<pflink>"/"<atlink>" placeholder-only send - the attachment itself isn't preserved for recall, just the typed text
-            plugin.SendFromTab(tab, textToSend, pendingItemLinks, pendingPartyFinderLinks, pendingAutoTranslateLinks);
+            GetSendHistory(tab.Id).Push(textToSend); // recorded even for a "<link>"/"<pflink>"/"<atlink>"/"<questlink>" placeholder-only send - the attachment itself isn't preserved for recall, just the typed text
+            plugin.SendFromTab(tab, textToSend, pendingItemLinks, pendingPartyFinderLinks, pendingAutoTranslateLinks, pendingQuestLinks);
             inputText = string.Empty;
             pendingItemLinks.Clear();
             pendingPartyFinderLinks.Clear();
             pendingAutoTranslateLinks.Clear();
+            pendingQuestLinks.Clear();
             wrapNewlines.Clear();
             lastWrapSnapshot = Array.Empty<byte>();
         }

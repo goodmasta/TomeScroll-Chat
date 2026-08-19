@@ -79,6 +79,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly NativeChatInputWatcher nativeChatInputWatcher;
     private readonly NativeItemLinkWatcher nativeItemLinkWatcher;
     private readonly NativePartyFinderLinkWatcher nativePartyFinderLinkWatcher;
+    private readonly NativeQuestLinkWatcher nativeQuestLinkWatcher;
     private readonly LinkshellWatcherService linkshellWatcherService;
     private readonly EnterToChatService enterToChatService;
 
@@ -142,6 +143,7 @@ public sealed class Plugin : IDalamudPlugin
         nativeChatInputWatcher = new NativeChatInputWatcher(Framework, GameGui, Log, GetLocalHomeWorldName, OpenTellTo, mainWindow.PrefillInput);
         nativeItemLinkWatcher = new NativeItemLinkWatcher(Framework, GameGui, Log, AttachItemLink);
         nativePartyFinderLinkWatcher = new NativePartyFinderLinkWatcher(Framework, GameGui, Log, AttachPartyFinderLink);
+        nativeQuestLinkWatcher = new NativeQuestLinkWatcher(Framework, GameGui, Log, AttachQuestLink);
         linkshellWatcherService = new LinkshellWatcherService(Framework, Log, Configuration, TabManager);
 
         foreach (var tab in TabManager.Tabs)
@@ -221,12 +223,12 @@ public sealed class Plugin : IDalamudPlugin
     /// command (or plain text if none is set). For whisper tabs, also primes
     /// <see cref="ChatCaptureService.PendingOutgoingTellTarget"/> so the sent tell round-trips back
     /// into the same conversation even if the game's own echo doesn't resolve a player payload.</summary>
-    public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null)
+    public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null, IReadOnlyList<PendingQuestLink>? questAttachments = null)
     {
         if (tab.IsPmTab && tab.PmPartnerKey != null)
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
-        ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments, partyFinderAttachments, autoTranslateAttachments);
+        ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments, partyFinderAttachments, autoTranslateAttachments, questAttachments);
     }
 
     /// <summary>Queues an item link and inserts a "&lt;link&gt;" placeholder into the compose box -
@@ -248,6 +250,12 @@ public sealed class Plugin : IDalamudPlugin
     /// <see cref="NativePartyFinderLinkWatcher"/>).</summary>
     private void AttachPartyFinderLink(ulong listingId, string leaderName, byte[]? rawPayloadBytes) =>
         mainWindow.AttachPartyFinderLink(new PendingPartyFinderLink(listingId, leaderName, rawPayloadBytes));
+
+    /// <summary>Queues a quest link and inserts a "&lt;questlink&gt;" placeholder into the compose box -
+    /// the native Quest Journal's own "Link in Chat" action's handler (see
+    /// <see cref="NativeQuestLinkWatcher"/>).</summary>
+    private void AttachQuestLink(uint questId, string questName, byte[]? rawPayloadBytes) =>
+        mainWindow.AttachQuestLink(new PendingQuestLink(questId, questName, rawPayloadBytes));
 
     private static string? ResolveItemName(uint itemId)
     {
@@ -595,6 +603,7 @@ public sealed class Plugin : IDalamudPlugin
         nativeChatInputWatcher.Dispose();
         nativeItemLinkWatcher.Dispose();
         nativePartyFinderLinkWatcher.Dispose();
+        nativeQuestLinkWatcher.Dispose();
         DialogueTranslationService.Dispose();
         FriendOnlineWatcherService.Dispose();
         AutoReplyService.Dispose();
