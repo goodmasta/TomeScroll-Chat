@@ -5,6 +5,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using TomeScrollChat.Models;
 using TomeScrollChat.Services;
+using TomeScrollChat.Utility;
 
 namespace TomeScrollChat.Windows;
 
@@ -92,7 +93,7 @@ public sealed class DialogueTranslationWindow : Window
                     if (!string.IsNullOrEmpty(entry.Speaker))
                     {
                         ImGui.SameLine();
-                        ImGui.TextColored(new Vector4(0.65f, 0.8f, 1f, 1f), entry.Speaker);
+                        ImGui.TextColored(NpcColorPalette.GetColor(entry.Speaker), entry.Speaker);
                     }
 
                     ImGui.TextWrapped(entry.TranslatedText);
