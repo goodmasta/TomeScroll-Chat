@@ -22,6 +22,7 @@
        PlaySound (winmm.dll) needs a real file path, not an in-memory stream. -->
   <ItemGroup>
     <EmbeddedResource Include="Assets\DefaultNotification.wav" />
+    <EmbeddedResource Include="Assets\DefaultWhisperNotification.wav" />
   </ItemGroup>
 
   <!-- Embeds the current git commit hash into the assembly via AssemblyMetadataAttribute, read back

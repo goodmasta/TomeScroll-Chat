@@ -14,29 +14,33 @@ namespace TomeScrollChat.Services;
 /// Win32 API Windows itself has used to play system/scheme sounds and short WAV clips for decades, so
 /// it's always present and needs nothing bundled or installed.
 ///
-/// <para>With no custom sound configured, the "standard" sound is a short alert clip bundled with the
-/// plugin itself (embedded resource, see the csproj - originally supplied as <c>freealert.mp3</c>,
-/// transcoded to PCM WAV since <c>PlaySound</c> can't decode mp3) rather than a generic Windows system
-/// sound, per explicit user request to use that specific clip as the preset. Extracted to
-/// <see cref="defaultSoundPath"/> (inside the plugin's own config directory) once per construction,
+/// <para>Two bundled default clips ship as embedded resources (see the csproj), each originally
+/// supplied as an mp3 and transcoded to PCM WAV since <c>PlaySound</c> can't decode mp3 - the general
+/// default (<see cref="DefaultSoundPath"/>, from <c>freealert.mp3</c>) and a second one specifically for
+/// whispers (<see cref="DefaultWhisperSoundPath"/>, from <c>freelaert2.mp3</c>), per explicit follow-up
+/// user request to tell whispers apart from every other notification by sound alone even with nothing
+/// custom configured. Both are extracted to the plugin's own config directory once per construction,
 /// since <c>PlaySound</c> needs a real file path, not an in-memory stream - always re-extracted rather
 /// than only-if-missing, so an updated bundled clip in a future build can't be shadowed by a stale copy
-/// left over from an older one. If extraction ever fails (disk full, permissions, etc.), Windows' own
-/// built-in "SystemAsterisk" scheme sound is the last-resort fallback, so a real machine/disk problem
-/// still ends up with *something* audible rather than silence. Only a user-provided file
-/// (<see cref="Configuration.CustomNotificationSoundPath"/>) ever overrides the bundled default.</para>
+/// left over from an older one. <see cref="WhisperNotificationService"/> resolves which single path to
+/// actually use (its own custom pick, else <see cref="DefaultWhisperSoundPath"/>) and passes that
+/// through <see cref="NotificationService.Show"/> as the sound override - this service itself only ever
+/// sees one effective override path per call, with its own further fallback (general custom sound, then
+/// <see cref="DefaultSoundPath"/>, then Windows' own built-in "SystemAsterisk" scheme sound as the
+/// final last-resort) applying if that override turns out to be missing.</para>
 ///
-/// <para><b>WAV only</b> for the *custom* sound slot, not "any" format as initially asked for -
+/// <para><b>WAV only</b> for the *custom* sound slots, not "any" format as initially asked for -
 /// <c>PlaySound</c> itself only ever understood uncompressed WAV; supporting compressed formats (mp3,
 /// ogg) as a *custom* pick would need a real decoding library. This matches Windows' own
 /// custom-notification-sound picker (Settings > Sound), which has the same restriction, so it's a
-/// familiar constraint rather than an unusual one. The bundled default itself started as an mp3 but
+/// familiar constraint rather than an unusual one. The bundled defaults themselves started as mp3s but
 /// that conversion happened once, ahead of time, at build-authoring time - not something this service
 /// does at runtime.</para>
 /// </summary>
 public sealed class NotificationSoundService
 {
     private const string DefaultSoundResourceName = "TomeScrollChat.Assets.DefaultNotification.wav";
+    private const string DefaultWhisperSoundResourceName = "TomeScrollChat.Assets.DefaultWhisperNotification.wav";
 
     private const uint SND_ASYNC = 0x0001;
     private const uint SND_NODEFAULT = 0x0002;
@@ -49,42 +53,53 @@ public sealed class NotificationSoundService
     private readonly Configuration configuration;
     private readonly IPluginLog log;
     private readonly string defaultSoundPath;
+    private readonly string defaultWhisperSoundPath;
+
+    /// <summary>The plugin's own bundled general-notification default (see the class doc comment) -
+    /// exposed so Settings can show/preview it and <see cref="Play"/> can fall back to it.</summary>
+    public string DefaultSoundPath => defaultSoundPath;
+
+    /// <summary>The plugin's own bundled whisper-specific default - exposed so
+    /// <see cref="WhisperNotificationService"/> can use it when no custom whisper sound is set, and
+    /// Settings can show/preview it directly.</summary>
+    public string DefaultWhisperSoundPath => defaultWhisperSoundPath;
 
     public NotificationSoundService(string configDirectory, Configuration configuration, IPluginLog log)
     {
         this.configuration = configuration;
         this.log = log;
         defaultSoundPath = Path.Combine(configDirectory, "default-notification-sound.wav");
-        ExtractDefaultSound();
+        defaultWhisperSoundPath = Path.Combine(configDirectory, "default-whisper-notification-sound.wav");
+        ExtractEmbeddedSound(DefaultSoundResourceName, defaultSoundPath);
+        ExtractEmbeddedSound(DefaultWhisperSoundResourceName, defaultWhisperSoundPath);
     }
 
-    private void ExtractDefaultSound()
+    private void ExtractEmbeddedSound(string resourceName, string destinationPath)
     {
         try
         {
-            using var resourceStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(DefaultSoundResourceName);
+            using var resourceStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName);
             if (resourceStream == null)
             {
-                log.Warning("TomeScrollChat: embedded default notification sound resource not found ({Name})", DefaultSoundResourceName);
+                log.Warning("TomeScrollChat: embedded notification sound resource not found ({Name})", resourceName);
                 return;
             }
 
-            using var fileStream = File.Create(defaultSoundPath);
+            using var fileStream = File.Create(destinationPath);
             resourceStream.CopyTo(fileStream);
         }
         catch (Exception ex)
         {
-            log.Warning(ex, "TomeScrollChat: failed to extract the default notification sound");
+            log.Warning(ex, "TomeScrollChat: failed to extract embedded notification sound ({Name})", resourceName);
         }
     }
 
     /// <summary>Called from <see cref="NotificationService.Show"/> - a no-op while
     /// <see cref="Configuration.NotificationSoundEnabled"/> is off. <paramref name="overridePath"/>
-    /// (e.g. <see cref="Configuration.CustomWhisperNotificationSoundPath"/>, from
-    /// <see cref="WhisperNotificationService"/>) takes priority over
-    /// <see cref="Configuration.CustomNotificationSoundPath"/> when set - lets one specific kind of
-    /// notification (whispers, per explicit user request) sound different from every other one, while
-    /// everything else still shares the one general sound.</summary>
+    /// (e.g. <see cref="WhisperNotificationService"/>'s resolved custom-or-bundled-whisper-default)
+    /// takes priority over <see cref="Configuration.CustomNotificationSoundPath"/> when set/valid - lets
+    /// one specific kind of notification sound different from every other one, while everything else
+    /// still shares the one general sound.</summary>
     public void PlayIfEnabled(string? overridePath = null)
     {
         if (configuration.NotificationSoundEnabled)
@@ -101,42 +116,39 @@ public sealed class NotificationSoundService
     {
         try
         {
-            if (!string.IsNullOrWhiteSpace(overridePath))
-            {
-                if (File.Exists(overridePath))
-                {
-                    PlaySound(overridePath, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-                    return;
-                }
-
-                log.Warning("TomeScrollChat: override notification sound not found ({Path}) - falling back to the general sound", overridePath);
-            }
-
-            var customPath = configuration.CustomNotificationSoundPath;
-            if (!string.IsNullOrWhiteSpace(customPath))
-            {
-                if (File.Exists(customPath))
-                {
-                    PlaySound(customPath, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
-                    return;
-                }
-
-                log.Warning("TomeScrollChat: custom notification sound not found ({Path}) - falling back to the standard sound", customPath);
-            }
-
-            if (File.Exists(defaultSoundPath))
-            {
-                PlaySound(defaultSoundPath, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+            if (TryPlayFile(overridePath))
                 return;
-            }
 
-            // Bundled default failed to extract for some reason - Windows' own scheme sound as a
-            // last-resort fallback, so there's still something audible rather than total silence.
+            if (TryPlayFile(configuration.CustomNotificationSoundPath))
+                return;
+
+            if (TryPlayFile(defaultSoundPath))
+                return;
+
+            // Every bundled/custom option failed (extraction problem, disk/permissions issue, etc.) -
+            // Windows' own scheme sound as the final fallback, so there's still something audible.
             PlaySound("SystemAsterisk", IntPtr.Zero, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
         }
         catch (Exception ex)
         {
             log.Warning(ex, "TomeScrollChat: failed to play notification sound");
         }
+    }
+
+    /// <summary>Plays <paramref name="path"/> if it's set and actually exists, returning whether it did -
+    /// callers chain this to fall through their own list of candidates in priority order.</summary>
+    private bool TryPlayFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        if (!File.Exists(path))
+        {
+            log.Warning("TomeScrollChat: notification sound not found ({Path}) - trying the next fallback", path);
+            return false;
+        }
+
+        PlaySound(path, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+        return true;
     }
 }

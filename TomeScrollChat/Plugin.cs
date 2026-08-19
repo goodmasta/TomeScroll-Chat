@@ -122,7 +122,7 @@ public sealed class Plugin : IDalamudPlugin
         FriendOnlineWatcherService = new FriendOnlineWatcherService(Framework, ClientState, GameGui, Log, Configuration, FriendListService, NotificationService);
         AiReplyService = new AiReplyService(PluginInterface.ConfigDirectory.FullName, GeminiService, Configuration, Log, NotificationService);
         AutoReplyService = new AutoReplyService(ChatCaptureService, ChatSendService, Configuration, NotificationService, Log);
-        whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, Log);
+        whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, NotificationSoundService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 
         ChatCaptureService.MessageRouted += OnMessageRouted;

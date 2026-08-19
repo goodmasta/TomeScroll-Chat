@@ -15,11 +15,14 @@ namespace TomeScrollChat.Services;
 /// per real chat event, not once per matching tab) for the same reason <see cref="AutoReplyService"/>
 /// does.
 ///
-/// <para>Passes <see cref="Configuration.CustomWhisperNotificationSoundPath"/> through to
-/// <see cref="NotificationService.Show"/> as a sound override, per explicit follow-up user request to
-/// tell whispers apart from every other notification by sound alone - falls back to the general
-/// notification sound (and from there, the bundled default) when that's empty, same as any other
-/// notification.</para>
+/// <para>Resolves which sound to pass to <see cref="NotificationService.Show"/> as its override, per
+/// explicit follow-up user request to tell whispers apart from every other notification by sound alone,
+/// even with nothing custom configured: <see cref="Configuration.CustomWhisperNotificationSoundPath"/>
+/// if set, else <see cref="NotificationSoundService.DefaultWhisperSoundPath"/> - a bundled clip distinct
+/// from the plugin's general default (see that class's own doc comment). Either way,
+/// <see cref="NotificationSoundService"/> itself still falls further back (general custom sound, then
+/// the general bundled default, then Windows' own scheme sound) if the resolved path turns out to be
+/// missing.</para>
 /// </summary>
 public sealed class WhisperNotificationService : IDisposable
 {
@@ -30,13 +33,15 @@ public sealed class WhisperNotificationService : IDisposable
     private readonly ChatCaptureService chatCaptureService;
     private readonly Configuration configuration;
     private readonly NotificationService notificationService;
+    private readonly NotificationSoundService notificationSoundService;
     private readonly IPluginLog log;
 
-    public WhisperNotificationService(ChatCaptureService chatCaptureService, Configuration configuration, NotificationService notificationService, IPluginLog log)
+    public WhisperNotificationService(ChatCaptureService chatCaptureService, Configuration configuration, NotificationService notificationService, NotificationSoundService notificationSoundService, IPluginLog log)
     {
         this.chatCaptureService = chatCaptureService;
         this.configuration = configuration;
         this.notificationService = notificationService;
+        this.notificationSoundService = notificationSoundService;
         this.log = log;
 
         chatCaptureService.RawMessageReceived += OnRawMessage;
@@ -60,7 +65,10 @@ public sealed class WhisperNotificationService : IDisposable
             return;
 
         var preview = body.Length > PreviewMaxLength ? body[..PreviewMaxLength] + "..." : body;
-        notificationService.Show($"{senderName}: {preview}", NotificationSeverity.Info, soundOverridePath: configuration.CustomWhisperNotificationSoundPath);
+        var sound = !string.IsNullOrWhiteSpace(configuration.CustomWhisperNotificationSoundPath)
+            ? configuration.CustomWhisperNotificationSoundPath
+            : notificationSoundService.DefaultWhisperSoundPath;
+        notificationService.Show($"{senderName}: {preview}", NotificationSeverity.Info, soundOverridePath: sound);
     }
 
     public void Dispose()

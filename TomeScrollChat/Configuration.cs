@@ -226,9 +226,10 @@ public class Configuration : IPluginConfiguration
 
     /// <summary>Same idea as <see cref="CustomNotificationSoundPath"/>, but specifically for whisper
     /// notifications (<see cref="Services.WhisperNotificationService"/>) - per explicit user request to
-    /// tell whispers apart from every other notification by sound alone. Empty falls back to
-    /// <see cref="CustomNotificationSoundPath"/>/the bundled default, same chain as any other
-    /// notification - this only ever *overrides* that for the whisper case specifically.</summary>
+    /// tell whispers apart from every other notification by sound alone. Empty (the default) falls back
+    /// to <see cref="Services.NotificationSoundService.DefaultWhisperSoundPath"/> - the plugin's own
+    /// bundled whisper-specific clip, itself distinct from <see cref="CustomNotificationSoundPath"/>'s
+    /// bundled default - not the general notification sound.</summary>
     public string CustomWhisperNotificationSoundPath { get; set; } = string.Empty;
 
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see

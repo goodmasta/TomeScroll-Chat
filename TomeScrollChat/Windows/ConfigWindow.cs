@@ -197,8 +197,9 @@ public sealed class ConfigWindow : Window, IDisposable
     }
 
     /// <summary>Whisper-specific notification - see <see cref="Services.WhisperNotificationService"/>
-    /// for the full reasoning (independent of auto-reply; a distinct sound override so whispers are
-    /// audibly different from every other notification, falling back to the general one when unset).</summary>
+    /// for the full reasoning (independent of auto-reply; a distinct bundled sound by default, plus a
+    /// custom override slot, so whispers are audibly different from every other notification even with
+    /// nothing configured here).</summary>
     private void DrawWhisperNotification()
     {
         ImGui.TextUnformatted("Whisper notifications");
@@ -212,7 +213,7 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled("Pops a popup toast (sender + a short preview) the moment a whisper arrives, whether or not auto-reply is on - see the title bar's auto-reply button for actually sending something back.");
 
         var hasCustomWhisperSound = !string.IsNullOrWhiteSpace(configuration.CustomWhisperNotificationSoundPath);
-        var whisperPathDisplay = hasCustomWhisperSound ? configuration.CustomWhisperNotificationSoundPath : "(same as other notifications)";
+        var whisperPathDisplay = hasCustomWhisperSound ? configuration.CustomWhisperNotificationSoundPath : "(bundled default whisper sound)";
         ImGui.SetNextItemWidth(320);
         ImGui.InputText("##whisperNotificationSoundPath", ref whisperPathDisplay, 260, ImGuiInputTextFlags.ReadOnly);
 
@@ -228,7 +229,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 }
             });
         }
-        ImGui.TextDisabled("Optional - gives whispers their own sound so you can tell them apart from other notifications without looking. .wav only, same reason as above.");
+        ImGui.TextDisabled("Already sounds different from other notifications by default (its own bundled clip) - this is only for picking something else instead. .wav only, same reason as above.");
 
         using (ImRaii.Disabled(!hasCustomWhisperSound))
         {
@@ -241,7 +242,12 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         if (ImGui.Button("Test sound##whisperSoundTest"))
-            plugin.NotificationSoundService.PlayPreview(configuration.CustomWhisperNotificationSoundPath);
+        {
+            var previewSound = hasCustomWhisperSound
+                ? configuration.CustomWhisperNotificationSoundPath
+                : plugin.NotificationSoundService.DefaultWhisperSoundPath;
+            plugin.NotificationSoundService.PlayPreview(previewSound);
+        }
     }
 
     /// <summary>AI agent configuration - currently just Gemini (<see cref="Services.GeminiService"/>),
