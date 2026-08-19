@@ -92,7 +92,7 @@ public sealed class ChatCaptureService : IDisposable
     private void Handle(IHandleableChatMessage message)
     {
         var chatType = message.LogKind;
-        var senderText = message.Sender.TextValue;
+        var senderText = StripLeadingIconGlyphs(message.Sender.TextValue);
         var senderKey = ExtractSenderKey(message.Sender);
         var isFromLocalPlayer = message.SourceKind == XivChatRelationKind.LocalPlayer;
         var (body, payloadLinks) = BuildBodyAndPayloadLinks(message.Message);
@@ -192,6 +192,28 @@ public sealed class ChatCaptureService : IDisposable
     /// placeholders sandwiched inside <see cref="AutoTranslateOpen"/>/<see cref="AutoTranslateClose"/>.</summary>
     private static string StripNativeAutoTranslateBrackets(string text) =>
         text.Trim('\uE040', '\uE041').Trim();
+
+    /// <summary>Strips a leading Private Use Area icon glyph (U+E000-U+F8FF) from a chat message's
+    /// sender name - confirmed live (2026-08-19) via exact codepoint logging that Party chat prefixes
+    /// every sender's name with one of these (U+E0E1 observed - almost certainly a party-slot/leader
+    /// icon in the game's own font atlas, the same private-icon-font mechanism as
+    /// <see cref="StripNativeAutoTranslateBrackets"/>'s brackets), which Dalamud's ImGui font doesn't
+    /// have glyphs for either (renders as a stray missing-glyph box in the chat window otherwise).
+    /// <para>This was also the root cause of a live-reported "You" label bug specific to Party chat:
+    /// the local player's own Party messages carry this same prefix on <c>Sender.TextValue</c>
+    /// ("\uE0E1Shiun Yuzuka"), which never matched the clean <c>PlayerState.CharacterName</c>
+    /// ("Shiun Yuzuka") the own-message fallback check compares against - stripping it here, at the one
+    /// place <see cref="Handle"/> reads the sender text, fixes both the stray glyph and that comparison
+    /// at once. Real player names can never start with a PUA codepoint, so this is safe unconditionally
+    /// for every channel, not just Party - a no-op wherever the game doesn't prefix anything.</para></summary>
+    private static string StripLeadingIconGlyphs(string senderText)
+    {
+        var start = 0;
+        while (start < senderText.Length && senderText[start] is >= '\uE000' and <= '\uF8FF')
+            start++;
+
+        return start > 0 ? senderText[start..] : senderText;
+    }
 
     /// <summary>Builds the flattened message body *and* finds every map/flag, item, Party Finder, and
     /// auto-translate-dictionary span in it in one pass - replaces a plain <c>SeString.TextValue</c>
