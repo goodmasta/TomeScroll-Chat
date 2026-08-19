@@ -55,6 +55,10 @@ public sealed class Plugin : IDalamudPlugin
     /// <c>plugin.NotificationService.Show(...)</c> directly, same reasoning as <see cref="GeminiService"/>.</summary>
     public NotificationService NotificationService { get; }
 
+    /// <summary>Public for the same reason as <see cref="NotificationService"/> - Settings' "Test
+    /// sound" button calls <see cref="Services.NotificationSoundService.PlayPreview"/> directly.</summary>
+    public NotificationSoundService NotificationSoundService { get; }
+
     public TranslationService TranslationService { get; }
     public TabMessageBuffer TabMessageBuffer { get; }
     public FriendListService FriendListService { get; }
@@ -95,7 +99,8 @@ public sealed class Plugin : IDalamudPlugin
         // a linkshell tab out from under the player while it happens to be detached.
         TabManager.TabRemoved += OnTabRemoved;
         ChatHistoryService = new ChatHistoryService(PluginInterface.ConfigDirectory.FullName, Configuration.MaxHistoryBytes, Log);
-        NotificationService = new NotificationService();
+        NotificationSoundService = new NotificationSoundService(Configuration, Log);
+        NotificationService = new NotificationService(NotificationSoundService);
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, Configuration, TabManager, ChatHistoryService, NotificationService);
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);

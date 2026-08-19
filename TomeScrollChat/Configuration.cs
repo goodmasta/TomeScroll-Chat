@@ -202,6 +202,19 @@ public class Configuration : IPluginConfiguration
     /// detected (a text match, English clients only).</summary>
     public bool NotifyOnInvalidCommand { get; set; } = true;
 
+    /// <summary>Whether <see cref="Services.NotificationService.Show"/> plays a short sound alongside
+    /// every popup toast, via <see cref="Services.NotificationSoundService"/> - on by default per
+    /// explicit user request. Turning this off silences the sound entirely without affecting the popups
+    /// themselves.</summary>
+    public bool NotificationSoundEnabled { get; set; } = true;
+
+    /// <summary>Path to a user-picked <c>.wav</c> file to play instead of Windows' own built-in
+    /// "SystemAsterisk" scheme sound (the default, hence empty here - see
+    /// <see cref="Services.NotificationSoundService"/> for why WAV-only rather than "any" format).
+    /// Cleared, not validated, when the file goes missing - <see cref="Services.NotificationSoundService"/>
+    /// itself falls back to the standard sound for that one play rather than erroring.</summary>
+    public string CustomNotificationSoundPath { get; set; } = string.Empty;
+
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
     /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
     /// one. Turning this off removes every such tab immediately (see
@@ -293,6 +306,8 @@ public class Configuration : IPluginConfiguration
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyOnInvalidCommand = defaults.NotifyOnInvalidCommand;
+        NotificationSoundEnabled = defaults.NotificationSoundEnabled;
+        CustomNotificationSoundPath = defaults.CustomNotificationSoundPath;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
         ShowHideChatButton = defaults.ShowHideChatButton;
         AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;

@@ -21,6 +21,9 @@ namespace TomeScrollChat.Services;
 /// was built for, e.g. a translation failure or a linkshell being auto-joined, happen off the main
 /// thread) via a simple lock, matching <see cref="TabMessageBuffer"/>'s own pattern for a small,
 /// infrequently-touched shared list.</para>
+///
+/// <para>Every <see cref="Show"/> call also plays a short sound via <see cref="NotificationSoundService"/>
+/// (Settings > Notifications, on by default) - see that class's own doc comment for what sound and why.</para>
 /// </summary>
 public sealed class NotificationService
 {
@@ -30,10 +33,18 @@ public sealed class NotificationService
 
     private readonly List<Notification> active = new();
     private readonly object gate = new();
+    private readonly NotificationSoundService soundService;
+
+    public NotificationService(NotificationSoundService soundService)
+    {
+        this.soundService = soundService;
+    }
 
     /// <summary>Queues a popup - shows almost immediately (drawn the next frame) and disappears on
     /// its own after <paramref name="duration"/> (or <see cref="DefaultDuration"/>), fading out over
-    /// its last moment rather than vanishing abruptly. Also dismissible early by clicking it.</summary>
+    /// its last moment rather than vanishing abruptly. Also dismissible early by clicking it. Plays a
+    /// sound alongside it via <see cref="NotificationSoundService"/> unless
+    /// <see cref="Configuration.NotificationSoundEnabled"/> is off.</summary>
     public void Show(string message, NotificationSeverity severity = NotificationSeverity.Info, TimeSpan? duration = null)
     {
         if (string.IsNullOrWhiteSpace(message))
@@ -41,6 +52,8 @@ public sealed class NotificationService
 
         lock (gate)
             active.Add(new Notification(message, severity, DateTime.UtcNow + (duration ?? DefaultDuration)));
+
+        soundService.PlayIfEnabled();
     }
 
     /// <summary>Currently-visible notifications, oldest first - already pruned of anything expired.

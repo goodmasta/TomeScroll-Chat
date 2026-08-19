@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Interface.ImGuiFileDialog;
 using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using TomeScrollChat.Models;
@@ -19,6 +20,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private string friendMarkerSearch = string.Empty;
     private string tabIconSearch = string.Empty;
     private string playerColorNicknameInput = string.Empty;
+    private readonly FileDialogManager fileDialogManager = new();
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -43,6 +45,11 @@ public sealed class ConfigWindow : Window, IDisposable
 
     public override void Draw()
     {
+        // Drawn unconditionally (not just while the Notifications tab is active) so a dialog opened
+        // via "Browse..." keeps rendering even if the player switches tabs while it's open - it's its
+        // own floating ImGui window, not part of the tab content itself.
+        fileDialogManager.Draw();
+
         using var tabs = ImRaii.TabBar("TomeScrollChatSettingsTabs");
         if (!tabs.Success)
             return;
@@ -108,6 +115,9 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextDisabled("Easy to miss the game's own errors otherwise (e.g. \"command does not exist\", or \"your message was not heard\" after sending /tell, /say, /yell, /shout too fast), especially with the native chat window hidden (General) or no tab showing the Error channel.");
 
         ImGui.Separator();
+        DrawNotificationSound();
+
+        ImGui.Separator();
         ImGui.TextUnformatted("Unread indicator colours");
 
         var channelBlink = configuration.ChannelBlinkColor;
@@ -132,6 +142,55 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
         ImGui.TextDisabled("Whisper tabs always blink/show an unread count, and share one colour for both, unless overridden per-tab (see Tabs).");
+    }
+
+    /// <summary>Notification sound - see <see cref="Services.NotificationSoundService"/> for the full
+    /// reasoning (WAV-only, Windows' own "SystemAsterisk" as the standard/default sound). The path field
+    /// itself is read-only (typed in via "Browse..." only, not free text) so it can't point at something
+    /// that was never actually validated to exist.</summary>
+    private void DrawNotificationSound()
+    {
+        ImGui.TextUnformatted("Notification sound");
+
+        var soundEnabled = configuration.NotificationSoundEnabled;
+        if (ImGui.Checkbox("Play a sound with notifications", ref soundEnabled))
+        {
+            configuration.NotificationSoundEnabled = soundEnabled;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Plays alongside every popup toast above. On by default; Windows' own standard notification sound unless you pick a custom one below.");
+
+        var hasCustom = !string.IsNullOrWhiteSpace(configuration.CustomNotificationSoundPath);
+        var pathDisplay = hasCustom ? configuration.CustomNotificationSoundPath : "(standard Windows notification sound)";
+        ImGui.SetNextItemWidth(320);
+        ImGui.InputText("##notificationSoundPath", ref pathDisplay, 260, ImGuiInputTextFlags.ReadOnly);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Browse..."))
+        {
+            fileDialogManager.OpenFileDialog("Select a notification sound", "Sound Files{.wav}", (success, path) =>
+            {
+                if (success && !string.IsNullOrWhiteSpace(path))
+                {
+                    configuration.CustomNotificationSoundPath = path;
+                    configuration.Save();
+                }
+            });
+        }
+        ImGui.TextDisabled(".wav files only - PlaySound (the Win32 API this uses) can't decode compressed formats like mp3/ogg, same restriction Windows' own custom-sound picker has.");
+
+        using (ImRaii.Disabled(!hasCustom))
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Reset to default sound"))
+            {
+                configuration.CustomNotificationSoundPath = string.Empty;
+                configuration.Save();
+            }
+        }
+
+        if (ImGui.Button("Test sound"))
+            plugin.NotificationSoundService.PlayPreview();
     }
 
     /// <summary>AI agent configuration - currently just Gemini (<see cref="Services.GeminiService"/>),
