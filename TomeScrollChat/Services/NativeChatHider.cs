@@ -34,19 +34,17 @@ public sealed unsafe class NativeChatHider : IDisposable
     public bool Active
     {
         get => active;
-        set
-        {
-            active = value;
-            if (!active)
-                SetVisible(true);
-        }
+        set => active = value;
     }
 
-    private void OnFrameworkUpdate(IFramework _)
-    {
-        if (active)
-            SetVisible(false);
-    }
+    // Reapplied every frame in *both* directions, not just while hiding - the game apparently doesn't
+    // only fight this addon's visibility while something is trying to hide it; unchecking "Hide the
+    // game's built-in chat window" was reported live as sometimes not actually bringing the native
+    // chat back, which a single one-shot SetVisible(true) in the old Active setter couldn't recover
+    // from if the game happened to reset IsVisible back to false on the very same/next frame. SetVisible
+    // itself already skips the write when the flag already matches (see below), so enforcing the
+    // "should be visible" state continuously costs nothing extra once it's actually settled.
+    private void OnFrameworkUpdate(IFramework _) => SetVisible(!active);
 
     private void SetVisible(bool visible)
     {
