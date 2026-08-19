@@ -197,20 +197,28 @@ public sealed class ConfigWindow : Window, IDisposable
     }
 
     /// <summary>Whisper-specific notification - see <see cref="Services.WhisperNotificationService"/>
-    /// for the full reasoning (independent of auto-reply; a distinct bundled sound by default, plus a
-    /// custom override slot, so whispers are audibly different from every other notification even with
-    /// nothing configured here).</summary>
+    /// for the full reasoning (independent of auto-reply; popup and sound are two independent toggles,
+    /// not one bundled setting; a distinct bundled sound by default, plus a custom override slot, so
+    /// whispers are audibly different from every other notification even with nothing configured here).</summary>
     private void DrawWhisperNotification()
     {
         ImGui.TextUnformatted("Whisper notifications");
 
         var notifyOnWhisper = configuration.NotifyOnWhisper;
-        if (ImGui.Checkbox("Notify on incoming whispers", ref notifyOnWhisper))
+        if (ImGui.Checkbox("Show a popup on incoming whispers", ref notifyOnWhisper))
         {
             configuration.NotifyOnWhisper = notifyOnWhisper;
             configuration.Save();
         }
         ImGui.TextDisabled("Pops a popup toast (sender + a short preview) the moment a whisper arrives, whether or not auto-reply is on - see the title bar's auto-reply button for actually sending something back.");
+
+        var whisperSoundEnabled = configuration.WhisperSoundEnabled;
+        if (ImGui.Checkbox("Play a sound on incoming whispers", ref whisperSoundEnabled))
+        {
+            configuration.WhisperSoundEnabled = whisperSoundEnabled;
+            configuration.Save();
+        }
+        ImGui.TextDisabled("Independent of the popup above - leave this on and the popup off to be notified by sound alone.");
 
         var hasCustomWhisperSound = !string.IsNullOrWhiteSpace(configuration.CustomWhisperNotificationSoundPath);
         var whisperPathDisplay = hasCustomWhisperSound ? configuration.CustomWhisperNotificationSoundPath : "(bundled default whisper sound)";

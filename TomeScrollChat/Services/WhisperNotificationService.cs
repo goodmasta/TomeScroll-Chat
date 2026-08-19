@@ -6,23 +6,25 @@ using TomeScrollChat.Models;
 namespace TomeScrollChat.Services;
 
 /// <summary>
-/// Pops a <see cref="NotificationService"/> toast (sender + a short preview of the message) whenever an
-/// incoming whisper arrives - Settings > Notifications (<see cref="Configuration.NotifyOnWhisper"/>, on
-/// by default), added per explicit user request ("хочу, чтобы такое уведомление было и когда приходит
-/// сообщение в личку"). Deliberately separate from <see cref="AutoReplyService"/> - this is "tell me
-/// about it", not "send something back", so it works standalone without opting into auto-reply at all,
-/// and listens to the same <see cref="ChatCaptureService.RawMessageReceived"/> event (fires exactly once
-/// per real chat event, not once per matching tab) for the same reason <see cref="AutoReplyService"/>
-/// does.
+/// Reacts to an incoming whisper with a popup toast (<see cref="Configuration.NotifyOnWhisper"/>, off by
+/// default), its sound (<see cref="Configuration.WhisperSoundEnabled"/>, on by default), or both -
+/// **the two are independent**, per explicit follow-up user request to be able to keep the sound while
+/// turning the popup itself off. Deliberately separate from <see cref="AutoReplyService"/> - this is
+/// "tell me about it", not "send something back", so it works standalone without opting into auto-reply
+/// at all, and listens to the same <see cref="ChatCaptureService.RawMessageReceived"/> event (fires
+/// exactly once per real chat event, not once per matching tab) for the same reason
+/// <see cref="AutoReplyService"/> does.
 ///
-/// <para>Resolves which sound to pass to <see cref="NotificationService.Show"/> as its override, per
-/// explicit follow-up user request to tell whispers apart from every other notification by sound alone,
-/// even with nothing custom configured: <see cref="Configuration.CustomWhisperNotificationSoundPath"/>
-/// if set, else <see cref="NotificationSoundService.DefaultWhisperSoundPath"/> - a bundled clip distinct
-/// from the plugin's general default (see that class's own doc comment). Either way,
-/// <see cref="NotificationSoundService"/> itself still falls further back (general custom sound, then
-/// the general bundled default, then Windows' own scheme sound) if the resolved path turns out to be
-/// missing.</para>
+/// <para>The popup (<see cref="NotificationService.Show"/>, called with <c>playSound: false</c> here)
+/// and the sound (<see cref="NotificationSoundService.PlayIfEnabled"/>, called directly) are two
+/// completely separate calls, each gated by its own config flag - not one call with the other bolted
+/// on, since that would make it impossible to have one without the other. Either way, the sound path
+/// resolves the same: <see cref="Configuration.CustomWhisperNotificationSoundPath"/> if set, else
+/// <see cref="NotificationSoundService.DefaultWhisperSoundPath"/> - a bundled clip distinct from the
+/// plugin's general default (see that class's own doc comment), which itself still falls further back
+/// (general custom sound, then the general bundled default, then Windows' own scheme sound) if the
+/// resolved path turns out to be missing. The master <see cref="Configuration.NotificationSoundEnabled"/>
+/// switch still silences it regardless of <see cref="Configuration.WhisperSoundEnabled"/>.</para>
 /// </summary>
 public sealed class WhisperNotificationService : IDisposable
 {
@@ -61,14 +63,22 @@ public sealed class WhisperNotificationService : IDisposable
 
     private void Handle(XivChatType chatType, string senderName, string body)
     {
-        if (!configuration.NotifyOnWhisper || chatType != XivChatType.TellIncoming || string.IsNullOrWhiteSpace(body))
+        if (chatType != XivChatType.TellIncoming || string.IsNullOrWhiteSpace(body))
             return;
 
-        var preview = body.Length > PreviewMaxLength ? body[..PreviewMaxLength] + "..." : body;
-        var sound = !string.IsNullOrWhiteSpace(configuration.CustomWhisperNotificationSoundPath)
-            ? configuration.CustomWhisperNotificationSoundPath
-            : notificationSoundService.DefaultWhisperSoundPath;
-        notificationService.Show($"{senderName}: {preview}", NotificationSeverity.Info, soundOverridePath: sound);
+        if (configuration.NotifyOnWhisper)
+        {
+            var preview = body.Length > PreviewMaxLength ? body[..PreviewMaxLength] + "..." : body;
+            notificationService.Show($"{senderName}: {preview}", NotificationSeverity.Info, playSound: false);
+        }
+
+        if (configuration.WhisperSoundEnabled)
+        {
+            var sound = !string.IsNullOrWhiteSpace(configuration.CustomWhisperNotificationSoundPath)
+                ? configuration.CustomWhisperNotificationSoundPath
+                : notificationSoundService.DefaultWhisperSoundPath;
+            notificationSoundService.PlayIfEnabled(sound);
+        }
     }
 
     public void Dispose()

@@ -43,11 +43,15 @@ public sealed class NotificationService
     /// <summary>Queues a popup - shows almost immediately (drawn the next frame) and disappears on
     /// its own after <paramref name="duration"/> (or <see cref="DefaultDuration"/>), fading out over
     /// its last moment rather than vanishing abruptly. Also dismissible early by clicking it. Plays a
-    /// sound alongside it via <see cref="NotificationSoundService"/> unless
-    /// <see cref="Configuration.NotificationSoundEnabled"/> is off - <paramref name="soundOverridePath"/>
-    /// lets a specific caller (currently only <see cref="WhisperNotificationService"/>) use a different
-    /// sound than the general one, e.g. so whispers are audibly distinct from every other notification.</summary>
-    public void Show(string message, NotificationSeverity severity = NotificationSeverity.Info, TimeSpan? duration = null, string? soundOverridePath = null)
+    /// sound alongside it via <see cref="NotificationSoundService"/> unless <paramref name="playSound"/>
+    /// is false or <see cref="Configuration.NotificationSoundEnabled"/> is off -
+    /// <paramref name="soundOverridePath"/> lets a specific caller (currently only
+    /// <see cref="WhisperNotificationService"/>) use a different sound than the general one, e.g. so
+    /// whispers are audibly distinct from every other notification. <paramref name="playSound"/> exists
+    /// specifically for that same caller's ability to show a popup with no sound (its own toggle for
+    /// that is independent of whether the popup itself is shown) - every other caller just leaves it at
+    /// its default.</summary>
+    public void Show(string message, NotificationSeverity severity = NotificationSeverity.Info, TimeSpan? duration = null, string? soundOverridePath = null, bool playSound = true)
     {
         if (string.IsNullOrWhiteSpace(message))
             return;
@@ -55,7 +59,8 @@ public sealed class NotificationService
         lock (gate)
             active.Add(new Notification(message, severity, DateTime.UtcNow + (duration ?? DefaultDuration)));
 
-        soundService.PlayIfEnabled(soundOverridePath);
+        if (playSound)
+            soundService.PlayIfEnabled(soundOverridePath);
     }
 
     /// <summary>Currently-visible notifications, oldest first - already pruned of anything expired.

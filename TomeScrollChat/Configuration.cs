@@ -210,6 +210,14 @@ public class Configuration : IPluginConfiguration
     /// into the auto-reply feature at all, for whoever turns it on.</summary>
     public bool NotifyOnWhisper { get; set; } = false;
 
+    /// <summary>Whether an incoming whisper plays its sound (see <see cref="Services.WhisperNotificationService"/>/
+    /// <see cref="Services.NotificationSoundService.DefaultWhisperSoundPath"/>/<see cref="CustomWhisperNotificationSoundPath"/>)
+    /// - **independent of <see cref="NotifyOnWhisper"/>**, per explicit user request to keep the sound
+    /// even with the popup itself turned off. On by default. Still silenced entirely if
+    /// <see cref="NotificationSoundEnabled"/> (the master sound switch) is off, same as any other
+    /// notification sound.</summary>
+    public bool WhisperSoundEnabled { get; set; } = true;
+
     /// <summary>Whether <see cref="Services.NotificationService.Show"/> plays a short sound alongside
     /// every popup toast, via <see cref="Services.NotificationSoundService"/> - on by default per
     /// explicit user request. Turning this off silences the sound entirely without affecting the popups
@@ -324,6 +332,7 @@ public class Configuration : IPluginConfiguration
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;
         NotifyOnInvalidCommand = defaults.NotifyOnInvalidCommand;
         NotifyOnWhisper = defaults.NotifyOnWhisper;
+        WhisperSoundEnabled = defaults.WhisperSoundEnabled;
         NotificationSoundEnabled = defaults.NotificationSoundEnabled;
         CustomNotificationSoundPath = defaults.CustomNotificationSoundPath;
         CustomWhisperNotificationSoundPath = defaults.CustomWhisperNotificationSoundPath;
