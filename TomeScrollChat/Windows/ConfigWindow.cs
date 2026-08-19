@@ -375,25 +375,6 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
-        ImGui.SetNextItemWidth(220);
-        if (ImGui.BeginCombo("Tab layout", configuration.TabLayout == TabLayoutMode.Tabs ? "Tabs (browser-style)" : "Sidebar"))
-        {
-            if (ImGui.Selectable("Sidebar", configuration.TabLayout == TabLayoutMode.Sidebar))
-            {
-                configuration.TabLayout = TabLayoutMode.Sidebar;
-                configuration.Save();
-            }
-
-            if (ImGui.Selectable("Tabs (browser-style)", configuration.TabLayout == TabLayoutMode.Tabs))
-            {
-                configuration.TabLayout = TabLayoutMode.Tabs;
-                configuration.Save();
-            }
-
-            ImGui.EndCombo();
-        }
-        ImGui.TextDisabled("Sidebar: a fixed list on the left (the original layout). Tabs: a horizontal, wrapping strip across the top, like a browser's tab bar.");
-
         var autoLinkshellTabs = configuration.AutoLinkshellTabs;
         if (ImGui.Checkbox("Auto-create a tab per joined linkshell/cross-world linkshell", ref autoLinkshellTabs))
         {
@@ -680,6 +661,26 @@ public sealed class ConfigWindow : Window, IDisposable
 
     private void DrawTabsEditor()
     {
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.BeginCombo("Tab layout", configuration.TabLayout == TabLayoutMode.Tabs ? "Tabs (browser-style)" : "Sidebar"))
+        {
+            if (ImGui.Selectable("Sidebar", configuration.TabLayout == TabLayoutMode.Sidebar))
+            {
+                configuration.TabLayout = TabLayoutMode.Sidebar;
+                configuration.Save();
+            }
+
+            if (ImGui.Selectable("Tabs (browser-style)", configuration.TabLayout == TabLayoutMode.Tabs))
+            {
+                configuration.TabLayout = TabLayoutMode.Tabs;
+                configuration.Save();
+            }
+
+            ImGui.EndCombo();
+        }
+        ImGui.TextDisabled("Sidebar: a fixed list on the left (the original layout). Tabs: a horizontal, wrapping strip across the top, like a browser's tab bar.");
+
+        ImGui.Separator();
         ImGui.TextDisabled("Right-click a tab in the main window to pop it out or jump here; create/delete tabs below.");
 
         ImGui.SetNextItemWidth(250);
