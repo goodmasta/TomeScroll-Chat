@@ -65,6 +65,14 @@ public sealed class DialogueTranslationWindow : Window
     private readonly DialogueTranslationService dialogueService;
     private int lastDrawnCount = -1;
 
+    // Auto-scroll to the newest line - deferred by one frame (consumed at the *top* of the next
+    // Draw() call, before that frame's content is drawn), same mechanism MainWindow's own "jump to
+    // bottom" uses (SetScrollY(GetScrollMaxY()), not SetScrollHereY(1f)) - the child's ScrollMaxY for
+    // content just added this same frame isn't reliably settled yet (ImGui only finalizes a child's
+    // content size/scroll range at the end of the frame it was drawn in), so scrolling in the same
+    // frame new text appears could target a stale, too-small max and land short of the true bottom.
+    private bool pendingScrollToBottom;
+
     // "Search in this window" - same shape as MainWindow/DetachedTabWindow's own tab search, just
     // toggled from a title bar button instead of an inline one (no sidebar/tab context menu to hang a
     // "Search..." item off of here, and this window has room in its title bar unlike a tab's).
@@ -169,6 +177,16 @@ public sealed class DialogueTranslationWindow : Window
         {
             if (child.Success)
             {
+                // Consumes last frame's request, using this frame's now-fully-settled ScrollMaxY (the
+                // new content that triggered it was already drawn once, last frame) - see
+                // pendingScrollToBottom's own doc comment for why this can't just happen inline below,
+                // in the same frame a new entry first appears.
+                if (pendingScrollToBottom)
+                {
+                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                    pendingScrollToBottom = false;
+                }
+
                 foreach (var entry in displayEntries)
                 {
                     var kindLabel = entry.Kind switch
@@ -195,7 +213,7 @@ public sealed class DialogueTranslationWindow : Window
                 // re-evaluates entries.Count against the now-stale lastDrawnCount immediately.
                 if (!searchMode && entries.Count != lastDrawnCount)
                 {
-                    ImGui.SetScrollHereY(1f);
+                    pendingScrollToBottom = true;
                     lastDrawnCount = entries.Count;
                 }
             }
