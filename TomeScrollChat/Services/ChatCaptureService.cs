@@ -22,14 +22,18 @@ namespace TomeScrollChat.Services;
 ///
 /// <para>We don't call <see cref="IHandleableChatMessage.PreventOriginal"/> for anything except one
 /// narrow, opt-in case: an incoming whisper while <see cref="Configuration.WhisperSoundEnabled"/> is
-/// on (see <see cref="HandleTell"/>) - an experimental attempt at suppressing the game's own native
-/// "incoming tell" chime so it doesn't double up with this plugin's own whisper notification sound
-/// (<see cref="WhisperNotificationService"/>), inspired by <c>NightmareXIV/XIVInstantMessenger</c>'s
-/// <c>MessageProcessor.cs</c> calling the same API for a related purpose. <b>Unverified whether this
-/// actually silences the native sound</b> (Dalamud's own docs only say it "prevents [the message] from
-/// being processed by the game any further" - not sound-specific) - needs a live in-game check. Every
-/// other message still goes through untouched, so other plugins and the (hidden) native chat log see
-/// everything exactly as before except this one case.</para>
+/// on (see <see cref="HandleTell"/>), to suppress the game's own native "incoming tell" chime so it
+/// doesn't double up with this plugin's own whisper notification sound
+/// (<see cref="WhisperNotificationService"/>) - inspired by <c>NightmareXIV/XIVInstantMessenger</c>'s
+/// <c>MessageProcessor.cs</c> calling the same API for a related purpose. <b>Confirmed live (2026-08-19)
+/// that this does silence the native sound</b>, not just the visual log entry Dalamud's own docs
+/// literally describe ("prevents [the message] from being processed by the game any further"). Comes
+/// with the trade-off that description implies: the whisper never reaches the native (hidden) chat log
+/// or any other plugin's own <c>ChatMessage</c>/<c>ChatMessageUnhandled</c> handler either, same as any
+/// other <c>PreventOriginal()</c> call would - acceptable here since nothing else in this plugin reads
+/// tells back from the native log (everything already comes from the Dalamud-level <c>message</c> object
+/// itself), but worth remembering if a report ever comes in about a *different* plugin no longer seeing
+/// whispers. Every other message/chat type is completely untouched.</para>
 /// </summary>
 public sealed class ChatCaptureService : IDisposable
 {
@@ -126,13 +130,13 @@ public sealed class ChatCaptureService : IDisposable
         }
     }
 
-    /// <summary>Experimental: <see cref="IHandleableChatMessage.PreventOriginal"/> for an incoming
-    /// whisper while <see cref="Configuration.WhisperSoundEnabled"/> is on - see this class's own doc
-    /// comment for why, and the caveat that it's unconfirmed whether this actually suppresses the
-    /// game's native tell sound (needs a live in-game check). Deliberately does NOT gate on
-    /// <see cref="Configuration.NotifyOnWhisper"/> (the popup toggle) - this is specifically about the
-    /// *sound*, so it should track <see cref="Configuration.WhisperSoundEnabled"/> alone. Never called
-    /// for <see cref="XivChatType.TellOutgoing"/> - only ever affects messages received, never sent.</summary>
+    /// <summary><see cref="IHandleableChatMessage.PreventOriginal"/> for an incoming whisper while
+    /// <see cref="Configuration.WhisperSoundEnabled"/> is on - confirmed live to silence the game's own
+    /// native tell chime (see this class's own doc comment for the trade-off that comes with). Deliberately
+    /// does NOT gate on <see cref="Configuration.NotifyOnWhisper"/> (the popup toggle) - this is
+    /// specifically about the *sound*, so it tracks <see cref="Configuration.WhisperSoundEnabled"/>
+    /// alone. Never called for <see cref="XivChatType.TellOutgoing"/> - only ever affects messages
+    /// received, never sent.</summary>
     private void HandleTell(IHandleableChatMessage message, XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
         if (chatType == XivChatType.TellIncoming && configuration.WhisperSoundEnabled)
