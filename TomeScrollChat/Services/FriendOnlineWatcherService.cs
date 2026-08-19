@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
@@ -16,7 +17,10 @@ namespace TomeScrollChat.Services;
 /// is off. Same watched set/check cycle also optionally notifies on duty enter/leave (see
 /// <see cref="Configuration.FriendDutyNotifyEnabled"/>, <see cref="FriendListService.IsInDuty"/>) -
 /// added per explicit user request for "know when I can no longer /tell this friend," which a duty
-/// concretely blocks.
+/// concretely blocks. Don't confuse that with the *unrelated* fix in <see cref="OnFrameworkUpdate"/>:
+/// the entire check cycle is skipped while the *local player themselves* is bound by duty (reported
+/// live as erroring there) - one is about a watched friend's duty state, the other about not touching
+/// the friend list at all while the local player can't safely do so.
 ///
 /// <para>Checked every <see cref="CheckInterval"/> via <see cref="IFramework.Update"/> (not every single
 /// frame - online status changes rarely enough that a few seconds of latency is unnoticeable, and
@@ -137,6 +141,18 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
         HandlePendingOpen();
 
         if (!configuration.FriendOnlineNotifyEnabled)
+            return;
+
+        // Fixed 2026-08-19, per explicit user request: reported live as erroring while bound by duty
+        // (dungeon/raid/trial/etc.) - the native friend list appears to not be safely readable/
+        // refreshable while the *local player* (not a watched friend - see FriendListService.IsInDuty
+        // for that separate, unrelated concept) is in one. Skipped entirely rather than just suppressing
+        // RequestRefresh() the way IsFriendListWindowVisible() already does for a different reason -
+        // this needs to stop touching the friend list at all while bound by duty, not just avoid
+        // disrupting a window the player has open. lastCheck is deliberately *not* advanced here, so
+        // checking resumes immediately (not after waiting out a full CheckInterval) the moment the duty
+        // ends, rather than silently sitting stale for a while.
+        if (Plugin.Condition.Any(ConditionFlag.BoundByDuty, ConditionFlag.BoundByDuty56, ConditionFlag.BoundByDuty95))
             return;
 
         if (DateTime.UtcNow - lastCheck < CheckInterval)
