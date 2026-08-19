@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
 
@@ -13,20 +14,30 @@ namespace TomeScrollChat.Services;
 /// Win32 API Windows itself has used to play system/scheme sounds and short WAV clips for decades, so
 /// it's always present and needs nothing bundled or installed.
 ///
-/// <para>With no custom sound configured, the "standard" sound is Windows' own built-in "SystemAsterisk"
-/// scheme sound - a named alias <c>PlaySound</c> resolves against whatever sound scheme the player has
-/// configured in Windows itself (Settings > Sound > More sound settings), so it always exists with
-/// nothing shipped by this plugin, and even matches the player's own OS-level customization if they've
-/// already changed it there. Only a user-provided file (<see cref="Configuration.CustomNotificationSoundPath"/>)
-/// ever overrides that.</para>
+/// <para>With no custom sound configured, the "standard" sound is a short alert clip bundled with the
+/// plugin itself (embedded resource, see the csproj - originally supplied as <c>freealert.mp3</c>,
+/// transcoded to PCM WAV since <c>PlaySound</c> can't decode mp3) rather than a generic Windows system
+/// sound, per explicit user request to use that specific clip as the preset. Extracted to
+/// <see cref="defaultSoundPath"/> (inside the plugin's own config directory) once per construction,
+/// since <c>PlaySound</c> needs a real file path, not an in-memory stream - always re-extracted rather
+/// than only-if-missing, so an updated bundled clip in a future build can't be shadowed by a stale copy
+/// left over from an older one. If extraction ever fails (disk full, permissions, etc.), Windows' own
+/// built-in "SystemAsterisk" scheme sound is the last-resort fallback, so a real machine/disk problem
+/// still ends up with *something* audible rather than silence. Only a user-provided file
+/// (<see cref="Configuration.CustomNotificationSoundPath"/>) ever overrides the bundled default.</para>
 ///
-/// <para><b>WAV only</b>, not "any" format as initially asked for - <c>PlaySound</c> itself only ever
-/// understood uncompressed WAV; supporting compressed formats (mp3, ogg) would need a real decoding
-/// library. This matches Windows' own custom-notification-sound picker (Settings > Sound), which has the
-/// same restriction, so it's a familiar constraint rather than an unusual one.</para>
+/// <para><b>WAV only</b> for the *custom* sound slot, not "any" format as initially asked for -
+/// <c>PlaySound</c> itself only ever understood uncompressed WAV; supporting compressed formats (mp3,
+/// ogg) as a *custom* pick would need a real decoding library. This matches Windows' own
+/// custom-notification-sound picker (Settings > Sound), which has the same restriction, so it's a
+/// familiar constraint rather than an unusual one. The bundled default itself started as an mp3 but
+/// that conversion happened once, ahead of time, at build-authoring time - not something this service
+/// does at runtime.</para>
 /// </summary>
 public sealed class NotificationSoundService
 {
+    private const string DefaultSoundResourceName = "TomeScrollChat.Assets.DefaultNotification.wav";
+
     private const uint SND_ASYNC = 0x0001;
     private const uint SND_NODEFAULT = 0x0002;
     private const uint SND_FILENAME = 0x00020000;
@@ -37,11 +48,34 @@ public sealed class NotificationSoundService
 
     private readonly Configuration configuration;
     private readonly IPluginLog log;
+    private readonly string defaultSoundPath;
 
-    public NotificationSoundService(Configuration configuration, IPluginLog log)
+    public NotificationSoundService(string configDirectory, Configuration configuration, IPluginLog log)
     {
         this.configuration = configuration;
         this.log = log;
+        defaultSoundPath = Path.Combine(configDirectory, "default-notification-sound.wav");
+        ExtractDefaultSound();
+    }
+
+    private void ExtractDefaultSound()
+    {
+        try
+        {
+            using var resourceStream = Assembly.GetExecutingAssembly().GetManifestResourceStream(DefaultSoundResourceName);
+            if (resourceStream == null)
+            {
+                log.Warning("TomeScrollChat: embedded default notification sound resource not found ({Name})", DefaultSoundResourceName);
+                return;
+            }
+
+            using var fileStream = File.Create(defaultSoundPath);
+            resourceStream.CopyTo(fileStream);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to extract the default notification sound");
+        }
     }
 
     /// <summary>Called from <see cref="NotificationService.Show"/> - a no-op while
@@ -73,6 +107,14 @@ public sealed class NotificationSoundService
                 log.Warning("TomeScrollChat: custom notification sound not found ({Path}) - falling back to the standard sound", customPath);
             }
 
+            if (File.Exists(defaultSoundPath))
+            {
+                PlaySound(defaultSoundPath, IntPtr.Zero, SND_FILENAME | SND_ASYNC | SND_NODEFAULT);
+                return;
+            }
+
+            // Bundled default failed to extract for some reason - Windows' own scheme sound as a
+            // last-resort fallback, so there's still something audible rather than total silence.
             PlaySound("SystemAsterisk", IntPtr.Zero, SND_ALIAS | SND_ASYNC | SND_NODEFAULT);
         }
         catch (Exception ex)

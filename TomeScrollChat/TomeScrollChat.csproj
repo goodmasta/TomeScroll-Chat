@@ -15,6 +15,15 @@
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
   </ItemGroup>
 
+  <!-- Bundled default notification sound (see Services.NotificationSoundService) - embedded directly
+       in the assembly rather than shipped as a loose file next to the DLL, so it's guaranteed present
+       regardless of how the plugin is packaged/installed (dev-plugin bin folder, or the zip
+       Dalamud.NET.Sdk builds for the custom-repo release). Extracted to disk once at startup since
+       PlaySound (winmm.dll) needs a real file path, not an in-memory stream. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\DefaultNotification.wav" />
+  </ItemGroup>
+
   <!-- Embeds the current git commit hash into the assembly via AssemblyMetadataAttribute, read back
        by Plugin.PrintVersion ("/tomescroll version"). <Version> above is hand-set and rarely bumped
        between commits, so on its own it can't answer "which commit is this build" - the commit hash

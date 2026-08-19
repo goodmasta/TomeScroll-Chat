@@ -145,9 +145,9 @@ public sealed class ConfigWindow : Window, IDisposable
     }
 
     /// <summary>Notification sound - see <see cref="Services.NotificationSoundService"/> for the full
-    /// reasoning (WAV-only, Windows' own "SystemAsterisk" as the standard/default sound). The path field
-    /// itself is read-only (typed in via "Browse..." only, not free text) so it can't point at something
-    /// that was never actually validated to exist.</summary>
+    /// reasoning (WAV-only for the custom slot, the plugin's own bundled clip as the standard/default
+    /// sound). The path field itself is read-only (typed in via "Browse..." only, not free text) so it
+    /// can't point at something that was never actually validated to exist.</summary>
     private void DrawNotificationSound()
     {
         ImGui.TextUnformatted("Notification sound");
@@ -158,10 +158,10 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.NotificationSoundEnabled = soundEnabled;
             configuration.Save();
         }
-        ImGui.TextDisabled("Plays alongside every popup toast above. On by default; Windows' own standard notification sound unless you pick a custom one below.");
+        ImGui.TextDisabled("Plays alongside every popup toast above. On by default; the plugin's own bundled alert sound unless you pick a custom one below.");
 
         var hasCustom = !string.IsNullOrWhiteSpace(configuration.CustomNotificationSoundPath);
-        var pathDisplay = hasCustom ? configuration.CustomNotificationSoundPath : "(standard Windows notification sound)";
+        var pathDisplay = hasCustom ? configuration.CustomNotificationSoundPath : "(bundled default alert sound)";
         ImGui.SetNextItemWidth(320);
         ImGui.InputText("##notificationSoundPath", ref pathDisplay, 260, ImGuiInputTextFlags.ReadOnly);
 

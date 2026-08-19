@@ -208,11 +208,12 @@ public class Configuration : IPluginConfiguration
     /// themselves.</summary>
     public bool NotificationSoundEnabled { get; set; } = true;
 
-    /// <summary>Path to a user-picked <c>.wav</c> file to play instead of Windows' own built-in
-    /// "SystemAsterisk" scheme sound (the default, hence empty here - see
-    /// <see cref="Services.NotificationSoundService"/> for why WAV-only rather than "any" format).
-    /// Cleared, not validated, when the file goes missing - <see cref="Services.NotificationSoundService"/>
-    /// itself falls back to the standard sound for that one play rather than erroring.</summary>
+    /// <summary>Path to a user-picked <c>.wav</c> file to play instead of the plugin's own bundled
+    /// default alert sound (empty here, hence that default - see
+    /// <see cref="Services.NotificationSoundService"/> for what that default is and why WAV-only rather
+    /// than "any" format for this custom slot). Not cleared/validated here when the file goes missing -
+    /// <see cref="Services.NotificationSoundService"/> itself just falls back to the default sound for
+    /// that one play rather than erroring or silently resetting this setting.</summary>
     public string CustomNotificationSoundPath { get; set; } = string.Empty;
 
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see

@@ -99,7 +99,7 @@ public sealed class Plugin : IDalamudPlugin
         // a linkshell tab out from under the player while it happens to be detached.
         TabManager.TabRemoved += OnTabRemoved;
         ChatHistoryService = new ChatHistoryService(PluginInterface.ConfigDirectory.FullName, Configuration.MaxHistoryBytes, Log);
-        NotificationSoundService = new NotificationSoundService(Configuration, Log);
+        NotificationSoundService = new NotificationSoundService(PluginInterface.ConfigDirectory.FullName, Configuration, Log);
         NotificationService = new NotificationService(NotificationSoundService);
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, Configuration, TabManager, ChatHistoryService, NotificationService);
         ChatSendService = new ChatSendService(Log);
