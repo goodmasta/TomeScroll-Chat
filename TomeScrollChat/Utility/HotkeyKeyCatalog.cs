@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
+using TomeScrollChat;
 
 namespace TomeScrollChat.Utility;
 
@@ -41,5 +42,22 @@ public static class HotkeyKeyCatalog
         }
 
         return key.ToString();
+    }
+
+    /// <summary>"Alt+Space"-style summary of the current cycle-outgoing-channel hotkey (Settings >
+    /// Tabs) - shown next to the "Sending to: ..." label so the hotkey isn't only discoverable by
+    /// reading Settings.</summary>
+    public static string DescribeHotkey(Configuration configuration)
+    {
+        var parts = new List<string>(4);
+        if (configuration.CycleOutgoingChannelHotkeyAlt)
+            parts.Add("Alt");
+        if (configuration.CycleOutgoingChannelHotkeyCtrl)
+            parts.Add("Ctrl");
+        if (configuration.CycleOutgoingChannelHotkeyShift)
+            parts.Add("Shift");
+        parts.Add(Label(configuration.CycleOutgoingChannelHotkeyKey));
+
+        return string.Join("+", parts);
     }
 }

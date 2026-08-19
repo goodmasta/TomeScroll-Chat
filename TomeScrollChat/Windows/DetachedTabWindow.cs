@@ -133,13 +133,16 @@ public sealed class DetachedTabWindow : Window, IDisposable
             return;
         }
 
+        var displayLabel = sendable.Find(c => c.Command == Tab.OutgoingChannelCommand)?.Label ?? Tab.OutgoingChannelCommand;
+
         if (sendable.Count <= 1)
         {
-            ImGui.TextDisabled($"Sending to: {Tab.OutgoingChannelCommand}");
+            ImGui.TextDisabled($"Sending to: {displayLabel}");
             return;
         }
 
-        ImGui.TextDisabled($"Sending to: {Tab.OutgoingChannelCommand} (click to change)");
+        var hotkeyLabel = HotkeyKeyCatalog.DescribeHotkey(Plugin.Configuration);
+        ImGui.TextDisabled($"Sending to: {displayLabel} (click, or {hotkeyLabel}, to change)");
         if (ImGui.IsItemClicked())
             ImGui.OpenPopup($"OutgoingChannelPicker_{Tab.Id}");
 

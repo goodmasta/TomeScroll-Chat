@@ -1255,13 +1255,12 @@ public sealed class MainWindow : Window, IDisposable
         }
     }
 
-    /// <summary>One dimmed line above the compose box naming exactly what sending will do - the tab's
-    /// <see cref="ChatTabConfig.OutgoingChannelCommand"/> as literally configured (e.g. "/p", "/fc",
-    /// "/tell Name@World"), or a note that it follows whatever channel the game's own UI last had
-    /// active when that's empty (built-in "Log" tab, or any custom tab left without one). Shown as the
-    /// raw command rather than translated to a friendly channel name - always exactly accurate for
-    /// custom tabs, which can have any outgoing command a player could type, not just the built-in
-    /// five this plugin ships with defaults for.</summary>
+    /// <summary>One dimmed line above the compose box naming exactly what sending will do - a friendly
+    /// channel name (e.g. "Say", "Free Company") when <see cref="ChatTabConfig.OutgoingChannelCommand"/>
+    /// matches one of <see cref="ChatChannelCatalog.SendableChannels"/>, otherwise the raw command as
+    /// literally configured (e.g. "/tell Name@World", or any custom command a player typed by hand -
+    /// not just the built-in five this plugin ships with defaults for, which is why this always falls
+    /// back to the raw text rather than only ever showing a friendly name).</summary>
     /// <summary>Plain <see cref="ImGui.TextDisabled"/> either way - deliberately never a taller widget
     /// like a Combo, even when the picker below is offered, since this label's height is baked into
     /// <see cref="GetInputRowReserve"/> as exactly <see cref="ImGui.GetTextLineHeight"/> (see that
@@ -1299,15 +1298,18 @@ public sealed class MainWindow : Window, IDisposable
             return;
         }
 
+        var displayLabel = sendable.Find(c => c.Command == tab.OutgoingChannelCommand)?.Label ?? tab.OutgoingChannelCommand;
+
         // Only offered once there's an actual choice to make - a tab with only 1 sendable channel
         // (or a PM tab, pinned to its "/tell Name@World") just shows the plain label.
         if (sendable.Count <= 1)
         {
-            ImGui.TextDisabled($"Sending to: {tab.OutgoingChannelCommand}");
+            ImGui.TextDisabled($"Sending to: {displayLabel}");
             return;
         }
 
-        ImGui.TextDisabled($"Sending to: {tab.OutgoingChannelCommand} (click to change)");
+        var hotkeyLabel = HotkeyKeyCatalog.DescribeHotkey(Plugin.Configuration);
+        ImGui.TextDisabled($"Sending to: {displayLabel} (click, or {hotkeyLabel}, to change)");
         if (ImGui.IsItemClicked())
             ImGui.OpenPopup($"OutgoingChannelPicker_{tab.Id}");
 
