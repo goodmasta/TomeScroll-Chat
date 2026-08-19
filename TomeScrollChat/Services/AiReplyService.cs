@@ -85,14 +85,10 @@ public sealed class AiReplyService
         if (string.IsNullOrWhiteSpace(text))
             return null;
 
+        // No generic "failed" toast here on a null result - GeminiService itself already shows a
+        // specific one (bad key, rate limit, blocked, etc.) for every real failure past this point.
         var result = await geminiService.GenerateTextAsync($"{RephrasePromptPrefix}\n\n\"{text}\"").ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(result))
-        {
-            notificationService.Show("Rephrasing failed - check /xllog for details.", NotificationSeverity.Warning);
-            return null;
-        }
-
-        return result.Trim().Trim('"');
+        return string.IsNullOrWhiteSpace(result) ? null : result.Trim().Trim('"');
     }
 
     private const string CorrectPromptPrefix =
@@ -116,14 +112,9 @@ public sealed class AiReplyService
         if (string.IsNullOrWhiteSpace(text))
             return null;
 
+        // Same reasoning as RephraseAsync - GeminiService already toasts on any real failure.
         var result = await geminiService.GenerateTextAsync($"{CorrectPromptPrefix}\n\n\"{text}\"").ConfigureAwait(false);
-        if (string.IsNullOrWhiteSpace(result))
-        {
-            notificationService.Show("Auto-correct failed - check /xllog for details.", NotificationSeverity.Warning);
-            return null;
-        }
-
-        return result.Trim().Trim('"');
+        return string.IsNullOrWhiteSpace(result) ? null : result.Trim().Trim('"');
     }
 
     /// <summary>Generates a reply to <paramref name="originalMessage"/> (from <paramref name="senderName"/>)
@@ -141,12 +132,10 @@ public sealed class AiReplyService
         if (string.IsNullOrWhiteSpace(originalMessage))
             return null;
 
+        // Same reasoning as RephraseAsync/CorrectAsync - GeminiService already toasts on any real failure.
         var reply = await geminiService.GenerateTextAsync(BuildPrompt(senderName, originalMessage)).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(reply))
-        {
-            notificationService.Show("AI reply generation failed - check /xllog for details.", NotificationSeverity.Warning);
             return null;
-        }
 
         reply = reply.Trim().Trim('"');
 

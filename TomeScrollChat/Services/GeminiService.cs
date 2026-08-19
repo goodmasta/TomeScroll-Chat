@@ -1,9 +1,11 @@
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using TomeScrollChat.Models;
 
 namespace TomeScrollChat.Services;
 
@@ -19,6 +21,16 @@ namespace TomeScrollChat.Services;
 /// call is a no-op returning null without one, rather than an error, since a caller may want to
 /// silently treat "not configured" the same as "unavailable right now" (e.g. TranslationService
 /// falling through to a different engine).</para>
+///
+/// <para>Every genuine failure past that point - a non-2xx response, a network/timeout exception, or a
+/// 2xx response with no usable reply (safety-blocked prompt/response, empty candidates, malformed JSON)
+/// - shows a brief <see cref="NotificationService"/> toast in addition to the existing <c>/xllog</c>
+/// warning, centralized here so every caller (translation, dialogue translation, AI reply/rephrase/
+/// correct, and anything added later) gets this for free instead of each one needing its own failure
+/// toast - added per explicit user request ("при любой ошибке/проблеме при обращении к Gemini кратко
+/// сообщалась информация в виде уведомления"). The "not configured" early-return above deliberately
+/// stays silent here, though - that's routine unconfigured state, not a failure, and callers that care
+/// already show their own "needs an API key" toast when they check <see cref="IsConfigured"/> themselves.</para>
 /// </summary>
 public sealed class GeminiService : IDisposable
 {
@@ -47,11 +59,13 @@ public sealed class GeminiService : IDisposable
     };
     private readonly IPluginLog log;
     private readonly Configuration configuration;
+    private readonly NotificationService notificationService;
 
-    public GeminiService(IPluginLog log, Configuration configuration)
+    public GeminiService(IPluginLog log, Configuration configuration, NotificationService notificationService)
     {
         this.log = log;
         this.configuration = configuration;
+        this.notificationService = notificationService;
     }
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(configuration.GeminiApiKey);
@@ -85,27 +99,90 @@ public sealed class GeminiService : IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 log.Warning("TomeScrollChat: Gemini request failed ({Status}): {Body}", (int)response.StatusCode, Truncate(responseJson));
+                notificationService.Show(DescribeHttpFailure(response.StatusCode), NotificationSeverity.Warning);
                 return null;
             }
 
-            return ParseReply(responseJson);
+            var reply = ParseReply(responseJson, out var blockReason);
+            if (reply == null)
+            {
+                if (blockReason != null)
+                {
+                    log.Warning("TomeScrollChat: Gemini reply blocked ({Reason}): {Body}", blockReason, Truncate(responseJson));
+                    notificationService.Show($"Gemini didn't answer - {blockReason}.", NotificationSeverity.Warning);
+                }
+                else
+                {
+                    log.Warning("TomeScrollChat: Gemini returned an empty/unparseable response: {Body}", Truncate(responseJson));
+                    notificationService.Show("Gemini returned an empty reply - check /xllog for details.", NotificationSeverity.Warning);
+                }
+            }
+
+            return reply;
         }
         catch (Exception ex)
         {
             log.Warning(ex, "TomeScrollChat: Gemini request failed");
+            notificationService.Show(DescribeException(ex), NotificationSeverity.Warning);
             return null;
         }
     }
 
-    /// <summary>Standard <c>generateContent</c> response shape: <c>candidates[0].content.parts[].text</c> -
-    /// concatenates every part's text (a reply is usually one part, but nothing guarantees that).</summary>
-    private static string? ParseReply(string json)
+    /// <summary>Common cases get a specific, actionable message; anything else falls back to a generic
+    /// one pointing at <c>/xllog</c> for the full body already logged by the caller above.</summary>
+    private static string DescribeHttpFailure(HttpStatusCode status) => status switch
     {
+        HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden => "Gemini rejected the API key - check Settings > AI.",
+        (HttpStatusCode)429 => "Gemini rate-limited this request - try again shortly.",
+        HttpStatusCode.BadRequest => "Gemini rejected the request - check the model/API key in Settings > AI.",
+        HttpStatusCode.InternalServerError or HttpStatusCode.ServiceUnavailable or HttpStatusCode.BadGateway => "Gemini is temporarily unavailable - try again shortly.",
+        _ => $"Gemini request failed ({(int)status}) - check /xllog for details.",
+    };
+
+    /// <summary>Deliberately doesn't surface <paramref name="ex"/>'s own message - exceptions here are
+    /// usually raw network-stack text (SSL handshake failures, DNS errors) that reads as noise in a
+    /// 5-second toast rather than anything actionable; the full exception is already in <c>/xllog</c>.</summary>
+    private static string DescribeException(Exception ex) => ex switch
+    {
+        TaskCanceledException or OperationCanceledException => "Gemini request timed out.",
+        HttpRequestException => "Gemini request failed - network/connection error, check /xllog for details.",
+        _ => "Gemini request failed - check /xllog for details.",
+    };
+
+    /// <summary>Standard <c>generateContent</c> response shape: <c>candidates[0].content.parts[].text</c> -
+    /// concatenates every part's text (a reply is usually one part, but nothing guarantees that).
+    /// <paramref name="blockReason"/> is set (and the return value null) specifically when Gemini
+    /// declined to answer rather than merely returning something unparseable - either the whole prompt
+    /// was blocked before generation (<c>promptFeedback.blockReason</c>) or the response itself was cut
+    /// off by a safety/recitation filter (<c>candidates[0].finishReason</c>) - worth a distinct message
+    /// from a generic parse failure since the fix (reword the prompt/text) is different from "try again".</summary>
+    private static string? ParseReply(string json, out string? blockReason)
+    {
+        blockReason = null;
+
         using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("candidates", out var candidates) || candidates.ValueKind != JsonValueKind.Array || candidates.GetArrayLength() == 0)
+        var root = doc.RootElement;
+
+        if (root.TryGetProperty("promptFeedback", out var feedback) &&
+            feedback.TryGetProperty("blockReason", out var promptBlockEl) &&
+            promptBlockEl.ValueKind == JsonValueKind.String)
+        {
+            blockReason = $"prompt blocked ({promptBlockEl.GetString()})";
+            return null;
+        }
+
+        if (!root.TryGetProperty("candidates", out var candidates) || candidates.ValueKind != JsonValueKind.Array || candidates.GetArrayLength() == 0)
             return null;
 
         var firstCandidate = candidates[0];
+
+        if (firstCandidate.TryGetProperty("finishReason", out var finishEl) && finishEl.ValueKind == JsonValueKind.String)
+        {
+            var finishReason = finishEl.GetString();
+            if (finishReason is "SAFETY" or "RECITATION" or "BLOCKLIST" or "PROHIBITED_CONTENT" or "SPII")
+                blockReason = $"response blocked ({finishReason})";
+        }
+
         if (!firstCandidate.TryGetProperty("content", out var contentEl) ||
             !contentEl.TryGetProperty("parts", out var parts) ||
             parts.ValueKind != JsonValueKind.Array)

@@ -773,10 +773,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
     private async Task TranslateInputAsync(int start, int length, string original, string targetLanguage)
     {
+        var engineBeforeRequest = plugin.TranslationService.ActiveEngine;
         var translated = await plugin.TranslationService.TranslateRawAsync(original, targetLanguage).ConfigureAwait(false);
         if (!string.IsNullOrEmpty(translated))
             pendingInputSplice = (start, length, translated);
-        else
+        // Gemini failures already get a specific toast from GeminiService itself - see TranslationService.
+        else if (engineBeforeRequest != TranslationEngine.Gemini)
             plugin.NotificationService.Show("Translation failed - check /xllog for details.", NotificationSeverity.Warning);
     }
 

@@ -237,7 +237,10 @@ public sealed class TranslationService : IDisposable
                         {
                             consecutiveFailures = 0;
                         }
-                        else
+                        // Gemini failures already get a specific toast from GeminiService itself
+                        // (bad key, rate limit, blocked, etc.) - this generic one is only for
+                        // GoogleFree/MyMemory, which have no such per-failure toast of their own.
+                        else if (engineBeforeRequest != TranslationEngine.Gemini)
                         {
                             notificationService.Show(
                                 $"Translation failed via {EngineLabel(activeEngine)} - check /xllog for details.",

@@ -99,7 +99,7 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService = new ChatCaptureService(ChatGui, Log, Configuration, TabManager, ChatHistoryService, NotificationService);
         ChatSendService = new ChatSendService(Log);
         EmoteService = new EmoteService(PluginInterface.ConfigDirectory.FullName, TextureProvider, Log);
-        GeminiService = new GeminiService(Log, Configuration);
+        GeminiService = new GeminiService(Log, Configuration, NotificationService);
         TranslationService = new TranslationService(PluginInterface.ConfigDirectory.FullName, Log, Configuration, ChatHistoryService, GeminiService, NotificationService);
         TabMessageBuffer = new TabMessageBuffer(ChatHistoryService);
         var worldIdResolver = new WorldIdResolver(DataManager, Log);
