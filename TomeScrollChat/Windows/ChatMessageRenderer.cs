@@ -647,43 +647,51 @@ public static class ChatMessageRenderer
         FlushPlain();
     }
 
-    /// <summary>Simulates ImGui's own greedy word-wrap (break at whitespace, one word at a time) to
-    /// find how much horizontal space the *last* visual line of <paramref name="text"/> actually uses
-    /// once wrapped at <paramref name="wrapWidth"/> - the piece of information <see cref="ImGui.GetItemRectMax"/>
-    /// can't give back after the fact, since a wrapped widget's item rect is one axis-aligned box
-    /// covering every line (so its right edge reflects the *widest* line, not necessarily the last
-    /// one). <paramref name="text"/> is assumed already single-space-normalized between words (see
-    /// <c>ProcessSegment</c> in <see cref="DrawBody"/>, which always joins words with exactly one
-    /// space), matching how it's actually about to render, so this greedy simulation lines up exactly
-    /// with ImGui's own wrap decisions for ordinary space-separated text.</summary>
+    /// <summary>Finds how much horizontal space the *last* visual line of <paramref name="text"/>
+    /// actually uses once wrapped at <paramref name="wrapWidth"/> - the piece of information
+    /// <see cref="ImGui.GetItemRectMax"/> can't give back after the fact, since a wrapped widget's item
+    /// rect is one axis-aligned box covering every line (so its right edge reflects the *widest* line,
+    /// not necessarily the last one).
+    ///
+    /// <para><b>First attempt</b> (reverted the same day): a hand-rolled greedy word-wrap simulation
+    /// (break at whitespace, accumulate word widths, reset on overflow) - reported live as still
+    /// wrapping to a fresh line with visible room left on a long paragraph, meaning the simulated last
+    /// line didn't match what ImGui actually rendered. Any tiny per-word/per-space measurement
+    /// discrepancy between the simulation and ImGui's real wrap algorithm compounds over a long
+    /// paragraph (100+ words here), so by the end the simulated wrap points could drift arbitrarily far
+    /// from reality.</para>
+    ///
+    /// <para>This version instead defers entirely to ImGui's own wrap algorithm via the <c>wrapWidth</c>
+    /// overload of <see cref="ImGui.CalcTextSize(ImU8String,bool,float)"/> - the exact same function
+    /// <c>PushTextWrapPos</c>-based rendering uses internally, so it can't disagree with what's actually
+    /// drawn. Binary-searches (by word count, not by character - a wrap boundary is always at a word
+    /// boundary) for the smallest word count whose wrapped height already reaches the full text's
+    /// height; the word that search converges on is the first word of the true last line.</para></summary>
     private static float MeasureLastLineWidth(string text, float wrapWidth)
     {
-        var spaceWidth = ImGui.CalcTextSize(" ").X;
-        var lineWidth = 0f;
-        var firstOnLine = true;
+        var words = text.Split(' ').Where(w => w.Length > 0).ToArray();
+        if (words.Length == 0)
+            return 0f;
 
-        foreach (var word in text.Split(' '))
+        var lineHeight = ImGui.GetTextLineHeight();
+        var totalHeight = ImGui.CalcTextSize(text, false, wrapWidth).Y;
+
+        var lo = 1;
+        var hi = words.Length;
+        while (lo < hi)
         {
-            if (word.Length == 0)
-                continue;
-
-            var wordWidth = ImGui.CalcTextSize(word).X;
-            if (firstOnLine)
-            {
-                lineWidth = wordWidth;
-                firstOnLine = false;
-            }
-            else if (lineWidth + spaceWidth + wordWidth <= wrapWidth)
-            {
-                lineWidth += spaceWidth + wordWidth;
-            }
+            var mid = (lo + hi) / 2;
+            var prefixHeight = ImGui.CalcTextSize(string.Join(' ', words[..mid]), false, wrapWidth).Y;
+            if (prefixHeight >= totalHeight - lineHeight * 0.5f)
+                hi = mid;
             else
-            {
-                lineWidth = wordWidth; // this word starts a fresh line
-            }
+                lo = mid + 1;
         }
 
-        return lineWidth;
+        // words[lo - 1] is the word whose addition first pushed the wrapped height up to the full
+        // total - i.e. the first word placed on the true last line.
+        var lastLine = string.Join(' ', words[(lo - 1)..]);
+        return ImGui.CalcTextSize(lastLine).X;
     }
 
     /// <summary>Draws one emote token, inlining after the previous item only when <paramref
