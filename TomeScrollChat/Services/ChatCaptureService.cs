@@ -19,8 +19,17 @@ namespace TomeScrollChat.Services;
 /// Subscribes to the raw <c>ChatMessage</c> event (fires unconditionally for every message) rather
 /// than <c>ChatMessageUnhandled</c> - the latter only fires once "handled" status has been decided,
 /// which turned out not to be a reliable signal to depend on for "did this message happen at all".
-/// We don't call <see cref="IHandleableChatMessage.PreventOriginal"/>, so other plugins and the
-/// (hidden) native chat log still see every message exactly as before.
+///
+/// <para>We don't call <see cref="IHandleableChatMessage.PreventOriginal"/> for anything except one
+/// narrow, opt-in case: an incoming whisper while <see cref="Configuration.WhisperSoundEnabled"/> is
+/// on (see <see cref="HandleTell"/>) - an experimental attempt at suppressing the game's own native
+/// "incoming tell" chime so it doesn't double up with this plugin's own whisper notification sound
+/// (<see cref="WhisperNotificationService"/>), inspired by <c>NightmareXIV/XIVInstantMessenger</c>'s
+/// <c>MessageProcessor.cs</c> calling the same API for a related purpose. <b>Unverified whether this
+/// actually silences the native sound</b> (Dalamud's own docs only say it "prevents [the message] from
+/// being processed by the game any further" - not sound-specific) - needs a live in-game check. Every
+/// other message still goes through untouched, so other plugins and the (hidden) native chat log see
+/// everything exactly as before except this one case.</para>
 /// </summary>
 public sealed class ChatCaptureService : IDisposable
 {
@@ -73,7 +82,7 @@ public sealed class ChatCaptureService : IDisposable
         }
     }
 
-    private void Handle(IChatMessage message)
+    private void Handle(IHandleableChatMessage message)
     {
         var chatType = message.LogKind;
         var senderText = message.Sender.TextValue;
@@ -92,7 +101,7 @@ public sealed class ChatCaptureService : IDisposable
 
         if (chatType is XivChatType.TellIncoming or XivChatType.TellOutgoing)
         {
-            HandleTell(chatType, senderText, senderKey, body, payloadLinks, timestamp);
+            HandleTell(message, chatType, senderText, senderKey, body, payloadLinks, timestamp);
             return;
         }
 
@@ -117,8 +126,18 @@ public sealed class ChatCaptureService : IDisposable
         }
     }
 
-    private void HandleTell(XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
+    /// <summary>Experimental: <see cref="IHandleableChatMessage.PreventOriginal"/> for an incoming
+    /// whisper while <see cref="Configuration.WhisperSoundEnabled"/> is on - see this class's own doc
+    /// comment for why, and the caveat that it's unconfirmed whether this actually suppresses the
+    /// game's native tell sound (needs a live in-game check). Deliberately does NOT gate on
+    /// <see cref="Configuration.NotifyOnWhisper"/> (the popup toggle) - this is specifically about the
+    /// *sound*, so it should track <see cref="Configuration.WhisperSoundEnabled"/> alone. Never called
+    /// for <see cref="XivChatType.TellOutgoing"/> - only ever affects messages received, never sent.</summary>
+    private void HandleTell(IHandleableChatMessage message, XivChatType chatType, string senderText, string senderKey, string body, IReadOnlyList<ChatPayloadLink> payloadLinks, DateTime timestamp)
     {
+        if (chatType == XivChatType.TellIncoming && configuration.WhisperSoundEnabled)
+            message.PreventOriginal();
+
         var partnerKey = !string.IsNullOrEmpty(senderKey)
             ? senderKey
             : chatType == XivChatType.TellOutgoing && !string.IsNullOrEmpty(PendingOutgoingTellTarget)
