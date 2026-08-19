@@ -508,7 +508,16 @@ public static class ChatMessageRenderer
                 // on the current line without wrapping at all - if it doesn't fit, it starts fresh
                 // with the full window width to wrap into, same as any other wrapped paragraph.
                 if (prevRightX + spacing + ImGui.CalcTextSize(text).X <= rightEdge)
+                {
                     ImGui.SameLine(0, spacing);
+                    // SameLine() picks its own X from ImGui's internal "previous item" tracking, which
+                    // for a wrapped multi-line widget is the *widest* line's right edge, not
+                    // necessarily prevRightX (which could itself already be the corrected last-line
+                    // measurement from an earlier wrapped paragraph) - forcing it here keeps the two
+                    // from ever disagreeing. Y is left exactly as SameLine() set it (same-row baseline
+                    // alignment is the one thing it always gets right).
+                    ImGui.SetCursorPosX(prevRightX + spacing);
+                }
             }
 
             ImGui.PushTextWrapPos(0f);
@@ -685,7 +694,13 @@ public static class ChatMessageRenderer
         {
             var spacing = ImGui.GetStyle().ItemSpacing.X;
             if (prevRightX + spacing + size.X <= rightEdge)
+            {
+                // See FlushPlain's own comment on the matching SetCursorPosX call - SameLine() alone
+                // can't be trusted to land on prevRightX when it came from a wrapped paragraph's
+                // measured last line rather than a plain single-line item.
                 ImGui.SameLine(0, spacing);
+                ImGui.SetCursorPosX(prevRightX + spacing);
+            }
         }
 
         if (texture != null)
@@ -715,7 +730,16 @@ public static class ChatMessageRenderer
         if (inlineX is { } prevRightX)
         {
             if (prevRightX + spacing + tokenWidth <= rightEdge)
+            {
+                // See FlushPlain's own comment on the matching SetCursorPosX call - without this,
+                // a link placed right after a wrapped paragraph lands wherever ImGui's own internal
+                // "previous item" tracking says (the paragraph's *widest* line, not prevRightX), which
+                // can leave almost no room before rightEdge and make this same link wrap character by
+                // character below - reported live as the message ballooning into a huge column of
+                // single characters.
                 ImGui.SameLine(0, spacing);
+                ImGui.SetCursorPosX(prevRightX + spacing);
+            }
         }
 
         var fullWidth = rightEdge - ImGui.GetCursorPosX();
@@ -847,7 +871,11 @@ public static class ChatMessageRenderer
         if (inlineX is { } prevRightX)
         {
             if (prevRightX + spacing + tokenWidth <= rightEdge)
+            {
+                // See FlushPlain's own comment on the matching SetCursorPosX call.
                 ImGui.SameLine(0, spacing);
+                ImGui.SetCursorPosX(prevRightX + spacing);
+            }
         }
 
         var fullWidth = rightEdge - ImGui.GetCursorPosX();
