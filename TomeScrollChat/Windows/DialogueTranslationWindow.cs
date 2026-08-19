@@ -63,6 +63,15 @@ public sealed class DialogueTranslationWindow : Window
 {
     private readonly Configuration configuration;
     private readonly DialogueTranslationService dialogueService;
+    private int lastDrawnCount = -1;
+
+    // Auto-scroll to the newest line - deferred by one frame (consumed at the *top* of the next
+    // Draw() call, before that frame's content is drawn), same mechanism MainWindow's own "jump to
+    // bottom" uses (SetScrollY(GetScrollMaxY()), not SetScrollHereY(1f)) - the child's ScrollMaxY for
+    // content just added this same frame isn't reliably settled yet (ImGui only finalizes a child's
+    // content size/scroll range at the end of the frame it was drawn in), so scrolling in the same
+    // frame new text appears could target a stale, too-small max and land short of the true bottom.
+    private bool pendingScrollToBottom;
 
     // "Search in this window" - same shape as MainWindow/DetachedTabWindow's own tab search, just
     // toggled from a title bar button instead of an inline one (no sidebar/tab context menu to hang a
@@ -168,16 +177,15 @@ public sealed class DialogueTranslationWindow : Window
         {
             if (child.Success)
             {
-                // Captured *before* drawing this frame's content, using last frame's settled scroll
-                // range - reflects wherever the player actually left the scroll position, including a
-                // manual mouse-wheel scroll from this very frame (ImGui applies wheel input to the
-                // hovered child before its content is submitted). This is what makes manual scroll-up
-                // work at all: unconditionally re-pinning to the bottom every frame (tried first, per
-                // an earlier explicit request) fought the player's own scrolling and made it impossible
-                // to read anything older - reported live as broken. Now only auto-follows new content
-                // down when the player was already at the bottom to begin with; scrolling up at all
-                // immediately stops the auto-follow until they scroll back down themselves.
-                var wasAtBottom = !searchMode && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f;
+                // Consumes last frame's request, using this frame's now-fully-settled ScrollMaxY (the
+                // new content that triggered it was already drawn once, last frame) - see
+                // pendingScrollToBottom's own doc comment for why this can't just happen inline below,
+                // in the same frame a new entry first appears.
+                if (pendingScrollToBottom)
+                {
+                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                    pendingScrollToBottom = false;
+                }
 
                 foreach (var entry in displayEntries)
                 {
@@ -199,8 +207,15 @@ public sealed class DialogueTranslationWindow : Window
                     ImGui.Spacing();
                 }
 
-                if (wasAtBottom)
-                    ImGui.SetScrollY(ImGui.GetScrollMaxY());
+                // Skipped while actively filtering - jumping to the bottom of the *filtered* list on
+                // every new (possibly non-matching) line would fight the player's own scroll position
+                // while they're reading search results. Resumes the moment search closes, since that
+                // re-evaluates entries.Count against the now-stale lastDrawnCount immediately.
+                if (!searchMode && entries.Count != lastDrawnCount)
+                {
+                    pendingScrollToBottom = true;
+                    lastDrawnCount = entries.Count;
+                }
             }
         }
     }
