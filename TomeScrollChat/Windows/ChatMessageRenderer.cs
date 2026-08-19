@@ -480,11 +480,14 @@ public static class ChatMessageRenderer
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
 
-        // The screen-relative (minus window position) X where the *previous* thing drawn actually
-        // ends, if known safe to inline after - null means always start a fresh line. Starts at the
-        // sender name's (or timestamp's, if there's no sender) own trailing edge, since the caller
-        // already left a pending SameLine() before calling DrawBody.
-        float? inlineX = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+        // The window-relative point where the *previous* thing drawn actually ends, if known safe to
+        // inline after - null means always start a fresh line. X is the trailing edge; Y is the top of
+        // the specific visual *line* being continued (not the widget's own top, for a wrapped
+        // multi-line widget - see FlushPlain). Starts at the sender name's (or timestamp's, if there's
+        // no sender) own position, since the caller already left a pending SameLine() before calling
+        // DrawBody - single-line, so its rect is exact either way.
+        var windowPos = ImGui.GetWindowPos();
+        Vector2? inlinePos = new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - windowPos;
 
         void FlushPlain()
         {
@@ -495,7 +498,7 @@ public static class ChatMessageRenderer
             plain.Clear();
 
             var spacing = ImGui.GetStyle().ItemSpacing.X;
-            if (inlineX is { } prevRightX)
+            if (inlinePos is { } prevPos)
             {
                 // Checking only the *first word*'s width here (the original check) is wrong for a
                 // multi-word run: fitting the first word doesn't mean there's comfortable room for
@@ -507,16 +510,18 @@ public static class ChatMessageRenderer
                 // the *whole* run's unwrapped width instead means it only ever inlines when it can sit
                 // on the current line without wrapping at all - if it doesn't fit, it starts fresh
                 // with the full window width to wrap into, same as any other wrapped paragraph.
-                if (prevRightX + spacing + ImGui.CalcTextSize(text).X <= rightEdge)
+                if (prevPos.X + spacing + ImGui.CalcTextSize(text).X <= rightEdge)
                 {
-                    ImGui.SameLine(0, spacing);
-                    // SameLine() picks its own X from ImGui's internal "previous item" tracking, which
-                    // for a wrapped multi-line widget is the *widest* line's right edge, not
-                    // necessarily prevRightX (which could itself already be the corrected last-line
-                    // measurement from an earlier wrapped paragraph) - forcing it here keeps the two
-                    // from ever disagreeing. Y is left exactly as SameLine() set it (same-row baseline
-                    // alignment is the one thing it always gets right).
-                    ImGui.SetCursorPosX(prevRightX + spacing);
+                    // Explicit SetCursorPos rather than plain SameLine(0, spacing): ImGui's own
+                    // "previous item" tracking used by SameLine() sets both X *and* Y from the
+                    // previous item's own bounding box - for a wrapped multi-line widget that's the
+                    // *widest* line's right edge, and the *top* of the whole block (its first line),
+                    // neither of which is prevPos when prevPos came from a corrected last-line
+                    // measurement (see below). Trusting SameLine() alone here was tried first and
+                    // reported live as either wrapping character-by-character (X only fixed, Y still
+                    // at the block's top put the token's PushTextWrapPos start almost at rightEdge) or
+                    // drawing on top of the paragraph's first line (Y never corrected at all).
+                    ImGui.SetCursorPos(prevPos + new Vector2(spacing, 0));
                 }
             }
 
@@ -530,33 +535,37 @@ public static class ChatMessageRenderer
             // internally.
             var itemMin = ImGui.GetItemRectMin();
             var itemMax = ImGui.GetItemRectMax();
-            var windowX = ImGui.GetWindowPos().X;
             var renderedHeight = itemMax.Y - itemMin.Y;
 
             if (renderedHeight <= ImGui.GetTextLineHeight() * 1.5f)
             {
-                // Single line - GetItemRectMax() is exact.
-                inlineX = itemMax.X - windowX;
+                // Single line - GetItemRectMin()/Max() are exact.
+                inlinePos = new Vector2(itemMax.X, itemMin.Y) - windowPos;
             }
             else
             {
                 // Wrapped to multiple lines - GetItemRectMax().X reports the *widest* line's right
-                // edge, not the true last line's, since a widget's item rect is one axis-aligned box
-                // covering every line. Reported live: a link right after a long, wrapped paragraph
-                // always started on a fresh line even when the paragraph's actual last line had
-                // plenty of room, because this used to just give up on inlining entirely the moment a
-                // run wrapped at all. MeasureLastLineWidth simulates the same greedy word-wrap ImGui
-                // itself just used to find where that last line really ends, so inlining after a
-                // wrapped paragraph is finally possible instead of forcing every link/emote right
-                // after one onto its own line unconditionally.
-                var leftX = itemMin.X - windowX;
+                // edge, not the true last line's, and GetItemRectMin().Y is the *top of the whole
+                // block* (its first line), not the last one - a widget's item rect is one
+                // axis-aligned box covering every line, so neither coordinate alone describes where
+                // the true last line sits. Reported live: a link right after a long, wrapped
+                // paragraph always started on a fresh line even when the paragraph's actual last line
+                // had plenty of room, because this used to just give up on inlining entirely the
+                // moment a run wrapped at all. MeasureLastLineWidth simulates the same greedy
+                // word-wrap ImGui itself just used to find where that last line really ends
+                // horizontally; its top Y is one line height above the block's bottom (every wrapped
+                // line here is exactly one font line tall, no extra spacing between them) - so
+                // inlining after a wrapped paragraph is finally possible instead of forcing every
+                // link/emote right after one onto its own line unconditionally.
+                var leftX = itemMin.X - windowPos.X;
                 var wrapWidth = rightEdge - leftX;
-                inlineX = leftX + MeasureLastLineWidth(text, wrapWidth);
+                var lastLineTopY = itemMax.Y - ImGui.GetTextLineHeight() - windowPos.Y;
+                inlinePos = new Vector2(leftX + MeasureLastLineWidth(text, wrapWidth), lastLineTopY);
             }
         }
 
         // Extracted so it can be called once per plain-text stretch *between* map/item links below,
-        // instead of just once for the whole body - everything else about it (including inlineX
+        // instead of just once for the whole body - everything else about it (including inlinePos
         // and the plain StringBuilder) is unchanged, still closed over from the outer scope.
         void ProcessSegment(string segment)
         {
@@ -566,7 +575,7 @@ public static class ChatMessageRenderer
                 if (span.IsLink)
                 {
                     FlushPlain();
-                    inlineX = DrawLink(text, config, rightEdge, inlineX);
+                    inlinePos = DrawLink(text, config, rightEdge, inlinePos);
                     continue;
                 }
 
@@ -583,7 +592,7 @@ public static class ChatMessageRenderer
                     if (word.Length > 2 && word[0] == ':' && word[^1] == ':' && emotes.IsKnownEmote(word[1..^1]))
                     {
                         FlushPlain();
-                        inlineX = DrawEmote(word[1..^1], word, config, emotes, rightEdge, inlineX);
+                        inlinePos = DrawEmote(word[1..^1], word, config, emotes, rightEdge, inlinePos);
                     }
                     else
                     {
@@ -616,17 +625,17 @@ public static class ChatMessageRenderer
 
             FlushPlain();
             var linkText = body.Substring(link.Start, link.Length);
-            inlineX = link switch
+            inlinePos = link switch
             {
                 { Type: ChatPayloadLinkType.MapLink, MapLink: not null } =>
-                    DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, inlineX),
+                    DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, inlinePos),
                 { Type: ChatPayloadLinkType.PartyFinder, PartyFinder: not null } =>
-                    DrawPartyFinderLink(linkText, link.PartyFinder, onOpenPartyFinderLink, rightEdge, inlineX),
+                    DrawPartyFinderLink(linkText, link.PartyFinder, onOpenPartyFinderLink, rightEdge, inlinePos),
                 { Type: ChatPayloadLinkType.Quest, Quest: not null } =>
-                    DrawQuestLink(linkText, link.Quest, onOpenQuestLink, rightEdge, inlineX),
+                    DrawQuestLink(linkText, link.Quest, onOpenQuestLink, rightEdge, inlinePos),
                 { Type: ChatPayloadLinkType.AutoTranslate } =>
-                    DrawAutoTranslateSpan(linkText, notificationService, rightEdge, inlineX),
-                _ => DrawItemLink(linkText, link.Item, itemTooltipService, itemContextService, $"itemlinkctx_{messageIndex}_{link.Start}", rightEdge, inlineX),
+                    DrawAutoTranslateSpan(linkText, notificationService, rightEdge, inlinePos),
+                _ => DrawItemLink(linkText, link.Item, itemTooltipService, itemContextService, $"itemlinkctx_{messageIndex}_{link.Start}", rightEdge, inlinePos),
             };
 
             cursor = link.Start + link.Length;
@@ -678,29 +687,26 @@ public static class ChatMessageRenderer
     }
 
     /// <summary>Draws one emote token, inlining after the previous item only when <paramref
-    /// name="inlineX"/> (see <see cref="DrawBody"/>) says that's safe. Returns the token's own trailing
-    /// edge X for the next item to inline against - always known, since a single emote image never
+    /// name="inlinePos"/> (see <see cref="DrawBody"/>) says that's safe. Returns the token's own
+    /// position for the next item to inline against - always known, since a single emote image never
     /// wraps onto more than one line. <paramref name="code"/> (no colons) is what actually looks up the
     /// texture; <paramref name="originalToken"/> (the colon-wrapped ":cat:" as typed) is only used for
     /// the "texture not loaded yet" fallback text, so that momentary state still reads as the emote the
     /// player typed rather than the bare code with its colons silently stripped.</summary>
-    private static float DrawEmote(string code, string originalToken, Configuration config, EmoteService emotes, float rightEdge, float? inlineX)
+    private static Vector2 DrawEmote(string code, string originalToken, Configuration config, EmoteService emotes, float rightEdge, Vector2? inlinePos)
     {
         var texture = emotes.TryGetTexture(code);
         var lineHeight = ImGui.GetTextLineHeight() * config.EmoteScale;
         var size = new Vector2(lineHeight, lineHeight);
 
-        if (inlineX is { } prevRightX)
+        if (inlinePos is { } prevPos)
         {
             var spacing = ImGui.GetStyle().ItemSpacing.X;
-            if (prevRightX + spacing + size.X <= rightEdge)
-            {
-                // See FlushPlain's own comment on the matching SetCursorPosX call - SameLine() alone
-                // can't be trusted to land on prevRightX when it came from a wrapped paragraph's
+            if (prevPos.X + spacing + size.X <= rightEdge)
+                // See FlushPlain's own comment on the matching SetCursorPos call - SameLine() alone
+                // can't be trusted to land on prevPos when it came from a wrapped paragraph's
                 // measured last line rather than a plain single-line item.
-                ImGui.SameLine(0, spacing);
-                ImGui.SetCursorPosX(prevRightX + spacing);
-            }
+                ImGui.SetCursorPos(prevPos + new Vector2(spacing, 0));
         }
 
         if (texture != null)
@@ -708,38 +714,35 @@ public static class ChatMessageRenderer
         else
             ImGui.TextUnformatted(originalToken);
 
-        return ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+        return new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - ImGui.GetWindowPos();
     }
 
     /// <summary>
-    /// Draws one link, inlining after the previous item only when <paramref name="inlineX"/> (see
-    /// <see cref="DrawBody"/>) says that's safe. Returns this link's own trailing edge X for the next
-    /// item to inline against, or null if this link itself ended up wrapped to multiple lines (rare - a
-    /// single overlong token with no spaces to break on cleanly).
+    /// Draws one link, inlining after the previous item only when <paramref name="inlinePos"/> (see
+    /// <see cref="DrawBody"/>) says that's safe. Returns this link's own position for the next item to
+    /// inline against, or null if this link itself ended up wrapped to multiple lines (rare - a single
+    /// overlong token with no spaces to break on cleanly).
     /// </summary>
-    private static float? DrawLink(string token, Configuration config, float rightEdge, float? inlineX)
+    private static Vector2? DrawLink(string token, Configuration config, float rightEdge, Vector2? inlinePos)
     {
         if (!config.OpenLinksOnClick)
         {
             ImGui.TextUnformatted(token);
-            return ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+            return new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - ImGui.GetWindowPos();
         }
 
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var tokenWidth = ImGui.CalcTextSize(token).X;
-        if (inlineX is { } prevRightX)
+        if (inlinePos is { } prevPos)
         {
-            if (prevRightX + spacing + tokenWidth <= rightEdge)
-            {
-                // See FlushPlain's own comment on the matching SetCursorPosX call - without this,
-                // a link placed right after a wrapped paragraph lands wherever ImGui's own internal
-                // "previous item" tracking says (the paragraph's *widest* line, not prevRightX), which
-                // can leave almost no room before rightEdge and make this same link wrap character by
-                // character below - reported live as the message ballooning into a huge column of
-                // single characters.
-                ImGui.SameLine(0, spacing);
-                ImGui.SetCursorPosX(prevRightX + spacing);
-            }
+            if (prevPos.X + spacing + tokenWidth <= rightEdge)
+                // See FlushPlain's own comment on the matching SetCursorPos call - without this, a
+                // link placed right after a wrapped paragraph lands wherever ImGui's own internal
+                // "previous item" tracking says (the paragraph's widest line's X, its first line's Y),
+                // which can leave almost no room before rightEdge and make this same link wrap
+                // character by character below, or draw on top of the paragraph's own first line -
+                // reported live as both, in turn.
+                ImGui.SetCursorPos(prevPos + new Vector2(spacing, 0));
         }
 
         var fullWidth = rightEdge - ImGui.GetCursorPosX();
@@ -760,29 +763,29 @@ public static class ChatMessageRenderer
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
             Util.OpenLink(LinkDetector.NormalizeForBrowser(token));
 
-        return needsWrap ? null : ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+        return needsWrap ? null : new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - ImGui.GetWindowPos();
     }
 
     /// <summary>Draws a map/flag coordinate link - clicking opens the map at that location via
     /// <see cref="Dalamud.Plugin.Services.IGameGui.OpenMapWithMapLink(MapLinkPayload)"/>, using the
     /// original payload captured at message-receive time (see <see cref="ChatPayloadLink"/>) rather
     /// than re-deriving territory/coordinates from the display text.</summary>
-    private static float? DrawMapLink(string text, MapLinkPayload payload, Action<MapLinkPayload> onOpenMapLink, float rightEdge, float? inlineX) =>
-        DrawColoredLinkToken(text, MapLinkColor, "Open on the map", () => onOpenMapLink(payload), rightEdge, inlineX);
+    private static Vector2? DrawMapLink(string text, MapLinkPayload payload, Action<MapLinkPayload> onOpenMapLink, float rightEdge, Vector2? inlinePos) =>
+        DrawColoredLinkToken(text, MapLinkColor, "Open on the map", () => onOpenMapLink(payload), rightEdge, inlinePos);
 
     /// <summary>Draws a Party Finder listing link - clicking opens the native listing detail directly
     /// via <see cref="Services.PartyFinderLinkService"/>, using the original payload's <c>ListingId</c>
     /// captured at message-receive time (see <see cref="ChatPayloadLink"/>), same as clicking it in the
     /// native chat log would.</summary>
-    private static float? DrawPartyFinderLink(string text, PartyFinderPayload payload, Action<PartyFinderPayload> onOpenPartyFinderLink, float rightEdge, float? inlineX) =>
-        DrawColoredLinkToken(text, PartyFinderLinkColor, "Open this Party Finder listing", () => onOpenPartyFinderLink(payload), rightEdge, inlineX);
+    private static Vector2? DrawPartyFinderLink(string text, PartyFinderPayload payload, Action<PartyFinderPayload> onOpenPartyFinderLink, float rightEdge, Vector2? inlinePos) =>
+        DrawColoredLinkToken(text, PartyFinderLinkColor, "Open this Party Finder listing", () => onOpenPartyFinderLink(payload), rightEdge, inlinePos);
 
     /// <summary>Draws a quest link - clicking jumps straight to it in the native Quest Journal via
     /// <see cref="Services.QuestLinkService"/>, using the original payload captured at message-receive
     /// time (see <see cref="ChatPayloadLink"/>) rather than re-deriving the quest id from the display
     /// text.</summary>
-    private static float? DrawQuestLink(string text, QuestPayload payload, Action<QuestPayload> onOpenQuestLink, float rightEdge, float? inlineX) =>
-        DrawColoredLinkToken(text, QuestLinkColor, "Open in Quest Journal", () => onOpenQuestLink(payload), rightEdge, inlineX);
+    private static Vector2? DrawQuestLink(string text, QuestPayload payload, Action<QuestPayload> onOpenQuestLink, float rightEdge, Vector2? inlinePos) =>
+        DrawColoredLinkToken(text, QuestLinkColor, "Open in Quest Journal", () => onOpenQuestLink(payload), rightEdge, inlinePos);
 
     /// <summary>The minion name added as an easter egg (2026-08-17) after it turned out to be missing
     /// from the auto-translate picker entirely before the sheet-expansion work - see
@@ -799,7 +802,7 @@ public static class ChatMessageRenderer
     /// coloured distinctly so it reads as a game phrase rather than something the sender typed.
     /// Clicking always copies the text to clipboard like any other coloured token here, plus a small
     /// easter egg: the "Fat Cat" phrase specifically also pops a notification.</summary>
-    private static float? DrawAutoTranslateSpan(string text, NotificationService notificationService, float rightEdge, float? inlineX)
+    private static Vector2? DrawAutoTranslateSpan(string text, NotificationService notificationService, float rightEdge, Vector2? inlinePos)
     {
         void OnClick()
         {
@@ -815,7 +818,7 @@ public static class ChatMessageRenderer
                 notificationService.Show("Meow! You found the Fat Cat easter egg.", NotificationSeverity.Success);
         }
 
-        return DrawColoredLinkToken(text, AutoTranslateColor, "Auto-translate phrase\nClick to copy", OnClick, rightEdge, inlineX);
+        return DrawColoredLinkToken(text, AutoTranslateColor, "Auto-translate phrase\nClick to copy", OnClick, rightEdge, inlinePos);
     }
 
     /// <summary>Draws an item link - hovering it opens the real native item detail/tooltip window
@@ -825,8 +828,8 @@ public static class ChatMessageRenderer
     /// <paramref name="payload"/> is null if extraction somehow didn't capture one for this span
     /// (shouldn't normally happen) - falls back to the old plain "click to copy" behaviour with no
     /// native tooltip/menu rather than risk calling into either service with nothing to show.</summary>
-    private static float? DrawItemLink(string text, ItemPayload? payload, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string popupId, float rightEdge, float? inlineX) =>
-        DrawColoredLinkToken(text, ItemLinkColor, payload != null ? null : $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, inlineX,
+    private static Vector2? DrawItemLink(string text, ItemPayload? payload, ItemTooltipService itemTooltipService, ItemContextService itemContextService, string popupId, float rightEdge, Vector2? inlinePos) =>
+        DrawColoredLinkToken(text, ItemLinkColor, payload != null ? null : $"{text}\nClick to copy the item name", () => ImGui.SetClipboardText(text), rightEdge, inlinePos,
             // ImGui.GetWindowPos() has to be read right here, inside the hover check - it reflects
             // whatever window/child is currently drawing, so reading it later (e.g. inside
             // ItemTooltipService itself, after this frame's drawing is done) wouldn't be valid.
@@ -864,18 +867,15 @@ public static class ChatMessageRenderer
     /// instead of invoking <paramref name="onClick"/> directly (used by <see cref="DrawItemLink"/> for
     /// its context menu; <see cref="DrawMapLink"/> leaves them null and keeps the immediate-action
     /// behaviour).</summary>
-    private static float? DrawColoredLinkToken(string text, Vector4 color, string? tooltip, Action onClick, float rightEdge, float? inlineX, Action? onHover = null, string? popupId = null, Action? drawPopupContent = null)
+    private static Vector2? DrawColoredLinkToken(string text, Vector4 color, string? tooltip, Action onClick, float rightEdge, Vector2? inlinePos, Action? onHover = null, string? popupId = null, Action? drawPopupContent = null)
     {
         var spacing = ImGui.GetStyle().ItemSpacing.X;
         var tokenWidth = ImGui.CalcTextSize(text).X;
-        if (inlineX is { } prevRightX)
+        if (inlinePos is { } prevPos)
         {
-            if (prevRightX + spacing + tokenWidth <= rightEdge)
-            {
-                // See FlushPlain's own comment on the matching SetCursorPosX call.
-                ImGui.SameLine(0, spacing);
-                ImGui.SetCursorPosX(prevRightX + spacing);
-            }
+            if (prevPos.X + spacing + tokenWidth <= rightEdge)
+                // See FlushPlain's own comment on the matching SetCursorPos call.
+                ImGui.SetCursorPos(prevPos + new Vector2(spacing, 0));
         }
 
         var fullWidth = rightEdge - ImGui.GetCursorPosX();
@@ -913,7 +913,7 @@ public static class ChatMessageRenderer
             ImGui.EndPopup();
         }
 
-        return needsWrap ? null : ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
+        return needsWrap ? null : new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - ImGui.GetWindowPos();
     }
 
     private static Vector4 GetColor(ChatTabConfig tab, XivChatType chatType)
