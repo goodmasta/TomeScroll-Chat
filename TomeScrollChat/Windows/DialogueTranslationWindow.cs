@@ -168,6 +168,17 @@ public sealed class DialogueTranslationWindow : Window
         {
             if (child.Success)
             {
+                // Captured *before* drawing this frame's content, using last frame's settled scroll
+                // range - reflects wherever the player actually left the scroll position, including a
+                // manual mouse-wheel scroll from this very frame (ImGui applies wheel input to the
+                // hovered child before its content is submitted). This is what makes manual scroll-up
+                // work at all: unconditionally re-pinning to the bottom every frame (tried first, per
+                // an earlier explicit request) fought the player's own scrolling and made it impossible
+                // to read anything older - reported live as broken. Now only auto-follows new content
+                // down when the player was already at the bottom to begin with; scrolling up at all
+                // immediately stops the auto-follow until they scroll back down themselves.
+                var wasAtBottom = !searchMode && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f;
+
                 foreach (var entry in displayEntries)
                 {
                     var kindLabel = entry.Kind switch
@@ -188,16 +199,7 @@ public sealed class DialogueTranslationWindow : Window
                     ImGui.Spacing();
                 }
 
-                // Pinned to the true maximum every single frame (not just once when a new entry
-                // arrives) - per explicit user request for the strongest possible "always at the very
-                // bottom" behaviour, and simpler/more robust than trying to catch the one right frame:
-                // ImGui only finalizes a child's content size/ScrollMaxY at the end of the frame it was
-                // submitted in, so a same-frame or even one-frame-deferred jump can still occasionally
-                // undershoot while content is still settling (e.g. a translation streaming in over
-                // several frames) - reasserting the max every frame self-corrects immediately either
-                // way, and is a no-op once nothing's changing. Skipped while actively filtering - would
-                // otherwise fight the player's own scroll position while reading search results.
-                if (!searchMode)
+                if (wasAtBottom)
                     ImGui.SetScrollY(ImGui.GetScrollMaxY());
             }
         }
