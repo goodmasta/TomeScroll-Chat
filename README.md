@@ -13,7 +13,7 @@ Not affiliated with Square Enix, Twitch, BetterTTV, 7TV or Google.
 1. In-game: `/xlsettings` → **Experimental** → **Custom Plugin Repositories** → add:
    `https://raw.githubusercontent.com/goodmasta/TomeScroll-Chat/main/pluginmaster.json`
 2. `/xlplugins` → find **TomeScroll Chat** → Install.
-3. Use `/tomescroll` to bring up the chat window, `/tomescroll config` for settings.
+3. Use `/tomescrollc` to bring up the chat window, `/tomescrollc config` for settings.
 
 Details and building from source: see [Installing](#installing) below.
 
@@ -49,8 +49,8 @@ Details and building from source: see [Installing](#installing) below.
 
 | Command | Effect |
 |---|---|
-| `/tomescroll` | Bring the main chat window to front. |
-| `/tomescroll config` | Open the settings window. |
+| `/tomescrollc` | Bring the main chat window to front. |
+| `/tomescrollc config` | Open the settings window. |
 
 The main chat window itself has no close button and can't be hidden by Dalamud's own "Toggle UI" hotkey - it's meant to always be visible, like the game's own chat log.
 
@@ -127,7 +127,7 @@ All AI actions only ever fill the compose box - none of them send anything autom
 - "Clear history..." wipes everything, with a confirmation prompt. Live on-disk size shown in Settings.
 - Right-click a tab → **Export to file...** dumps its entire stored history to a plain-text file.
 
-## Settings window (`/tomescroll config`)
+## Settings window (`/tomescrollc config`)
 
 - **General** - native chat hiding, whisper window behaviour, screenshot mode, translation target language, unread colours, friend marker, font size, history size cap.
 - **Tabs** - create/rename/delete tabs, channels, filters, colours, icons, pop out/reattach.

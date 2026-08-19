@@ -294,7 +294,7 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
         return false;
     }
 
-    /// <summary>"/tomescroll frienddebug" - lets testing this feature not depend on catching a real
+    /// <summary>"/tomescrollc frienddebug" - lets testing this feature not depend on catching a real
     /// friend actually logging in/out, or needing a second account: (1) dumps every friend list entry
     /// this plugin can currently see, with its resolved online/offline *and duty* state, to <c>/xllog</c> -
     /// compare this against what the native Friend List UI shows the same friends as, to check the read

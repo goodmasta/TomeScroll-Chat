@@ -26,7 +26,7 @@
   </ItemGroup>
 
   <!-- Embeds the current git commit hash into the assembly via AssemblyMetadataAttribute, read back
-       by Plugin.PrintVersion ("/tomescroll version"). <Version> above is hand-set and rarely bumped
+       by Plugin.PrintVersion ("/tomescrollc version"). <Version> above is hand-set and rarely bumped
        between commits, so on its own it can't answer "which commit is this build" - the commit hash
        always can, since it changes on every commit regardless of whether Version was touched. Falls
        back to "unknown" (not a build failure) if git isn't on PATH or this isn't a git checkout. -->

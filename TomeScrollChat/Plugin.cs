@@ -36,7 +36,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
 
-    private const string CommandName = "/tomescroll";
+    private const string CommandName = "/tomescrollc";
 
     internal static Configuration Configuration { get; private set; } = null!;
 
@@ -150,7 +150,7 @@ public sealed class Plugin : IDalamudPlugin
 
         commandInfo = new CommandInfo(OnCommand)
         {
-            HelpMessage = "Open the TomeScroll Chat window. Use '/tomescroll config' for settings, '/tomescroll version' to check the loaded build, '/tomescroll frienddebug' to test friend online/offline notifications.",
+            HelpMessage = "Open the TomeScroll Chat window. Use '/tomescrollc config' for settings, '/tomescrollc version' to check the loaded build, '/tomescrollc frienddebug' to test friend online/offline notifications.",
         };
         CommandManager.AddHandler(CommandName, commandInfo);
 
@@ -177,7 +177,7 @@ public sealed class Plugin : IDalamudPlugin
 
         RefreshEmotes();
 
-        // Logs the same info "/tomescroll version" prints to chat, once at startup - so which build is
+        // Logs the same info "/tomescrollc version" prints to chat, once at startup - so which build is
         // actually running is visible straight in /xllog, without needing to remember to run the
         // command every time after a rebuild (this exact gap cost several debugging rounds earlier).
         Log.Info(BuildVersionString());
@@ -626,7 +626,7 @@ public sealed class Plugin : IDalamudPlugin
         ToggleMainUi();
     }
 
-    /// <summary>"/tomescroll version" - shows the loaded assembly's version and its on-disk build time
+    /// <summary>"/tomescrollc version" - shows the loaded assembly's version and its on-disk build time
     /// as a popup toast (<see cref="NotificationService"/>), not a chat line - easier to actually
     /// notice, and doesn't get lost/scrolled past in whichever tab happens to be selected. Given a
     /// longer-than-default duration since this is diagnostic text meant to actually be read, not just
@@ -634,7 +634,7 @@ public sealed class Plugin : IDalamudPlugin
     /// is actually running is visible in /xllog without needing to run this command at all.</summary>
     private void PrintVersion() => NotificationService.Show(BuildVersionString(), NotificationSeverity.Info, TimeSpan.FromSeconds(12));
 
-    /// <summary>Builds the "/tomescroll version" string. The assembly's Version rarely changes between
+    /// <summary>Builds the "/tomescrollc version" string. The assembly's Version rarely changes between
     /// commits in this project (it's not bumped per-build), so on its own it can't answer "is this
     /// actually the build I just compiled" - the file's last-write time can, since that changes on
     /// every rebuild. Uses <see cref="IDalamudPluginInterface.AssemblyLocation"/>, not
