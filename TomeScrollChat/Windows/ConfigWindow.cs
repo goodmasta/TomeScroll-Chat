@@ -1149,6 +1149,14 @@ public sealed class ConfigWindow : Window, IDisposable
 
         using (ImRaii.Disabled(!configuration.FriendOnlineNotifyEnabled))
         {
+            var dutyEnabled = configuration.FriendDutyNotifyEnabled;
+            if (ImGui.Checkbox("Also notify when a watched friend enters or leaves a duty", ref dutyEnabled))
+            {
+                configuration.FriendDutyNotifyEnabled = dutyEnabled;
+                configuration.Save();
+            }
+            ImGui.TextDisabled("Specifically for knowing when you can no longer /tell them - a duty (dungeon/raid/trial/etc.) is the concrete case that blocks delivery. Uses the same watched friends as above.");
+
             ImGui.Spacing();
             var watchAll = configuration.FriendOnlineNotifyAll;
             if (ImGui.Checkbox("Watch every friend##friendonlineall", ref watchAll))

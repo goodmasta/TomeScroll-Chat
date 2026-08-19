@@ -180,6 +180,42 @@ public sealed unsafe class FriendListService
         }
     }
 
+    /// <summary>Whether a friend is currently in a duty (dungeon/raid/trial/etc.) - null on the same
+    /// terms as <see cref="IsOnline"/>. <c>CharacterData.State</c>'s <c>OnlineStatus.InDuty</c> bit
+    /// (confirmed via the metadata-reading technique, part of the same flags enum <see cref="IsOnline"/>
+    /// already reads) - added per explicit user request for a notification when a friend enters/leaves
+    /// a duty, since that's specifically when a <c>/tell</c> to them stops being deliverable ("the
+    /// target does not currently reside in this world"-style failure). Deliberately not
+    /// <c>SharingDuty</c>/<c>SimilarDuty</c> (which describe *this player's* relationship to the
+    /// friend's duty, not whether the friend themselves is in one).</summary>
+    public bool? IsInDuty(string name, string world)
+    {
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
+            return null;
+
+        try
+        {
+            var worldId = worldIdResolver.Resolve(world);
+            if (worldId == null)
+                return null;
+
+            var proxy = InfoProxyFriendList.Instance();
+            if (proxy == null)
+                return null;
+
+            var entry = proxy->GetEntryByName(name, worldId.Value);
+            if (entry == null || entry->ContentId == 0)
+                return null;
+
+            return (entry->State & InfoProxyCommonList.CharacterData.OnlineStatus.InDuty) != 0;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: duty-status lookup failed for {Name}@{World}", name, world);
+            return null;
+        }
+    }
+
     /// <summary>Asks the game to re-fetch friend list data from the server right now, independent of
     /// whether the native Friend List addon is open/visible - <c>InfoProxyFriendList.RequestData()</c>
     /// (confirmed via the metadata tool: returns <c>Boolean</c>, and the type carries its own

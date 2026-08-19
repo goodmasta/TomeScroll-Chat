@@ -79,6 +79,18 @@ public class Configuration : IPluginConfiguration
     /// UI flash the player should opt into, not something that just starts happening.</summary>
     public bool FriendOnlineNotifyEnabled { get; set; }
 
+    /// <summary>Additional notification layered onto the same watched set
+    /// (<see cref="FriendOnlineNotifyAll"/>/<see cref="FriendOnlineNotifyKeys"/>) and the same periodic
+    /// check <see cref="FriendOnlineNotifyEnabled"/> already drives - pops a toast when a watched friend
+    /// enters or leaves a duty (dungeon/raid/trial/etc., <c>OnlineStatus.InDuty</c>), added per explicit
+    /// user request specifically for "know when I can no longer /tell this friend" (a duty is the
+    /// concrete case that actually blocks tell delivery, as opposed to a vaguer "restricted area" notion
+    /// with no confirmed matching game-data flag). Only takes effect while
+    /// <see cref="FriendOnlineNotifyEnabled"/> (the master switch for the whole watcher - polling, the
+    /// login auto-open, etc.) is also on, but is its own separate checkbox - lets online/offline
+    /// notifications stay on without duty ones, e.g. Off by default.</summary>
+    public bool FriendDutyNotifyEnabled { get; set; }
+
     /// <summary>When on, every current friend is watched (see <see cref="FriendOnlineNotifyEnabled"/>)
     /// regardless of <see cref="FriendOnlineNotifyKeys"/> - "Select All" in Settings > Players sets
     /// this rather than snapshotting every current friend's key into that set, so a friend added later
@@ -345,6 +357,7 @@ public class Configuration : IPluginConfiguration
         WhisperNotifyColor = defaults.WhisperNotifyColor;
         FriendMarkerEnabled = defaults.FriendMarkerEnabled;
         FriendOnlineNotifyEnabled = defaults.FriendOnlineNotifyEnabled;
+        FriendDutyNotifyEnabled = defaults.FriendDutyNotifyEnabled;
         // Fixed 2026-08-17 (found during a full-codebase cleanup audit): this was the one property
         // missing from this list - "watch all friends" stayed stuck at whatever it was before a
         // settings reset instead of returning to its false default, unlike every other preference here.

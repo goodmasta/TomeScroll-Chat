@@ -13,7 +13,10 @@ namespace TomeScrollChat.Services;
 /// <see cref="Configuration.FriendOnlineNotifyKeys"/> select (see <see cref="FriendListService.IsOnline"/>
 /// for the underlying data source) and pops a <see cref="NotificationService"/> toast the moment one's
 /// online/offline state flips - entirely inert while <see cref="Configuration.FriendOnlineNotifyEnabled"/>
-/// is off.
+/// is off. Same watched set/check cycle also optionally notifies on duty enter/leave (see
+/// <see cref="Configuration.FriendDutyNotifyEnabled"/>, <see cref="FriendListService.IsInDuty"/>) -
+/// added per explicit user request for "know when I can no longer /tell this friend," which a duty
+/// concretely blocks.
 ///
 /// <para>Checked every <see cref="CheckInterval"/> via <see cref="IFramework.Update"/> (not every single
 /// frame - online status changes rarely enough that a few seconds of latency is unnoticeable, and
@@ -72,6 +75,13 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
     private readonly NotificationService notificationService;
 
     private readonly Dictionary<string, bool> lastKnownOnline = new();
+
+    /// <summary>Same baseline-tracking shape/reasoning as <see cref="lastKnownOnline"/> (see its own
+    /// "Fixed 2026-08-17" note - an unseen key starts as <c>false</c>, not "unknown", so a friend
+    /// already mid-duty the first time they're checked notifies immediately instead of waiting for the
+    /// *next* transition), backing <see cref="Configuration.FriendDutyNotifyEnabled"/>.</summary>
+    private readonly Dictionary<string, bool> lastKnownInDuty = new();
+
     private DateTime lastCheck = DateTime.MinValue;
     private DateTime? pendingShowAt;
 
@@ -230,6 +240,35 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
             }
 
             lastKnownOnline[key] = isOnline.Value;
+
+            // Added per explicit user request: a separate notification specifically for "can I still
+            // /tell this friend" - a duty is the concrete case that blocks delivery, unlike a vaguer
+            // "restricted area" idea with no confirmed matching flag (see FriendListService.IsInDuty's
+            // own doc comment). Only checked while online - an offline friend can't meaningfully be
+            // "in a duty" from this plugin's perspective, and resetting the baseline to false here means
+            // a friend who logs back in already mid-duty still notifies fresh, same reasoning as
+            // lastKnownOnline's own baseline handling above.
+            if (configuration.FriendDutyNotifyEnabled)
+            {
+                if (isOnline.Value)
+                {
+                    var isInDuty = friendListService.IsInDuty(name, world) ?? false;
+                    var wasInDuty = lastKnownInDuty.GetValueOrDefault(key, false);
+                    if (wasInDuty != isInDuty)
+                    {
+                        log.Info("TomeScrollChat: friend-watch detected a duty-status change for {Key}: {Was} -> {Now}", key, wasInDuty, isInDuty);
+                        notificationService.Show(
+                            isInDuty ? $"{name} entered a duty - can't be messaged right now." : $"{name} left the duty.",
+                            NotificationSeverity.Info);
+                    }
+
+                    lastKnownInDuty[key] = isInDuty;
+                }
+                else
+                {
+                    lastKnownInDuty[key] = false;
+                }
+            }
         }
 
         // Fixed 2026-08-17, per explicit user request: skipped entirely while the player has
@@ -257,11 +296,14 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
 
     /// <summary>"/tomescroll frienddebug" - lets testing this feature not depend on catching a real
     /// friend actually logging in/out, or needing a second account: (1) dumps every friend list entry
-    /// this plugin can currently see, with its resolved online/offline state, to <c>/xllog</c> - compare
-    /// this against what the native Friend List UI shows the same friends as, to check the read side
-    /// independently of any transition; (2) unconditionally shows a notification for every currently-
-    /// watched friend's *current* state (not gated on it having changed, unlike <see cref="CheckFriends"/>'s
-    /// normal path) - confirms the notification pipeline itself end to end without waiting for one.</summary>
+    /// this plugin can currently see, with its resolved online/offline *and duty* state, to <c>/xllog</c> -
+    /// compare this against what the native Friend List UI shows the same friends as, to check the read
+    /// side independently of any transition (also the fastest way to confirm live whether
+    /// <see cref="FriendListService.IsInDuty"/>'s <c>OnlineStatus.InDuty</c> bit actually flips when a
+    /// watched friend enters/leaves one - have them do so and re-run this); (2) unconditionally shows a
+    /// notification for every currently-watched friend's *current* state (not gated on it having
+    /// changed, unlike <see cref="CheckFriends"/>'s normal path) - confirms the notification pipeline
+    /// itself end to end without waiting for one.</summary>
     public void DebugCheckAndNotify()
     {
         var allFriends = friendListService.GetAllFriends();
@@ -272,11 +314,19 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
             if (at <= 0)
                 continue;
 
-            var isOnline = friendListService.IsOnline(key[..at], key[(at + 1)..]);
-            log.Info("TomeScrollChat:   {Key} - {Status}", key, isOnline switch
+            var name = key[..at];
+            var world = key[(at + 1)..];
+            var isOnline = friendListService.IsOnline(name, world);
+            var isInDuty = friendListService.IsInDuty(name, world);
+            log.Info("TomeScrollChat:   {Key} - {Status}, duty: {DutyStatus}", key, isOnline switch
             {
                 true => "online",
                 false => "offline",
+                null => "unknown (lookup failed)",
+            }, isInDuty switch
+            {
+                true => "yes",
+                false => "no",
                 null => "unknown (lookup failed)",
             });
         }
@@ -298,11 +348,13 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
                 continue;
 
             var name = key[..at];
-            var isOnline = friendListService.IsOnline(name, key[(at + 1)..]);
+            var world = key[(at + 1)..];
+            var isOnline = friendListService.IsOnline(name, world);
+            var isInDuty = friendListService.IsInDuty(name, world);
             notificationService.Show(
                 isOnline switch
                 {
-                    true => $"Friend debug: {name} is online.",
+                    true => $"Friend debug: {name} is online (duty: {(isInDuty == true ? "yes" : isInDuty == false ? "no" : "?")}).",
                     false => $"Friend debug: {name} is offline.",
                     null => $"Friend debug: {name} - lookup failed (not a friend, or friend list data not loaded yet).",
                 },
