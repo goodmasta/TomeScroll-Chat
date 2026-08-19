@@ -837,18 +837,28 @@ public sealed class MainWindow : Window, IDisposable
         if (orderedTabs.Count > 0)
             ImGui.Spacing();
 
+        // "Close All PM" itself moved to DrawContent, right above the input row (per explicit user
+        // request - "above the emoji button") - see DrawCloseAllPmButtonForTabsLayout.
+        ImGui.Separator();
+    }
+
+    /// <summary>"Close All PM", drawn only in <see cref="TabLayoutMode.Tabs"/> - moved out of
+    /// <see cref="DrawBrowserTabStrip"/> (where it used to sit right under the tab strip) to its own row
+    /// directly above <see cref="DrawInputRow"/>, per explicit user request ("above the emoji button" -
+    /// the emote-picker icon lives at the right end of that same input row). The Sidebar layout keeps
+    /// its own separate copy of this button at the bottom of <see cref="DrawSidebar"/>, untouched.</summary>
+    private void DrawCloseAllPmButtonForTabsLayout()
+    {
         var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
         using (ImRaii.Disabled(!hasPmTabs))
         {
-            if (ImGui.Button("Close All PM"))
+            if (ImGui.Button("Close All PM", new Vector2(-1, 0)))
             {
                 plugin.CloseAllWhisperTabs();
                 if (selectedTabId != null && !plugin.TabManager.Tabs.Any(t => t.Id == selectedTabId))
                     selectedTabId = null;
             }
         }
-
-        ImGui.Separator();
     }
 
     /// <summary>One tab button in <see cref="DrawBrowserTabStrip"/> - a fixed-width Selectable (sized
@@ -1141,6 +1151,13 @@ public sealed class MainWindow : Window, IDisposable
         // gap now visibly reads as a gap against the message area's own border. GetInputRowReserve()
         // (not a single frame height) since the input is a multi-line, auto-growing box, see DrawInputRow.
         var bottomReserve = GetInputRowReserve() + TightRowSpacing;
+
+        // Tabs layout draws an extra "Close All PM" row directly above the input row (see
+        // DrawCloseAllPmButtonForTabsLayout) - one frame height plus the same gap every other row here
+        // uses, or the Messages child below would claim that space and the button would get squeezed
+        // against/under the input row instead of sitting cleanly above it.
+        if (Plugin.Configuration.TabLayout == TabLayoutMode.Tabs)
+            bottomReserve += ImGui.GetFrameHeight() + TightRowSpacing;
         using (var child = ImRaii.Child("Messages", new Vector2(0, -bottomReserve), true))
         {
             if (child.Success)
@@ -1198,6 +1215,8 @@ public sealed class MainWindow : Window, IDisposable
         // have to stay in sync.
         var itemSpacing = ImGui.GetStyle().ItemSpacing;
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(itemSpacing.X, TightRowSpacing));
+        if (Plugin.Configuration.TabLayout == TabLayoutMode.Tabs)
+            DrawCloseAllPmButtonForTabsLayout();
         DrawInputRow(tab);
         ImGui.PopStyleVar();
     }
