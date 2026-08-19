@@ -481,11 +481,14 @@ public static class ChatMessageRenderer
         var plain = new StringBuilder();
 
         // The window-relative point where the *previous* thing drawn actually ends, if known safe to
-        // inline after - null means always start a fresh line. X is the trailing edge; Y is the top of
-        // the specific visual *line* being continued (not the widget's own top, for a wrapped
-        // multi-line widget - see FlushPlain). Starts at the sender name's (or timestamp's, if there's
-        // no sender) own position, since the caller already left a pending SameLine() before calling
-        // DrawBody - single-line, so its rect is exact either way.
+        // inline after - null means always start a fresh line. Always the real GetItemRectMin/Max() of
+        // a genuinely single-line widget - never a computed/guessed position (an earlier version tried
+        // to compute where a wrapped paragraph's *last* line ended without actually drawing it as its
+        // own widget; even a small miscalculation there, combined with SetCursorPos below, was reported
+        // live as corrupting every message's position for the rest of the frame, since ImGui's cursor
+        // advances sequentially - see FlushPlain's own "held-back last line" comment for how that's
+        // avoided now). Starts at the sender name's (or timestamp's, if there's no sender) own position,
+        // since the caller already left a pending SameLine() before calling DrawBody.
         var windowPos = ImGui.GetWindowPos();
         Vector2? inlinePos = new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - windowPos;
 
@@ -511,57 +514,67 @@ public static class ChatMessageRenderer
                 // on the current line without wrapping at all - if it doesn't fit, it starts fresh
                 // with the full window width to wrap into, same as any other wrapped paragraph.
                 if (prevPos.X + spacing + ImGui.CalcTextSize(text).X <= rightEdge)
-                {
-                    // Explicit SetCursorPos rather than plain SameLine(0, spacing): ImGui's own
-                    // "previous item" tracking used by SameLine() sets both X *and* Y from the
-                    // previous item's own bounding box - for a wrapped multi-line widget that's the
-                    // *widest* line's right edge, and the *top* of the whole block (its first line),
-                    // neither of which is prevPos when prevPos came from a corrected last-line
-                    // measurement (see below). Trusting SameLine() alone here was tried first and
-                    // reported live as either wrapping character-by-character (X only fixed, Y still
-                    // at the block's top put the token's PushTextWrapPos start almost at rightEdge) or
-                    // drawing on top of the paragraph's first line (Y never corrected at all).
                     ImGui.SetCursorPos(prevPos + new Vector2(spacing, 0));
-                }
             }
+
+            // Whether this run needs to wrap at all from wherever it just got positioned - uses the
+            // *wrapped-height* overload of CalcTextSize (ImGui's own real wrap algorithm, not a
+            // hand-rolled guess) so this can never disagree with what PushTextWrapPos(0f) is about to
+            // render below.
+            var wrapWidth = rightEdge - ImGui.GetCursorPosX();
+            var lineHeight = ImGui.GetTextLineHeight();
+            var totalHeight = ImGui.CalcTextSize(text, false, wrapWidth).Y;
+
+            if (totalHeight <= lineHeight * 1.5f)
+            {
+                ImGui.PushTextWrapPos(0f);
+                ImGui.TextUnformatted(text);
+                ImGui.PopTextWrapPos();
+                inlinePos = new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - windowPos;
+                return;
+            }
+
+            // Multi-line: rather than draw the whole paragraph as one wrapped widget and try to
+            // *retroactively* work out where its true last line ends (tried twice - first a
+            // hand-rolled wrap simulation, then reading the widget's own rect - both were reported
+            // live as computing a Y that didn't quite match reality, and since the next item's cursor
+            // was force-positioned there via SetCursorPos, that error carried forward into every
+            // message drawn afterward in the same frame: "переносится некорректно", and worse, once
+            // reported, "все мои последующие сообщения рендрятся так" - a single bad Y cascaded
+            // through the *entire* rest of the message list, since ImGui's cursor advances
+            // sequentially frame-wide), this holds the true last line back and draws it as its own
+            // ordinary, non-wrapped, single-line widget *after* the rest - completely sidestepping the
+            // need to compute anything: ImGui's normal sequential top-to-bottom flow already puts that
+            // widget in exactly the right place, the same proven-safe mechanism single-line items
+            // already relied on, so its own GetItemRectMax()/Min() are then simply, unquestionably
+            // correct for the next item to inline against - no guessed formula involved anywhere.
+            var words = text.Split(' ').Where(w => w.Length > 0).ToArray();
+            var lo = 1;
+            var hi = words.Length;
+            while (lo < hi)
+            {
+                var mid = (lo + hi) / 2;
+                var prefixHeight = ImGui.CalcTextSize(string.Join(' ', words[..mid]), false, wrapWidth).Y;
+                if (prefixHeight >= totalHeight - lineHeight * 0.5f)
+                    hi = mid;
+                else
+                    lo = mid + 1;
+            }
+
+            // words[lastLineStart - 1] is the word whose addition first pushed the wrapped height up
+            // to the full total - i.e. the first word of the true last line. Can't be 0 here (that
+            // would mean even the very first word alone reaches full height, which the single-line
+            // check above already ruled out for this branch).
+            var lastLineStart = lo - 1;
+            var beforeLastLine = string.Join(' ', words[..lastLineStart]);
 
             ImGui.PushTextWrapPos(0f);
-            ImGui.TextUnformatted(text);
+            ImGui.TextUnformatted(beforeLastLine);
             ImGui.PopTextWrapPos();
 
-            // Use the *actual* rendered rect of the widget we just drew rather than a separately
-            // predicted one (previously via CalcTextSize with a manually-computed wrap width) - that
-            // prediction could disagree with the real wrap boundary PushTextWrapPos(0f) used
-            // internally.
-            var itemMin = ImGui.GetItemRectMin();
-            var itemMax = ImGui.GetItemRectMax();
-            var renderedHeight = itemMax.Y - itemMin.Y;
-
-            if (renderedHeight <= ImGui.GetTextLineHeight() * 1.5f)
-            {
-                // Single line - GetItemRectMin()/Max() are exact.
-                inlinePos = new Vector2(itemMax.X, itemMin.Y) - windowPos;
-            }
-            else
-            {
-                // Wrapped to multiple lines - GetItemRectMax().X reports the *widest* line's right
-                // edge, not the true last line's, and GetItemRectMin().Y is the *top of the whole
-                // block* (its first line), not the last one - a widget's item rect is one
-                // axis-aligned box covering every line, so neither coordinate alone describes where
-                // the true last line sits. Reported live: a link right after a long, wrapped
-                // paragraph always started on a fresh line even when the paragraph's actual last line
-                // had plenty of room, because this used to just give up on inlining entirely the
-                // moment a run wrapped at all. MeasureLastLineWidth simulates the same greedy
-                // word-wrap ImGui itself just used to find where that last line really ends
-                // horizontally; its top Y is one line height above the block's bottom (every wrapped
-                // line here is exactly one font line tall, no extra spacing between them) - so
-                // inlining after a wrapped paragraph is finally possible instead of forcing every
-                // link/emote right after one onto its own line unconditionally.
-                var leftX = itemMin.X - windowPos.X;
-                var wrapWidth = rightEdge - leftX;
-                var lastLineTopY = itemMax.Y - ImGui.GetTextLineHeight() - windowPos.Y;
-                inlinePos = new Vector2(leftX + MeasureLastLineWidth(text, wrapWidth), lastLineTopY);
-            }
+            var lastLine = string.Join(' ', words[lastLineStart..]);
+            ImGui.TextUnformatted(lastLine);
+            inlinePos = new Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMin().Y) - windowPos;
         }
 
         // Extracted so it can be called once per plain-text stretch *between* map/item links below,
@@ -645,53 +658,6 @@ public static class ChatMessageRenderer
             ProcessSegment(body[cursor..]);
 
         FlushPlain();
-    }
-
-    /// <summary>Finds how much horizontal space the *last* visual line of <paramref name="text"/>
-    /// actually uses once wrapped at <paramref name="wrapWidth"/> - the piece of information
-    /// <see cref="ImGui.GetItemRectMax"/> can't give back after the fact, since a wrapped widget's item
-    /// rect is one axis-aligned box covering every line (so its right edge reflects the *widest* line,
-    /// not necessarily the last one).
-    ///
-    /// <para><b>First attempt</b> (reverted the same day): a hand-rolled greedy word-wrap simulation
-    /// (break at whitespace, accumulate word widths, reset on overflow) - reported live as still
-    /// wrapping to a fresh line with visible room left on a long paragraph, meaning the simulated last
-    /// line didn't match what ImGui actually rendered. Any tiny per-word/per-space measurement
-    /// discrepancy between the simulation and ImGui's real wrap algorithm compounds over a long
-    /// paragraph (100+ words here), so by the end the simulated wrap points could drift arbitrarily far
-    /// from reality.</para>
-    ///
-    /// <para>This version instead defers entirely to ImGui's own wrap algorithm via the <c>wrapWidth</c>
-    /// overload of <see cref="ImGui.CalcTextSize(ImU8String,bool,float)"/> - the exact same function
-    /// <c>PushTextWrapPos</c>-based rendering uses internally, so it can't disagree with what's actually
-    /// drawn. Binary-searches (by word count, not by character - a wrap boundary is always at a word
-    /// boundary) for the smallest word count whose wrapped height already reaches the full text's
-    /// height; the word that search converges on is the first word of the true last line.</para></summary>
-    private static float MeasureLastLineWidth(string text, float wrapWidth)
-    {
-        var words = text.Split(' ').Where(w => w.Length > 0).ToArray();
-        if (words.Length == 0)
-            return 0f;
-
-        var lineHeight = ImGui.GetTextLineHeight();
-        var totalHeight = ImGui.CalcTextSize(text, false, wrapWidth).Y;
-
-        var lo = 1;
-        var hi = words.Length;
-        while (lo < hi)
-        {
-            var mid = (lo + hi) / 2;
-            var prefixHeight = ImGui.CalcTextSize(string.Join(' ', words[..mid]), false, wrapWidth).Y;
-            if (prefixHeight >= totalHeight - lineHeight * 0.5f)
-                hi = mid;
-            else
-                lo = mid + 1;
-        }
-
-        // words[lo - 1] is the word whose addition first pushed the wrapped height up to the full
-        // total - i.e. the first word placed on the true last line.
-        var lastLine = string.Join(' ', words[(lo - 1)..]);
-        return ImGui.CalcTextSize(lastLine).X;
     }
 
     /// <summary>Draws one emote token, inlining after the previous item only when <paramref
