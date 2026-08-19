@@ -219,6 +219,7 @@ public sealed class ChatCaptureService : IDisposable
         MapLinkPayload? pendingMapLink = null;
         ItemPayload? pendingItemLink = null;
         PartyFinderPayload? pendingPartyFinderLink = null;
+        QuestPayload? pendingQuestLink = null;
         var pendingStart = 0;
         var pendingLength = 0;
 
@@ -234,6 +235,7 @@ public sealed class ChatCaptureService : IDisposable
                     MapLink = pendingMapLink,
                     Item = pendingItemLink,
                     PartyFinder = pendingPartyFinderLink,
+                    Quest = pendingQuestLink,
                 });
             }
 
@@ -241,6 +243,7 @@ public sealed class ChatCaptureService : IDisposable
             pendingMapLink = null;
             pendingItemLink = null;
             pendingPartyFinderLink = null;
+            pendingQuestLink = null;
             pendingLength = 0;
         }
 
@@ -286,6 +289,12 @@ public sealed class ChatCaptureService : IDisposable
                 CommitPending();
                 pendingType = ChatPayloadLinkType.PartyFinder;
                 pendingPartyFinderLink = pfLink;
+            }
+            else if (payload is QuestPayload questLink)
+            {
+                CommitPending();
+                pendingType = ChatPayloadLinkType.Quest;
+                pendingQuestLink = questLink;
             }
             else if (payload is AutoTranslatePayload autoTranslate)
             {

@@ -68,6 +68,7 @@ public sealed class Plugin : IDalamudPlugin
     public ItemTooltipService ItemTooltipService { get; }
     public ItemContextService ItemContextService { get; }
     public PartyFinderLinkService PartyFinderLinkService { get; }
+    public QuestLinkService QuestLinkService { get; }
     public DialogueTranslationService DialogueTranslationService { get; }
     public AutoTranslatePhraseService AutoTranslatePhraseService { get; }
     public FriendOnlineWatcherService FriendOnlineWatcherService { get; }
@@ -116,6 +117,7 @@ public sealed class Plugin : IDalamudPlugin
         ItemTooltipService = new ItemTooltipService(GameGui, Log);
         ItemContextService = new ItemContextService(Log);
         PartyFinderLinkService = new PartyFinderLinkService(Log);
+        QuestLinkService = new QuestLinkService(Log);
         DialogueTranslationService = new DialogueTranslationService(Framework, GameGui, ToastGui, Log, Configuration, TranslationService);
         AutoTranslatePhraseService = new AutoTranslatePhraseService(DataManager, Log);
         AutoTranslatePhraseService.Preload(); // off the main thread - expanding every dictionary category can be slow enough to hitch the UI if it first happened on-demand when Tab is pressed
@@ -362,6 +364,10 @@ public sealed class Plugin : IDalamudPlugin
     /// <summary>Opens a clicked Party Finder listing link - see <see cref="Models.ChatPayloadLink"/>
     /// for how these are captured in the first place.</summary>
     public void OpenPartyFinderLink(PartyFinderPayload payload) => PartyFinderLinkService.OpenListing(payload.ListingId);
+
+    /// <summary>Opens a clicked quest link straight to it in the native Quest Journal - see
+    /// <see cref="Models.ChatPayloadLink"/> for how these are captured in the first place.</summary>
+    public void OpenQuestLink(QuestPayload payload) => QuestLinkService.OpenQuest(payload.Quest.RowId);
 
     /// <summary>Exports a tab's *entire* stored history (not just what's currently buffered in
     /// memory - reads straight from <see cref="ChatHistoryService"/>) to a plain-text file under the

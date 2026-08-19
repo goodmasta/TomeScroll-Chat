@@ -28,6 +28,7 @@ public static class ChatMessageRenderer
     private static readonly Vector4 MapLinkColor = new(0.55f, 0.85f, 0.55f, 1f);
     private static readonly Vector4 ItemLinkColor = new(0.85f, 0.65f, 0.3f, 1f);
     private static readonly Vector4 PartyFinderLinkColor = new(0.65f, 0.75f, 1f, 1f);
+    private static readonly Vector4 QuestLinkColor = new(1f, 0.82f, 0.4f, 1f);
     private static readonly Vector4 AutoTranslateColor = new(0.6f, 0.9f, 0.9f, 1f);
     private const string RedactedName = "Player";
 
@@ -72,6 +73,8 @@ public static class ChatMessageRenderer
     /// see <see cref="ChatPayloadLink"/>.</param>
     /// <param name="onOpenPartyFinderLink">Called when a Party Finder listing link in a message is
     /// clicked - see <see cref="ChatPayloadLink"/>/<see cref="Services.PartyFinderLinkService"/>.</param>
+    /// <param name="onOpenQuestLink">Called when a quest link in a message is clicked - see
+    /// <see cref="ChatPayloadLink"/>/<see cref="Services.QuestLinkService"/>.</param>
     /// <param name="itemTooltipService">Opens the native item detail window while an item link is
     /// hovered - see <see cref="Services.ItemTooltipService"/>.</param>
     /// <param name="itemContextService">Backs an item link's left-click context menu (search item/
@@ -88,7 +91,7 @@ public static class ChatMessageRenderer
     /// divider is suppressed while searching, since its index no longer lines up with what's shown.</param>
     /// <returns>The highest message index that was actually scrolled into view this frame, or -1 if
     /// none were (used by the caller to shrink the tab's unread count as the player reads down).</returns>
-    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
+    public static int DrawMessages(ChatTabConfig tab, IReadOnlyList<ChatMessageRecord> messages, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, Action<QuestPayload> onOpenQuestLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend, int dividerIndex, bool scrollToDivider, string? searchQuery = null)
     {
         var lastVisible = -1;
         for (var i = 0; i < messages.Count; i++)
@@ -103,7 +106,7 @@ public static class ChatMessageRenderer
                     ImGui.SetScrollHereY(0.1f);
             }
 
-            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onReply, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onGenerateAiReply, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, notificationService, localPlayerKey, isFriend))
+            if (DrawMessage(tab, messages[i], i, config, emotes, translation, onReply, onSendTell, onPartyInvite, onFriendRequest, onViewPlate, onGenerateAiReply, onOpenMapLink, onOpenPartyFinderLink, onOpenQuestLink, itemTooltipService, itemContextService, notificationService, localPlayerKey, isFriend))
                 lastVisible = i;
         }
 
@@ -142,7 +145,7 @@ public static class ChatMessageRenderer
     /// (which wraps dynamically) has actually been drawn, so the background can't be sized up front.
     /// Returns whether it was scrolled into view this frame.
     /// </summary>
-    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend)
+    private static bool DrawMessage(ChatTabConfig tab, ChatMessageRecord msg, int index, Configuration config, EmoteService emotes, TranslationService translation, Action<string> onReply, Action<string> onSendTell, Action<string> onPartyInvite, Action<string> onFriendRequest, Action<string> onViewPlate, Action<ChatMessageRecord> onGenerateAiReply, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, Action<QuestPayload> onOpenQuestLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, string? localPlayerKey, Func<string, bool> isFriend)
     {
         var drawList = ImGui.GetWindowDrawList();
         drawList.ChannelsSplit(2);
@@ -219,7 +222,7 @@ public static class ChatMessageRenderer
         // "just make every message body in this tab one colour" instead of tuning each channel.
         var bodyColor = tab.MessageTextColorOverride ?? channelColor;
         ImGui.PushStyleColor(ImGuiCol.Text, bodyColor);
-        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, onOpenPartyFinderLink, itemTooltipService, itemContextService, notificationService, index);
+        DrawBody(msg.Body, msg.PayloadLinks, config, emotes, onOpenMapLink, onOpenPartyFinderLink, onOpenQuestLink, itemTooltipService, itemContextService, notificationService, index);
         ImGui.PopStyleColor();
 
         // Settings > Tabs "Auto-translate" - fires the same request the manual "Translate" menu item
@@ -467,7 +470,7 @@ public static class ChatMessageRenderer
     /// Only links and emotes (which need their own clickable/image widget) fall back to manual,
     /// single-token placement.
     /// </summary>
-    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, int messageIndex)
+    private static void DrawBody(string body, IReadOnlyList<ChatPayloadLink> payloadLinks, Configuration config, EmoteService emotes, Action<MapLinkPayload> onOpenMapLink, Action<PartyFinderPayload> onOpenPartyFinderLink, Action<QuestPayload> onOpenQuestLink, ItemTooltipService itemTooltipService, ItemContextService itemContextService, NotificationService notificationService, int messageIndex)
     {
         var rightEdge = ImGui.GetWindowContentRegionMax().X;
         var plain = new StringBuilder();
@@ -589,6 +592,8 @@ public static class ChatMessageRenderer
                     DrawMapLink(linkText, link.MapLink, onOpenMapLink, rightEdge, canInline),
                 { Type: ChatPayloadLinkType.PartyFinder, PartyFinder: not null } =>
                     DrawPartyFinderLink(linkText, link.PartyFinder, onOpenPartyFinderLink, rightEdge, canInline),
+                { Type: ChatPayloadLinkType.Quest, Quest: not null } =>
+                    DrawQuestLink(linkText, link.Quest, onOpenQuestLink, rightEdge, canInline),
                 { Type: ChatPayloadLinkType.AutoTranslate } =>
                     DrawAutoTranslateSpan(linkText, notificationService, rightEdge, canInline),
                 _ => DrawItemLink(linkText, link.Item, itemTooltipService, itemContextService, $"itemlinkctx_{messageIndex}_{link.Start}", rightEdge, canInline),
@@ -684,6 +689,13 @@ public static class ChatMessageRenderer
     /// native chat log would.</summary>
     private static bool DrawPartyFinderLink(string text, PartyFinderPayload payload, Action<PartyFinderPayload> onOpenPartyFinderLink, float rightEdge, bool canInline) =>
         DrawColoredLinkToken(text, PartyFinderLinkColor, "Open this Party Finder listing", () => onOpenPartyFinderLink(payload), rightEdge, canInline);
+
+    /// <summary>Draws a quest link - clicking jumps straight to it in the native Quest Journal via
+    /// <see cref="Services.QuestLinkService"/>, using the original payload captured at message-receive
+    /// time (see <see cref="ChatPayloadLink"/>) rather than re-deriving the quest id from the display
+    /// text.</summary>
+    private static bool DrawQuestLink(string text, QuestPayload payload, Action<QuestPayload> onOpenQuestLink, float rightEdge, bool canInline) =>
+        DrawColoredLinkToken(text, QuestLinkColor, "Open in Quest Journal", () => onOpenQuestLink(payload), rightEdge, canInline);
 
     /// <summary>The minion name added as an easter egg (2026-08-17) after it turned out to be missing
     /// from the auto-translate picker entirely before the sheet-expansion work - see

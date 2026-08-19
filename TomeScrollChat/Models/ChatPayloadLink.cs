@@ -7,6 +7,7 @@ public enum ChatPayloadLinkType
     MapLink,
     Item,
     PartyFinder,
+    Quest,
 
     /// <summary>An auto-translate dictionary phrase (<see cref="Dalamud.Game.Text.SeStringHandling.Payloads.AutoTranslatePayload"/>) -
     /// unlike the other three, this one's display text (wrapped in the same guillemets the native
@@ -60,4 +61,11 @@ public sealed class ChatPayloadLink
     /// <c>ListingId</c> is passed to <see cref="Services.PartyFinderLinkService"/> on click to open the
     /// native listing detail directly, same as clicking it in the native chat log would.</summary>
     public PartyFinderPayload? PartyFinder { get; init; }
+
+    /// <summary>Set when <see cref="Type"/> is <see cref="ChatPayloadLinkType.Quest"/> - its
+    /// <c>questId</c> (already carrying the +65536 offset native quest-id APIs expect, see
+    /// <see cref="Services.QuestLinkService"/>) is passed to <c>AgentQuestJournal.OpenForQuest</c> on
+    /// click to jump straight to it in the Quest Journal, same as clicking it in the native chat log
+    /// would.</summary>
+    public QuestPayload? Quest { get; init; }
 }

@@ -223,6 +223,7 @@ public sealed class ChatHistoryService : IDisposable
         public int ItemKind { get; set; }
         public uint ListingId { get; set; }
         public int PartyFinderLinkType { get; set; }
+        public uint QuestId { get; set; }
     }
 
     private static string? SerializePayloadLinks(IReadOnlyList<ChatPayloadLink> links)
@@ -265,6 +266,15 @@ public sealed class ChatHistoryService : IDisposable
                         Type = nameof(ChatPayloadLinkType.PartyFinder),
                         ListingId = pf.ListingId,
                         PartyFinderLinkType = (int)pf.LinkType,
+                    });
+                    break;
+                case { Type: ChatPayloadLinkType.Quest, Quest: { } quest }:
+                    stored.Add(new StoredPayloadLink
+                    {
+                        Start = link.Start,
+                        Length = link.Length,
+                        Type = nameof(ChatPayloadLinkType.Quest),
+                        QuestId = quest.Quest.RowId,
                     });
                     break;
                 case { Type: ChatPayloadLinkType.AutoTranslate }:
@@ -326,6 +336,16 @@ public sealed class ChatHistoryService : IDisposable
                         Length = s.Length,
                         Type = ChatPayloadLinkType.PartyFinder,
                         PartyFinder = new PartyFinderPayload(s.ListingId, (PartyFinderPayload.PartyFinderLinkType)s.PartyFinderLinkType),
+                    });
+                }
+                else if (s.Type == nameof(ChatPayloadLinkType.Quest))
+                {
+                    links.Add(new ChatPayloadLink
+                    {
+                        Start = s.Start,
+                        Length = s.Length,
+                        Type = ChatPayloadLinkType.Quest,
+                        Quest = new QuestPayload(s.QuestId),
                     });
                 }
                 else if (s.Type == nameof(ChatPayloadLinkType.AutoTranslate))

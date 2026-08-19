@@ -790,7 +790,14 @@ public sealed class MainWindow : Window, IDisposable
             var tab = orderedTabs[i];
             if (i > 0)
             {
-                var previousRight = ImGui.GetItemRectMax().X;
+                // GetItemRectMax() is an absolute screen coordinate, but rightEdge (from
+                // GetWindowContentRegionMax()) is window-relative - without subtracting the window's
+                // own screen position here, this only ever happened to "work" while the chat window
+                // sat at the screen's left edge (relative == absolute there). Moving the window right
+                // made previousRight always exceed rightEdge, so every tab wrapped onto its own line
+                // (reported live as tabs rendering in a single column). Same fix already applied in
+                // ChatMessageRenderer.DrawBody's equivalent check.
+                var previousRight = ImGui.GetItemRectMax().X - ImGui.GetWindowPos().X;
                 if (previousRight + spacing + MeasureTabContentWidth(tab) <= rightEdge)
                     ImGui.SameLine();
             }
@@ -1134,7 +1141,7 @@ public sealed class MainWindow : Window, IDisposable
                     }
 
                     var wasScrollingToDivider = pendingScrollToDivider;
-                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, GenerateAiReply, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.ItemTooltipService, plugin.ItemContextService, plugin.NotificationService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
+                    var lastVisible = ChatMessageRenderer.DrawMessages(tab, messages, Plugin.Configuration, plugin.EmoteService, plugin.TranslationService, PrefillInput, plugin.OpenTellToKey, plugin.SendPartyInvite, plugin.SendFriendRequest, plugin.ViewAdventurerPlate, GenerateAiReply, plugin.OpenMapLink, plugin.OpenPartyFinderLink, plugin.OpenQuestLink, plugin.ItemTooltipService, plugin.ItemContextService, plugin.NotificationService, Plugin.GetLocalPlayerKey(), plugin.FriendListService.IsFriendKey, dividerIndex, pendingScrollToDivider, searchMode ? searchQuery : null);
                     pendingScrollToDivider = false;
 
                     // Unread count shrinks as messages actually scroll into view, not all at once on
