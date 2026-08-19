@@ -203,12 +203,12 @@ public class Configuration : IPluginConfiguration
     public bool NotifyOnInvalidCommand { get; set; } = true;
 
     /// <summary>Pops an in-game popup toast (sender + a short preview, via
-    /// <see cref="Services.WhisperNotificationService"/>) whenever an incoming whisper arrives - on by
-    /// default per explicit user request ("хочу, чтобы такое уведомление было и когда приходит
-    /// сообщение в личку"). Independent of <see cref="AutoReplyEnabled"/>/<see cref="AutoReplyToWhispers"/> -
+    /// <see cref="Services.WhisperNotificationService"/>) whenever an incoming whisper arrives -
+    /// **off by default**, per explicit user request (flipped from an initial on-by-default after
+    /// trying it live). Independent of <see cref="AutoReplyEnabled"/>/<see cref="AutoReplyToWhispers"/> -
     /// this is "tell me about it", not "send something back", so it's useful on its own without opting
-    /// into the auto-reply feature at all.</summary>
-    public bool NotifyOnWhisper { get; set; } = true;
+    /// into the auto-reply feature at all, for whoever turns it on.</summary>
+    public bool NotifyOnWhisper { get; set; } = false;
 
     /// <summary>Whether <see cref="Services.NotificationService.Show"/> plays a short sound alongside
     /// every popup toast, via <see cref="Services.NotificationSoundService"/> - on by default per
