@@ -216,6 +216,42 @@ public sealed unsafe class FriendListService
         }
     }
 
+    /// <summary>Whether a friend is currently flagged "in another world" - null on the same terms as
+    /// <see cref="IsOnline"/>. <c>CharacterData.State</c>'s <c>OnlineStatus.AnotherWorld</c> bit
+    /// (confirmed via the metadata-reading technique, part of the same flags enum <see cref="IsOnline"/>/
+    /// <see cref="IsInDuty"/> already read) - this is the native Friend List's own "In Another World"
+    /// status text, a *separate* condition from <see cref="IsInDuty"/> that also blocks <c>/tell</c>
+    /// delivery ("the target does not currently reside in this world"). Reported live: a friend showing
+    /// "In Another World" natively still read <c>IsInDuty == false</c> here, since duty and cross-world
+    /// reachability are genuinely different bits - <see cref="FriendOnlineWatcherService"/> checks both.</summary>
+    public bool? IsInAnotherWorld(string name, string world)
+    {
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(world))
+            return null;
+
+        try
+        {
+            var worldId = worldIdResolver.Resolve(world);
+            if (worldId == null)
+                return null;
+
+            var proxy = InfoProxyFriendList.Instance();
+            if (proxy == null)
+                return null;
+
+            var entry = proxy->GetEntryByName(name, worldId.Value);
+            if (entry == null || entry->ContentId == 0)
+                return null;
+
+            return (entry->State & InfoProxyCommonList.CharacterData.OnlineStatus.AnotherWorld) != 0;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: another-world-status lookup failed for {Name}@{World}", name, world);
+            return null;
+        }
+    }
+
     /// <summary>Asks the game to re-fetch friend list data from the server right now, independent of
     /// whether the native Friend List addon is open/visible - <c>InfoProxyFriendList.RequestData()</c>
     /// (confirmed via the metadata tool: returns <c>Boolean</c>, and the type carries its own

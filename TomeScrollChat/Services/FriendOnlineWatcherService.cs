@@ -86,6 +86,14 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
     /// *next* transition), backing <see cref="Configuration.FriendDutyNotifyEnabled"/>.</summary>
     private readonly Dictionary<string, bool> lastKnownInDuty = new();
 
+    /// <summary>Same shape as <see cref="lastKnownInDuty"/>, for <see cref="FriendListService.IsInAnotherWorld"/> -
+    /// a second, independent reason <c>/tell</c> can stop being deliverable (the native Friend List's
+    /// own "In Another World" status), reported live as a case <see cref="lastKnownInDuty"/> alone
+    /// didn't catch (a friend showing that status natively still read <c>IsInDuty == false</c> here).
+    /// Tracked separately so each gets its own, specific notification text rather than a vague combined
+    /// "unreachable" flag.</summary>
+    private readonly Dictionary<string, bool> lastKnownInAnotherWorld = new();
+
     private DateTime lastCheck = DateTime.MinValue;
     private DateTime? pendingShowAt;
 
@@ -258,12 +266,19 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
             lastKnownOnline[key] = isOnline.Value;
 
             // Added per explicit user request: a separate notification specifically for "can I still
-            // /tell this friend" - a duty is the concrete case that blocks delivery, unlike a vaguer
+            // /tell this friend" - a duty is one concrete case that blocks delivery, unlike a vaguer
             // "restricted area" idea with no confirmed matching flag (see FriendListService.IsInDuty's
             // own doc comment). Only checked while online - an offline friend can't meaningfully be
             // "in a duty" from this plugin's perspective, and resetting the baseline to false here means
             // a friend who logs back in already mid-duty still notifies fresh, same reasoning as
             // lastKnownOnline's own baseline handling above.
+            //
+            // Also checks FriendListService.IsInAnotherWorld the same way - reported live as a second,
+            // independent "can't be messaged" case the duty check alone missed entirely (a friend shown
+            // natively as "In Another World" still read IsInDuty == false here, since they're genuinely
+            // different bits on CharacterData.State). Both live under the same
+            // FriendDutyNotifyEnabled toggle - the whole point is "tell me when I can no longer /tell
+            // this friend," and the two conditions are just the two concrete ways that currently happens.
             if (configuration.FriendDutyNotifyEnabled)
             {
                 if (isOnline.Value)
@@ -279,10 +294,23 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
                     }
 
                     lastKnownInDuty[key] = isInDuty;
+
+                    var isInAnotherWorld = friendListService.IsInAnotherWorld(name, world) ?? false;
+                    var wasInAnotherWorld = lastKnownInAnotherWorld.GetValueOrDefault(key, false);
+                    if (wasInAnotherWorld != isInAnotherWorld)
+                    {
+                        log.Info("TomeScrollChat: friend-watch detected an another-world-status change for {Key}: {Was} -> {Now}", key, wasInAnotherWorld, isInAnotherWorld);
+                        notificationService.Show(
+                            isInAnotherWorld ? $"{name} is now on another world - can't be messaged right now." : $"{name} is back on a reachable world.",
+                            NotificationSeverity.Info);
+                    }
+
+                    lastKnownInAnotherWorld[key] = isInAnotherWorld;
                 }
                 else
                 {
                     lastKnownInDuty[key] = false;
+                    lastKnownInAnotherWorld[key] = false;
                 }
             }
         }
@@ -334,12 +362,18 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
             var world = key[(at + 1)..];
             var isOnline = friendListService.IsOnline(name, world);
             var isInDuty = friendListService.IsInDuty(name, world);
-            log.Info("TomeScrollChat:   {Key} - {Status}, duty: {DutyStatus}", key, isOnline switch
+            var isInAnotherWorld = friendListService.IsInAnotherWorld(name, world);
+            log.Info("TomeScrollChat:   {Key} - {Status}, duty: {DutyStatus}, another world: {AnotherWorldStatus}", key, isOnline switch
             {
                 true => "online",
                 false => "offline",
                 null => "unknown (lookup failed)",
             }, isInDuty switch
+            {
+                true => "yes",
+                false => "no",
+                null => "unknown (lookup failed)",
+            }, isInAnotherWorld switch
             {
                 true => "yes",
                 false => "no",
@@ -367,10 +401,11 @@ public sealed unsafe class FriendOnlineWatcherService : IDisposable
             var world = key[(at + 1)..];
             var isOnline = friendListService.IsOnline(name, world);
             var isInDuty = friendListService.IsInDuty(name, world);
+            var isInAnotherWorld = friendListService.IsInAnotherWorld(name, world);
             notificationService.Show(
                 isOnline switch
                 {
-                    true => $"Friend debug: {name} is online (duty: {(isInDuty == true ? "yes" : isInDuty == false ? "no" : "?")}).",
+                    true => $"Friend debug: {name} is online (duty: {(isInDuty == true ? "yes" : isInDuty == false ? "no" : "?")}, another world: {(isInAnotherWorld == true ? "yes" : isInAnotherWorld == false ? "no" : "?")}).",
                     false => $"Friend debug: {name} is offline.",
                     null => $"Friend debug: {name} - lookup failed (not a friend, or friend list data not loaded yet).",
                 },

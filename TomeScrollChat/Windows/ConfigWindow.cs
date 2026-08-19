@@ -1191,12 +1191,12 @@ public sealed class ConfigWindow : Window, IDisposable
         using (ImRaii.Disabled(!configuration.FriendOnlineNotifyEnabled))
         {
             var dutyEnabled = configuration.FriendDutyNotifyEnabled;
-            if (ImGui.Checkbox("Also notify when a watched friend enters or leaves a duty", ref dutyEnabled))
+            if (ImGui.Checkbox("Also notify when a watched friend enters/leaves a duty or another world", ref dutyEnabled))
             {
                 configuration.FriendDutyNotifyEnabled = dutyEnabled;
                 configuration.Save();
             }
-            ImGui.TextDisabled("Specifically for knowing when you can no longer /tell them - a duty (dungeon/raid/trial/etc.) is the concrete case that blocks delivery. Uses the same watched friends as above.");
+            ImGui.TextDisabled("Specifically for knowing when you can no longer /tell them - a duty (dungeon/raid/trial/etc.) and the native \"In Another World\" status are the two concrete cases that block delivery. Uses the same watched friends as above.");
 
             ImGui.Spacing();
             var watchAll = configuration.FriendOnlineNotifyAll;

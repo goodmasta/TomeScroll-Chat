@@ -82,13 +82,16 @@ public class Configuration : IPluginConfiguration
     /// <summary>Additional notification layered onto the same watched set
     /// (<see cref="FriendOnlineNotifyAll"/>/<see cref="FriendOnlineNotifyKeys"/>) and the same periodic
     /// check <see cref="FriendOnlineNotifyEnabled"/> already drives - pops a toast when a watched friend
-    /// enters or leaves a duty (dungeon/raid/trial/etc., <c>OnlineStatus.InDuty</c>), added per explicit
-    /// user request specifically for "know when I can no longer /tell this friend" (a duty is the
-    /// concrete case that actually blocks tell delivery, as opposed to a vaguer "restricted area" notion
-    /// with no confirmed matching game-data flag). Only takes effect while
-    /// <see cref="FriendOnlineNotifyEnabled"/> (the master switch for the whole watcher - polling, the
-    /// login auto-open, etc.) is also on, but is its own separate checkbox - lets online/offline
-    /// notifications stay on without duty ones, e.g. Off by default.</summary>
+    /// enters or leaves a duty (dungeon/raid/trial/etc., <c>OnlineStatus.InDuty</c>) *or* becomes/stops
+    /// being flagged "in another world" (<c>OnlineStatus.AnotherWorld</c> - the native Friend List's own
+    /// status text), added per explicit user request specifically for "know when I can no longer /tell
+    /// this friend" - these are the two concrete cases confirmed to actually block tell delivery, as
+    /// opposed to a vaguer "restricted area" notion with no single matching game-data flag. The two are
+    /// genuinely independent bits (a friend can be flagged "in another world" while <c>IsInDuty</c> still
+    /// reads false, reported live) - see <see cref="Services.FriendListService.IsInAnotherWorld"/>. Only
+    /// takes effect while <see cref="FriendOnlineNotifyEnabled"/> (the master switch for the whole
+    /// watcher - polling, the login auto-open, etc.) is also on, but is its own separate checkbox - lets
+    /// online/offline notifications stay on without these. Off by default.</summary>
     public bool FriendDutyNotifyEnabled { get; set; }
 
     /// <summary>When on, every current friend is watched (see <see cref="FriendOnlineNotifyEnabled"/>)
