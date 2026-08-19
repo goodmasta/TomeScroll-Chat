@@ -1,6 +1,6 @@
 # TomeScroll Chat
 
-> **⚠️ Beta - v0.1.0.0.** Under active development, not yet feature-frozen or thoroughly battle-tested. Expect rough edges, and back up `pluginConfigs/TomeScrollChat*` before major updates.
+> **⚠️ Beta - v0.1.2.0.** Under active development, not yet feature-frozen or thoroughly battle-tested. Expect rough edges, and back up `pluginConfigs/TomeScrollChat*` before major updates.
 
 > **🤖 This entire plugin - every line of code, every feature, this README - was built through an AI coding agent (Claude), directed by a human via natural-language requests rather than hand-written by a developer.** No prior C#/Dalamud codebase was used as a starting point.
 
