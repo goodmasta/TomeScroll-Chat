@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>0.1.1.0</Version>
+    <Version>0.1.2.0</Version>
     <Description>Полная замена внутриигрового чата: гибкие вкладки, откреп в отдельные окна, отдельные окна для личных сообщений, кликабельные ссылки, эмодзи BTTV/7TV, история на диске.</Description>
     <PackageProjectUrl>https://github.com/goodmasta/TomeScroll-Chat</PackageProjectUrl>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
