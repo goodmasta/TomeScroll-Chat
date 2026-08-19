@@ -22,14 +22,24 @@ namespace TomeScrollChat.Services;
 /// never posted into the public/group channel itself - far less disruptive/spammy than auto-shouting
 /// back into Say/Yell/Shout/Linkshell chat.</para>
 ///
+/// <para>A triggered reply doesn't send immediately - it's queued for a random delay
+/// (<see cref="Configuration.AutoReplyDelayMinSeconds"/>-<see cref="Configuration.AutoReplyDelayMaxSeconds"/>,
+/// 1-5s by default) and actually sent from <see cref="OnFrameworkUpdate"/> once that time is up, per
+/// explicit user request - makes the reply feel less like an instant, obviously-automated response.</para>
+///
 /// <para><b>Two independent safety guards</b> against this becoming spammy or looping forever:
 /// <see cref="Configuration.AutoReplyCooldownMinutes"/> (a per-sender cooldown - the main defence
 /// against a runaway back-and-forth if the other side also has some kind of auto-reply/bot), and a
 /// small fixed <see cref="MinGapBetweenReplies"/> between *any* two auto-sends regardless of sender
 /// (protects against the game's own chat-spam guard - see <c>ChatCaptureService.ChatSystemErrorMarkers</c> -
 /// if many *different* senders trigger this within a short window, e.g. several people shouting the
-/// player's name back to back). Excess triggers within either window are just dropped, not queued -
-/// simpler, and avoids ever producing an obviously-bot-like burst-then-trickle reply pattern.</para>
+/// player's name back to back). Both are checked against each candidate reply's *scheduled send time*
+/// (trigger time + its random delay), not the trigger time itself - otherwise two triggers spaced far
+/// enough apart to each individually pass the check could still end up with their delayed *actual
+/// sends* landing closer together than <see cref="MinGapBetweenReplies"/> intends to guarantee, which
+/// would defeat the whole point of that guard. Excess triggers within either window are just dropped,
+/// not queued/staggered - simpler, and avoids ever producing an obviously-bot-like burst-then-trickle
+/// reply pattern.</para>
 /// </summary>
 public sealed class AutoReplyService : IDisposable
 {
@@ -50,17 +60,23 @@ public sealed class AutoReplyService : IDisposable
 
     private static readonly TimeSpan MinGapBetweenReplies = TimeSpan.FromSeconds(5);
 
+    private readonly record struct PendingReply(string SenderKey, string SenderName, DateTime SendAt);
+
+    private readonly IFramework framework;
     private readonly ChatCaptureService chatCaptureService;
     private readonly ChatSendService chatSendService;
     private readonly Configuration configuration;
     private readonly NotificationService notificationService;
     private readonly IPluginLog log;
+    private readonly Random random = new();
 
     private readonly Dictionary<string, DateTime> lastReplyBySender = new();
+    private readonly List<PendingReply> pending = new();
     private DateTime lastReplyAt = DateTime.MinValue;
 
-    public AutoReplyService(ChatCaptureService chatCaptureService, ChatSendService chatSendService, Configuration configuration, NotificationService notificationService, IPluginLog log)
+    public AutoReplyService(IFramework framework, ChatCaptureService chatCaptureService, ChatSendService chatSendService, Configuration configuration, NotificationService notificationService, IPluginLog log)
     {
+        this.framework = framework;
         this.chatCaptureService = chatCaptureService;
         this.chatSendService = chatSendService;
         this.configuration = configuration;
@@ -68,6 +84,7 @@ public sealed class AutoReplyService : IDisposable
         this.log = log;
 
         chatCaptureService.RawMessageReceived += OnRawMessage;
+        framework.Update += OnFrameworkUpdate;
     }
 
     private void OnRawMessage(XivChatType chatType, string senderName, string senderKey, string body)
@@ -110,23 +127,67 @@ public sealed class AutoReplyService : IDisposable
             return;
 
         var now = DateTime.UtcNow;
-        if (now - lastReplyAt < MinGapBetweenReplies)
+        var sendAt = now + NextDelay();
+
+        if (sendAt - lastReplyAt < MinGapBetweenReplies)
             return;
 
         var cooldown = TimeSpan.FromMinutes(Math.Max(0, configuration.AutoReplyCooldownMinutes));
-        if (lastReplyBySender.TryGetValue(senderKey, out var lastToThisSender) && now - lastToThisSender < cooldown)
+        if (lastReplyBySender.TryGetValue(senderKey, out var lastToThisSender) && sendAt - lastToThisSender < cooldown)
             return;
 
-        lastReplyAt = now;
-        lastReplyBySender[senderKey] = now;
+        lastReplyAt = sendAt;
+        lastReplyBySender[senderKey] = sendAt;
+        pending.Add(new PendingReply(senderKey, senderName, sendAt));
 
-        chatSendService.Send($"/tell {senderKey}", configuration.AutoReplyMessage);
-        notificationService.Show($"Auto-reply sent to {senderName}.", NotificationSeverity.Info);
-        log.Info("TomeScrollChat: auto-replied to {SenderKey} (triggered by {ChatType})", senderKey, chatType);
+        log.Info("TomeScrollChat: auto-reply to {SenderKey} queued for {Delay:0.0}s from now (triggered by {ChatType})", senderKey, (sendAt - now).TotalSeconds, chatType);
+    }
+
+    /// <summary>Random delay before a queued reply actually sends - <see cref="Configuration.AutoReplyDelayMinSeconds"/>/
+    /// <see cref="Configuration.AutoReplyDelayMaxSeconds"/>, clamped here (not in Settings) so an
+    /// accidentally-inverted min/max still produces a sane, non-negative delay instead of throwing.</summary>
+    private TimeSpan NextDelay()
+    {
+        var min = Math.Max(0f, configuration.AutoReplyDelayMinSeconds);
+        var max = Math.Max(min, configuration.AutoReplyDelayMaxSeconds);
+        var seconds = min + (float)random.NextDouble() * (max - min);
+        return TimeSpan.FromSeconds(seconds);
+    }
+
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        if (pending.Count == 0)
+            return;
+
+        var now = DateTime.UtcNow;
+        for (var i = pending.Count - 1; i >= 0; i--)
+        {
+            var reply = pending[i];
+            if (reply.SendAt > now)
+                continue;
+
+            pending.RemoveAt(i);
+            Send(reply.SenderKey, reply.SenderName);
+        }
+    }
+
+    private void Send(string senderKey, string senderName)
+    {
+        try
+        {
+            chatSendService.Send($"/tell {senderKey}", configuration.AutoReplyMessage);
+            notificationService.Show($"Auto-reply sent to {senderName}.", NotificationSeverity.Info);
+            log.Info("TomeScrollChat: auto-replied to {SenderKey}", senderKey);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to send queued auto-reply to {SenderKey}", senderKey);
+        }
     }
 
     public void Dispose()
     {
         chatCaptureService.RawMessageReceived -= OnRawMessage;
+        framework.Update -= OnFrameworkUpdate;
     }
 }

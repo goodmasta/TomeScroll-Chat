@@ -181,6 +181,17 @@ public class Configuration : IPluginConfiguration
     /// guard when many *different* senders trigger this in a short window.</summary>
     public int AutoReplyCooldownMinutes { get; set; } = 5;
 
+    /// <summary>Lower bound (seconds) of the random delay <see cref="Services.AutoReplyService"/> waits
+    /// before actually sending a triggered reply - 1 by default. Makes the reply feel less like an
+    /// instant, obviously-automated response; also reads less bot-like to whoever's on the other end.
+    /// Clamped to be no greater than <see cref="AutoReplyDelayMaxSeconds"/> wherever this is read, not
+    /// here, so Settings can't be left in a contradictory min-greater-than-max state by editing one
+    /// field before the other.</summary>
+    public float AutoReplyDelayMinSeconds { get; set; } = 1f;
+
+    /// <summary>Upper bound (seconds) of the same random delay - 5 by default.</summary>
+    public float AutoReplyDelayMaxSeconds { get; set; } = 5f;
+
     /// <summary>Fades the main chat window and any popped-out tab windows to
     /// <see cref="InactiveWindowAlpha"/> while they don't have keyboard focus - same idea as the
     /// game's own native chat log fading out when you're not actively looking at it.</summary>
@@ -350,6 +361,8 @@ public class Configuration : IPluginConfiguration
         AutoReplyToWhispers = defaults.AutoReplyToWhispers;
         AutoReplyToMentions = defaults.AutoReplyToMentions;
         AutoReplyCooldownMinutes = defaults.AutoReplyCooldownMinutes;
+        AutoReplyDelayMinSeconds = defaults.AutoReplyDelayMinSeconds;
+        AutoReplyDelayMaxSeconds = defaults.AutoReplyDelayMaxSeconds;
         FadeWindowWhenInactive = defaults.FadeWindowWhenInactive;
         InactiveWindowAlpha = defaults.InactiveWindowAlpha;
         HideChatDuringCutscenes = defaults.HideChatDuringCutscenes;

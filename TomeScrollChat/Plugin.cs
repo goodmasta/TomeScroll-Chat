@@ -121,7 +121,7 @@ public sealed class Plugin : IDalamudPlugin
         AutoTranslatePhraseService.Preload(); // off the main thread - expanding every dictionary category can be slow enough to hitch the UI if it first happened on-demand when Tab is pressed
         FriendOnlineWatcherService = new FriendOnlineWatcherService(Framework, ClientState, GameGui, Log, Configuration, FriendListService, NotificationService);
         AiReplyService = new AiReplyService(PluginInterface.ConfigDirectory.FullName, GeminiService, Configuration, Log, NotificationService);
-        AutoReplyService = new AutoReplyService(ChatCaptureService, ChatSendService, Configuration, NotificationService, Log);
+        AutoReplyService = new AutoReplyService(Framework, ChatCaptureService, ChatSendService, Configuration, NotificationService, Log);
         whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, NotificationSoundService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
 

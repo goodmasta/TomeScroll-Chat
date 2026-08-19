@@ -595,6 +595,23 @@ public sealed class MainWindow : Window, IDisposable
                 configuration.AutoReplyCooldownMinutes = Math.Clamp(cooldown, 1, 1440);
                 configuration.Save();
             }
+
+            var delayMin = configuration.AutoReplyDelayMinSeconds;
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.InputFloat("Delay before sending, min (seconds)", ref delayMin, 0.5f, 1f, "%.1f"))
+            {
+                configuration.AutoReplyDelayMinSeconds = Math.Clamp(delayMin, 0f, 300f);
+                configuration.Save();
+            }
+
+            var delayMax = configuration.AutoReplyDelayMaxSeconds;
+            ImGui.SetNextItemWidth(100);
+            if (ImGui.InputFloat("Delay before sending, max (seconds)", ref delayMax, 0.5f, 1f, "%.1f"))
+            {
+                configuration.AutoReplyDelayMaxSeconds = Math.Clamp(delayMax, 0f, 300f);
+                configuration.Save();
+            }
+            ImGui.TextDisabled("A random wait (picked fresh each time, somewhere in this range) before the reply actually sends - makes it feel less like an instant, automated response.");
         }
 
         ImGui.EndPopup();
