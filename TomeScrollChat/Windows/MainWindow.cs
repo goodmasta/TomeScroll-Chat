@@ -638,6 +638,17 @@ public sealed class MainWindow : Window, IDisposable
         // size the player last had it at (including their own manual resizing).
         lastKnownSize = ImGui.GetWindowSize();
 
+        // Browser-style: the tab strip has no fixed width of its own (it wraps to as many rows as it
+        // needs), so it doesn't fit the two-fixed-columns Table layout the Sidebar mode uses below -
+        // drawn directly into the window body instead, with DrawContent's own message child (already
+        // sized as "fill whatever's left") naturally getting whatever height the strip didn't use.
+        if (Plugin.Configuration.TabLayout == TabLayoutMode.Tabs)
+        {
+            DrawBrowserTabStrip();
+            DrawContent();
+            return;
+        }
+
         using var table = ImRaii.Table("TomeScrollChatLayout", 2, ImGuiTableFlags.Resizable);
         if (!table.Success)
             return;
@@ -653,6 +664,32 @@ public sealed class MainWindow : Window, IDisposable
         DrawContent();
     }
 
+    /// <summary>Snapshot (and reorder) the tab list - shared by <see cref="DrawSidebar"/> and
+    /// <see cref="DrawBrowserTabStrip"/>, so both layouts always agree on tab order. A snapshot rather
+    /// than iterating the live list directly, since closing a whisper tab from either layout's context
+    /// menu mutates <c>TabManager.Tabs</c> mid-draw, which would otherwise throw. Regular tabs always
+    /// keep their existing relative order and stay above every PM tab; within the PM tabs specifically,
+    /// unread ones bubble to the top of that group (not above the regular tabs) so a new whisper is
+    /// easy to spot without reshuffling the whole list. OrderBy/ThenBy are stable, so ties (same
+    /// PM-ness, same unread-ness) keep their original relative order.
+    ///
+    /// <para>Fixed 2026-08-17: the currently-selected tab used to bubble like any other PM tab once its
+    /// UnreadCount ticked above 0 - fine normally, since a tab you're actively looking at gets its
+    /// count decayed back to 0 within a frame or two (see the Discord-style unread tracking system).
+    /// But under a fast burst of incoming messages (reported live as "friend list spams me"),
+    /// UnreadCount can tick up and immediately back down *every single message*, faster than the eye
+    /// tracks - each tick flips this tab's sort key, which reshuffles/reflows the *entire* PM group
+    /// around it every time, visible as the whole friend-tabs block repeatedly vanishing and
+    /// reappearing. There's no reason for the tab you're already looking at to ever jump position from
+    /// its own traffic in the first place, so it's excluded from the bubble-to-top treatment
+    /// entirely now.</para></summary>
+    private List<ChatTabConfig> GetOrderedTabs() =>
+        plugin.TabManager.Tabs
+            .Where(t => !t.IsDetached)
+            .OrderBy(t => t.IsPmTab ? 1 : 0)
+            .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
+            .ToList();
+
     private void DrawSidebar()
     {
         // Same reserve formula as DrawContent's "Messages" child (not the old flat -28px) so the
@@ -666,29 +703,7 @@ public sealed class MainWindow : Window, IDisposable
         {
             if (child.Success)
             {
-                // Snapshot (and reorder) the list: closing a whisper tab from the context menu below
-                // mutates TabManager.Tabs mid-draw, which would otherwise throw iterating the live
-                // list. Regular tabs always keep their existing relative order and stay above every
-                // PM tab; within the PM tabs specifically, unread ones bubble to the top of that
-                // group (not above the regular tabs) so a new whisper is easy to spot without
-                // reshuffling the whole sidebar. OrderBy/ThenBy are stable, so ties (same PM-ness,
-                // same unread-ness) keep their original relative order.
-                //
-                // Fixed 2026-08-17: the currently-selected tab used to bubble like any other PM tab
-                // once its UnreadCount ticked above 0 - fine normally, since a tab you're actively
-                // looking at gets its count decayed back to 0 within a frame or two (see the Discord-
-                // style unread tracking system). But under a fast burst of incoming messages (reported
-                // live as "friend list spams me"), UnreadCount can tick up and immediately back down
-                // *every single message*, faster than the eye tracks - each tick flips this tab's sort
-                // key, which reshuffles/reflows the *entire* PM group around it every time, visible as
-                // the whole friend-tabs block repeatedly vanishing and reappearing. There's no reason
-                // for the tab you're already looking at to ever jump position from its own traffic in
-                // the first place, so it's excluded from the bubble-to-top treatment entirely now.
-                var orderedTabs = plugin.TabManager.Tabs
-                    .Where(t => !t.IsDetached)
-                    .OrderBy(t => t.IsPmTab ? 1 : 0)
-                    .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
-                    .ToList();
+                var orderedTabs = GetOrderedTabs();
 
                 foreach (var tab in orderedTabs)
                 {
@@ -749,13 +764,87 @@ public sealed class MainWindow : Window, IDisposable
     }
 
     /// <summary>
+    /// Browser-style alternative to <see cref="DrawSidebar"/> (see <see cref="Configuration.TabLayout"/>) -
+    /// the same tabs, same order (<see cref="GetOrderedTabs"/>), same right-click menu, just flowed
+    /// left-to-right across the top instead of stacked in a fixed-width column on the left, wrapping to
+    /// as many rows as needed for however many tabs currently exist. "Close All PM" moves to its own
+    /// small row underneath, since there's no natural fixed slot for it the way the sidebar's bottom
+    /// has.
+    ///
+    /// <para>The wrap decision here follows this project's own hard-won rule for this exact kind of
+    /// layout (see the wrap-bug history in project memory): the "does the next tab fit on this line"
+    /// check is always based on <see cref="ImGui.GetItemRectMax"/> of the *previously drawn* tab, never
+    /// <see cref="ImGui.GetCursorPosX"/> or <see cref="ImGui.GetContentRegionAvail"/> read before the
+    /// <see cref="ImGui.SameLine()"/> decision - the latter is always the "start of a fresh line"
+    /// position (ImGui auto-advances the cursor after any widget not followed by SameLine), which
+    /// reliably reports "fits" even when it doesn't, the same failure mode that hit this project's emote
+    /// picker grid and message word-wrap multiple times before this rule was established.</para></summary>
+    private void DrawBrowserTabStrip()
+    {
+        var orderedTabs = GetOrderedTabs();
+        var rightEdge = ImGui.GetWindowContentRegionMax().X;
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+
+        for (var i = 0; i < orderedTabs.Count; i++)
+        {
+            var tab = orderedTabs[i];
+            if (i > 0)
+            {
+                var previousRight = ImGui.GetItemRectMax().X;
+                if (previousRight + spacing + MeasureTabContentWidth(tab) <= rightEdge)
+                    ImGui.SameLine();
+            }
+
+            DrawBrowserTab(tab);
+
+            if (ImGui.BeginPopupContextItem($"ctx_{tab.Id}"))
+            {
+                DrawTabContextMenu(tab);
+                ImGui.EndPopup();
+            }
+        }
+
+        if (orderedTabs.Count > 0)
+            ImGui.Spacing();
+
+        var hasPmTabs = plugin.TabManager.Tabs.Any(t => t.IsPmTab);
+        using (ImRaii.Disabled(!hasPmTabs))
+        {
+            if (ImGui.Button("Close All PM"))
+            {
+                plugin.CloseAllWhisperTabs();
+                if (selectedTabId != null && !plugin.TabManager.Tabs.Any(t => t.Id == selectedTabId))
+                    selectedTabId = null;
+            }
+        }
+
+        ImGui.Separator();
+    }
+
+    /// <summary>One tab button in <see cref="DrawBrowserTabStrip"/> - a fixed-width Selectable (sized
+    /// via <see cref="MeasureTabContentWidth"/>, computed *before* this call so the strip's own wrap
+    /// decision already accounted for it) with the same content painted via <see cref="DrawTabContent"/>
+    /// <see cref="DrawTabRow"/> uses for the sidebar - see that method's own doc comment for why one
+    /// shared content-drawing method backs both layouts.</summary>
+    private void DrawBrowserTab(ChatTabConfig tab)
+    {
+        var selected = tab.Id == selectedTabId;
+        var width = MeasureTabContentWidth(tab);
+        var height = ImGui.GetFrameHeight();
+
+        if (ImGui.Selectable($"##browsertab_{tab.Id}", selected, ImGuiSelectableFlags.None, new Vector2(width, height)))
+            selectedTabId = tab.Id;
+
+        DrawTabContent(tab, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+    }
+
+    /// <summary>
     /// One sidebar row: a full-width Selectable with an empty label for the click/hover area, with
-    /// the name and unread count painted on top via <see cref="ImDrawList.AddText"/> so the count can
-    /// be coloured red and the name can pulse - a single Selectable label can't have mixed colours.
-    /// Deliberately uses the draw list directly instead of more ImGui widgets positioned via
-    /// SetCursorScreenPos: that approach (tried first) fed back into ImGui's own cursor/layout state
-    /// and threw off every following row's horizontal position, drifting further left row by row.
-    /// Painting onto the draw list doesn't touch layout state at all, so it can't do that.
+    /// the tab's icon/marker/badge/name/unread-count content painted on top via
+    /// <see cref="DrawTabContent"/> - see that method's own doc comment for why this uses the draw
+    /// list directly instead of more ImGui widgets. Also used (with a fixed-width Selectable instead
+    /// of full-width) by <see cref="DrawBrowserTab"/> for <see cref="TabLayoutMode.Tabs"/> - both
+    /// layouts render tab content identically, they just differ in the Selectable's own size/flow.
     /// </summary>
     private void DrawTabRow(ChatTabConfig tab)
     {
@@ -763,8 +852,20 @@ public sealed class MainWindow : Window, IDisposable
         if (ImGui.Selectable($"##tab_{tab.Id}", selected))
             selectedTabId = tab.Id;
 
-        var itemMin = ImGui.GetItemRectMin();
-        var itemMax = ImGui.GetItemRectMax();
+        DrawTabContent(tab, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+    }
+
+    /// <summary>Paints a tab's icon/friend-marker/linkshell-badge/name/unread-count onto the current
+    /// window's draw list, vertically centered within <paramref name="itemMin"/>/<paramref name="itemMax"/> -
+    /// shared content-drawing for both <see cref="DrawTabRow"/> (sidebar) and <see cref="DrawBrowserTab"/>
+    /// (browser-style tab strip, see <see cref="Configuration.TabLayout"/>), so the two layouts can
+    /// never visually drift apart into two independently-maintained copies of this logic. Deliberately
+    /// uses the draw list directly instead of more ImGui widgets positioned via SetCursorScreenPos:
+    /// that approach (tried first) fed back into ImGui's own cursor/layout state and threw off every
+    /// following row's horizontal position, drifting further left row by row. Painting onto the draw
+    /// list doesn't touch layout state at all, so it can't do that.</summary>
+    private void DrawTabContent(ChatTabConfig tab, Vector2 itemMin, Vector2 itemMax)
+    {
         var textY = itemMin.Y + (itemMax.Y - itemMin.Y - ImGui.GetTextLineHeight()) / 2f;
         var drawList = ImGui.GetWindowDrawList();
 
@@ -838,6 +939,37 @@ public sealed class MainWindow : Window, IDisposable
             var countPos = new Vector2(namePos.X + ImGui.CalcTextSize(tab.Name).X + 4, textY);
             drawList.AddText(countPos, ImGui.ColorConvertFloat4ToU32(countColor), $"({tab.UnreadCount})");
         }
+    }
+
+    /// <summary>Total on-screen width <see cref="DrawTabContent"/> will actually use for
+    /// <paramref name="tab"/> - mirrors that method's own left-to-right accumulation (icon, friend
+    /// marker, linkshell badge, name, unread count) purely as arithmetic, without drawing anything, so
+    /// <see cref="DrawBrowserTab"/> can size its Selectable *before* content is painted into it. Kept
+    /// as a straight port of the same conditions rather than a shared helper returning both a size and
+    /// a draw callback - there's no SameLine()/cursor-position trickery here for the two copies to
+    /// drift apart on (this project's actual proven failure mode for wrap logic, see
+    /// <see cref="DrawBrowserTabStrip"/>'s own doc comment) - just addition, so the duplication is inert.</summary>
+    private float MeasureTabContentWidth(ChatTabConfig tab)
+    {
+        var config = Plugin.Configuration;
+        var width = 4f;
+
+        if (!string.IsNullOrEmpty(tab.IconEmoji))
+            width += ImGui.GetTextLineHeight() + 4;
+
+        if (tab.IsPmTab && config.FriendMarkerEnabled && !string.IsNullOrEmpty(config.FriendMarkerEmoji) &&
+            !string.IsNullOrEmpty(tab.PmPartnerKey) && plugin.FriendListService.IsFriendKey(tab.PmPartnerKey))
+            width += ImGui.GetTextLineHeight() + 4;
+
+        if (tab.IsAutoLinkshellTab)
+            width += ImGui.CalcTextSize(tab.IsCrossWorldLinkshell ? "[CWLS] " : "[LS] ").X;
+
+        width += ImGui.CalcTextSize(tab.Name).X;
+
+        if (tab.UnreadCount > 0 && !tab.MuteUnreadIndicator)
+            width += 4 + ImGui.CalcTextSize($"({tab.UnreadCount})").X;
+
+        return width + 4;
     }
 
     private void DrawTabContextMenu(ChatTabConfig tab)
@@ -916,7 +1048,9 @@ public sealed class MainWindow : Window, IDisposable
         var tab = ResolveSelectedTab();
         if (tab == null)
         {
-            ImGui.TextDisabled("No tabs yet - create one on the left.");
+            ImGui.TextDisabled(Plugin.Configuration.TabLayout == TabLayoutMode.Tabs
+                ? "No tabs yet - create one in Settings > Tabs."
+                : "No tabs yet - create one on the left.");
             return;
         }
 

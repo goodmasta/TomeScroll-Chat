@@ -286,6 +286,13 @@ public class Configuration : IPluginConfiguration
     /// alongside cycling, since nothing here suppresses normal text input.</summary>
     public ImGuiKey CycleOutgoingChannelHotkeyKey { get; set; } = ImGuiKey.Space;
 
+    /// <summary>How <see cref="Windows.MainWindow"/> lists its tabs - the original fixed-width
+    /// <see cref="TabLayoutMode.Sidebar"/> by default, or a browser-style horizontal, wrapping
+    /// <see cref="TabLayoutMode.Tabs"/> strip across the top, per explicit user request. Purely a
+    /// display preference - doesn't affect which tabs exist, their order, or anything about a popped-
+    /// out <see cref="Windows.DetachedTabWindow"/>.</summary>
+    public TabLayoutMode TabLayout { get; set; } = TabLayoutMode.Sidebar;
+
     /// <summary>Auto-creates one tab per joined linkshell/cross-world linkshell (see
     /// <see cref="Services.LinkshellWatcherService"/>), removed the moment you leave/get kicked from
     /// one. Turning this off removes every such tab immediately (see
@@ -389,6 +396,7 @@ public class Configuration : IPluginConfiguration
         CycleOutgoingChannelHotkeyCtrl = defaults.CycleOutgoingChannelHotkeyCtrl;
         CycleOutgoingChannelHotkeyShift = defaults.CycleOutgoingChannelHotkeyShift;
         CycleOutgoingChannelHotkeyKey = defaults.CycleOutgoingChannelHotkeyKey;
+        TabLayout = defaults.TabLayout;
         AutoLinkshellTabs = defaults.AutoLinkshellTabs;
         ShowHideChatButton = defaults.ShowHideChatButton;
         AutoHideChatWhenInactive = defaults.AutoHideChatWhenInactive;
