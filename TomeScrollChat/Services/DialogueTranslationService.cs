@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Dalamud.Game.Gui.Toast;
 using Dalamud.Game.Text.SeStringHandling;
 using Dalamud.Plugin.Services;
@@ -187,35 +188,62 @@ public sealed class DialogueTranslationService : IDisposable
             QueueTranslation(DialogueTranslationKind.QuestNotice, null, text);
     }
 
-    /// <summary>Fires the translation and appends the result once it lands - not awaited by the
-    /// caller (both call sites are synchronous framework-tick/event handlers), and each call is fully
-    /// independent (no shared in-flight state to guard), so overlapping requests from back-to-back
-    /// lines just complete and append in whatever order they finish, same as normal chat auto-translate.</summary>
+    /// <summary>Retried up to this many times (per explicit user request - "если перевод сюжета не
+    /// прошел по какой-либо причине") before a single dialogue line is given up on entirely - a null/
+    /// empty result and a thrown exception are both treated as failures worth retrying, same as each
+    /// other. Kept small: a dialogue line advances at human reading pace (see this class's own doc
+    /// comment), so there's no bursty backlog to protect against the way the main chat translation
+    /// queue's own backoff exists for - just enough attempts to ride out a transient network hiccup or
+    /// a single flaky response, not to keep hammering a genuinely broken engine (which
+    /// <see cref="TranslationService.TrackEngineHealth"/>'s own auto-switch-on-failure, fed by every one
+    /// of these attempts too, already handles across calls).</summary>
+    private const int MaxDialogueTranslationAttempts = 3;
+
+    /// <summary>Multiplied by the attempt number for a short linear backoff between retries (2s, then
+    /// 4s) - long enough to give a transient failure (rate limit, brief network blip) room to clear,
+    /// short enough that a fully-given-up line still shows up within a few seconds of the original one,
+    /// not distractingly late.</summary>
+    private static readonly TimeSpan DialogueRetryBaseDelay = TimeSpan.FromSeconds(2);
+
+    /// <summary>Fires the translation (retrying on failure, see <see cref="MaxDialogueTranslationAttempts"/>)
+    /// and appends the result once it lands - not awaited by the caller (both call sites are synchronous
+    /// framework-tick/event handlers), and each call is fully independent (no shared in-flight state to
+    /// guard), so overlapping requests from back-to-back lines just complete and append in whatever
+    /// order they finish, same as normal chat auto-translate.</summary>
     private async void QueueTranslation(DialogueTranslationKind kind, string? speaker, string originalText)
     {
-        try
+        for (var attempt = 1; attempt <= MaxDialogueTranslationAttempts; attempt++)
         {
-            var translated = await translationService.TranslateDialogueAsync(speaker, originalText, configuration.TranslateTargetLanguage).ConfigureAwait(false);
-            if (string.IsNullOrWhiteSpace(translated))
+            try
             {
-                log.Warning("TomeScrollChat: dialogue translation ({Kind}) returned empty/null via {Engine}", kind, TranslationService.EngineLabel(translationService.ActiveEngine));
-                return;
+                var translated = await translationService.TranslateDialogueAsync(speaker, originalText, configuration.TranslateTargetLanguage).ConfigureAwait(false);
+                if (!string.IsNullOrWhiteSpace(translated))
+                {
+                    var entry = new DialogueTranslationEntry(kind, speaker, originalText, translated, DateTime.UtcNow);
+                    lock (entriesLock)
+                    {
+                        entries.Add(entry);
+                        if (entries.Count > MaxEntries)
+                            entries.RemoveAt(0);
+                    }
+
+                    LastEntryAt = entry.ReceivedAt;
+                    return;
+                }
+
+                log.Warning("TomeScrollChat: dialogue translation ({Kind}) returned empty/null via {Engine} (attempt {Attempt}/{Max})",
+                    kind, TranslationService.EngineLabel(translationService.ActiveEngine), attempt, MaxDialogueTranslationAttempts);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "TomeScrollChat: dialogue translation failed (attempt {Attempt}/{Max})", attempt, MaxDialogueTranslationAttempts);
             }
 
-            var entry = new DialogueTranslationEntry(kind, speaker, originalText, translated, DateTime.UtcNow);
-            lock (entriesLock)
-            {
-                entries.Add(entry);
-                if (entries.Count > MaxEntries)
-                    entries.RemoveAt(0);
-            }
+            if (attempt < MaxDialogueTranslationAttempts)
+                await Task.Delay(DialogueRetryBaseDelay * attempt).ConfigureAwait(false);
+        }
 
-            LastEntryAt = entry.ReceivedAt;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "TomeScrollChat: dialogue translation failed");
-        }
+        log.Warning("TomeScrollChat: dialogue translation ({Kind}) gave up after {Max} attempts", kind, MaxDialogueTranslationAttempts);
     }
 
     public void Dispose()
