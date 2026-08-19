@@ -549,6 +549,10 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.TextUnformatted("Auto-reply");
         ImGui.TextDisabled("Sends a fixed message automatically - to whispers, and/or when your name is mentioned in Say/Yell/Shout/Party/FC/Alliance/Linkshells (always replied to as a whisper, never posted into the public channel itself).");
+
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + 340);
+        ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), "Warning: this sends real, automated messages on your behalf with no per-message confirmation - the kind of behaviour Square Enix's ToS prohibits and other players can report as bot-like. Use at your own risk.");
+        ImGui.PopTextWrapPos();
         ImGui.Spacing();
 
         var enabled = configuration.AutoReplyEnabled;
