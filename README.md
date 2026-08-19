@@ -89,6 +89,22 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 - A message that name-drops your own character gets a persistent highlight tint.
 - **Screenshot mode** redacts player/sender names.
 
+## Setting up Gemini
+
+Optional - the chat window, tabs, whispers, and Google Translate-based translation all work without it. A Gemini key just unlocks the AI-backed features below.
+
+1. Get a free API key from [Google AI Studio](https://aistudio.google.com/apikey) (a Google account is all that's needed).
+2. In-game, open `/tomescrollc config` → **AI** tab.
+3. Paste the key into **API key**. A sensible default model is pre-selected in the **Model** dropdown - only change it if you want something faster/cheaper or more capable.
+4. "Status: configured." confirms it took.
+
+Once set, it powers:
+
+- The **"Gemini"** option for the translation engine (General → Translation) - richer/more accurate than the default Google Translate engine.
+- **Generate AI Reply** / **Rephrase** / **Fix errors** (see AI features below) - hidden from menus entirely until a key is set.
+
+The key is stored only in this plugin's own local config file, never sent anywhere except Google's Gemini API.
+
 ## AI features (requires a Gemini API key, Settings → AI)
 
 All AI actions only ever fill the compose box - none of them send anything automatically.
