@@ -21,6 +21,8 @@ public sealed class ConfigWindow : Window, IDisposable
     private string tabIconSearch = string.Empty;
     private string playerColorNicknameInput = string.Empty;
     private readonly FileDialogManager fileDialogManager = new();
+    private string crossDcAdminKeyInput = string.Empty;
+    private int crossDcLogLines = 100;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1389,10 +1391,80 @@ public sealed class ConfigWindow : Window, IDisposable
 
             ImGui.Spacing();
             DrawCrossDcStatus();
+
+            if (plugin.CrossDcRelayService.IsConnected)
+            {
+                ImGui.Spacing();
+                ImGui.Separator();
+                DrawCrossDcAdmin();
+            }
+
             ImGui.Unindent();
         }
 
         DrawManagedRelayConsentPopup();
+    }
+
+    /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap
+    /// key, and (once admin) pulling recent server logs straight into this window. Aimed at whoever
+    /// actually operates a relay (their own self-hosted one, or TomeScroll Cloud itself), not the
+    /// average player - but there's no separate "operator mode," it's just another part of this tab,
+    /// gated on actually being connected.</summary>
+    private void DrawCrossDcAdmin()
+    {
+        var relay = plugin.CrossDcRelayService;
+
+        ImGui.TextUnformatted("Server admin");
+        ImGui.TextDisabled("For whoever operates this relay - the bootstrap key is printed to the relay's own log on startup.");
+
+        if (relay.IsAdmin)
+        {
+            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.4f, 1f), "Admin rights active on this connection.");
+        }
+        else
+        {
+            ImGui.SetNextItemWidth(280);
+            ImGui.InputTextWithHint("##crossDcAdminKey", "Admin bootstrap key", ref crossDcAdminKeyInput, 100, ImGuiInputTextFlags.Password);
+            ImGui.SameLine();
+            using (ImRaii.Disabled(crossDcAdminKeyInput.Length == 0))
+            {
+                if (ImGui.Button("Claim admin"))
+                {
+                    var key = crossDcAdminKeyInput;
+                    crossDcAdminKeyInput = string.Empty;
+                    _ = relay.ClaimAdminAsync(key);
+                }
+            }
+
+            if (relay.AdminError != null)
+                ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.AdminError);
+        }
+
+        using (ImRaii.Disabled(!relay.IsAdmin))
+        {
+            ImGui.Spacing();
+            ImGui.SetNextItemWidth(100);
+            ImGui.InputInt("Lines##crossDcLogLines", ref crossDcLogLines);
+            crossDcLogLines = Math.Clamp(crossDcLogLines, 1, 500);
+
+            ImGui.SameLine();
+            if (ImGui.Button("Fetch logs"))
+                _ = relay.RequestLogsAsync(crossDcLogLines);
+
+            if (relay.LogsError != null)
+                ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.LogsError);
+
+            if (relay.Logs.Count > 0)
+            {
+                ImGui.TextDisabled($"{relay.Logs.Count} line(s):");
+                using var child = ImRaii.Child("CrossDcLogsView", new Vector2(0, 240), true);
+                if (child.Success)
+                {
+                    foreach (var line in relay.Logs)
+                        ImGui.TextUnformatted(line);
+                }
+            }
+        }
     }
 
     /// <summary>Live connection status readout - <see cref="Plugin.CrossDcRelayService"/> is public

@@ -22,6 +22,12 @@ internal sealed record RelayTypeOnly(string? Type);
 internal sealed record RelayChallengeMessage(string? Type, string? Nonce);
 internal sealed record RelayHelloMessage(string PublicKey, string Signature);
 internal sealed record RelayConnectedMessage(string? Type, string? Id);
+internal sealed record RelayErrorMessage(string? Type, string? Reason);
+
+internal sealed record RelayClaimAdminRequest(string Type, string Key);
+
+internal sealed record RelayGetLogsRequest(string Type, int? Lines);
+internal sealed record RelayLogsMessage(string? Type, string[]? Lines);
 
 /// <summary>Send/receive helpers for JSON text frames over a <see cref="WebSocket"/> - the client-side
 /// mirror of the relay's own <c>WebSocketJson</c>, so both ends agree on framing as well as casing.</summary>
@@ -29,8 +35,10 @@ internal static class RelaySocketIo
 {
     // Generous relative to the relay's own 8 KiB *inbound* cap - this is only ever receiving what the
     // relay itself already bounded on its side, this ceiling is just a sanity backstop against buffering
-    // an unbounded amount of memory if something ever went wrong.
-    private const int MaxMessageBytes = 64 * 1024;
+    // an unbounded amount of memory if something ever went wrong. Sized well above the relay's own
+    // getLogs cap (500 lines) - a full log dump is comfortably the largest single frame this client
+    // ever receives.
+    private const int MaxMessageBytes = 256 * 1024;
 
     public static Task SendAsync<T>(ClientWebSocket socket, T message, CancellationToken cancellationToken)
     {
