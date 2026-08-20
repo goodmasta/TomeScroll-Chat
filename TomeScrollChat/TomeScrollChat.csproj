@@ -13,6 +13,10 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <!-- Ed25519 (relay identity) + X25519 (cross-DC message encryption key exchange) - .NET has no
+         built-in support for either curve. Same library/version TomeScrollRelay's server side already
+         uses, so both ends of the handshake are on identical primitives. -->
+    <PackageReference Include="NSec.Cryptography" Version="26.4.0" />
   </ItemGroup>
 
   <!-- Bundled default notification sound (see Services.NotificationSoundService) - embedded directly

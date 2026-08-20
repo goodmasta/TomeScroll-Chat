@@ -1332,6 +1332,7 @@ public sealed class ConfigWindow : Window, IDisposable
             }
 
             configuration.Save();
+            plugin.ApplyCrossDcRelaySettings();
 
             if (configuration.CrossDcRelayMode == RelayMode.Managed && !configuration.CrossDcRelayManagedConsentAcknowledged)
                 ImGui.OpenPopup("TomeScrollChatManagedRelayConsent");
@@ -1349,6 +1350,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 {
                     configuration.CrossDcRelayMode = RelayMode.Managed;
                     configuration.Save();
+                    plugin.ApplyCrossDcRelaySettings();
 
                     if (!configuration.CrossDcRelayManagedConsentAcknowledged)
                         ImGui.OpenPopup("TomeScrollChatManagedRelayConsent");
@@ -1364,6 +1366,7 @@ public sealed class ConfigWindow : Window, IDisposable
             {
                 configuration.CrossDcRelayMode = RelayMode.SelfHosted;
                 configuration.Save();
+                plugin.ApplyCrossDcRelaySettings();
             }
 
             using (ImRaii.Disabled(configuration.CrossDcRelayMode != RelayMode.SelfHosted))
@@ -1374,6 +1377,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 {
                     configuration.CrossDcRelaySelfHostedUrl = selfHostedUrl.Trim();
                     configuration.Save();
+                    plugin.ApplyCrossDcRelaySettings();
                 }
 
                 if (configuration.CrossDcRelayMode == RelayMode.SelfHosted && selfHostedUrl.Length > 0 && !selfHostedUrl.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
@@ -1382,10 +1386,33 @@ public sealed class ConfigWindow : Window, IDisposable
 
             ImGui.Spacing();
             ImGui.TextDisabled("Switching servers disconnects you from any contacts/groups on the previous one - pairings live on that specific server, not carried with you.");
+
+            ImGui.Spacing();
+            DrawCrossDcStatus();
             ImGui.Unindent();
         }
 
         DrawManagedRelayConsentPopup();
+    }
+
+    /// <summary>Live connection status readout - <see cref="Plugin.CrossDcRelayService"/> is public
+    /// specifically so this can read it directly, same as e.g. <c>plugin.EmoteService.GetLoadedEmotes()</c>
+    /// elsewhere on this window.</summary>
+    private void DrawCrossDcStatus()
+    {
+        var relay = plugin.CrossDcRelayService;
+        if (relay.IsConnected)
+        {
+            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.4f, 1f), $"Connected (id: {relay.UserId}).");
+        }
+        else if (relay.LastError != null)
+        {
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), $"Not connected: {relay.LastError}");
+        }
+        else
+        {
+            ImGui.TextDisabled("Not connected.");
+        }
     }
 
     /// <summary>One-time notice shown the first time <see cref="RelayMode.Managed"/> is selected -

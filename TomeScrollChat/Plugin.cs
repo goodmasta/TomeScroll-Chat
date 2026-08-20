@@ -13,6 +13,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using TomeScrollChat.Models;
 using TomeScrollChat.Services;
+using TomeScrollChat.Services.CrossDc;
 using TomeScrollChat.Windows;
 
 namespace TomeScrollChat;
@@ -74,6 +75,11 @@ public sealed class Plugin : IDalamudPlugin
     public FriendOnlineWatcherService FriendOnlineWatcherService { get; }
     public AiReplyService AiReplyService { get; }
     public AutoReplyService AutoReplyService { get; }
+
+    /// <summary>Public so Settings > Cross-DC can read <see cref="CrossDcRelayService.IsConnected"/>/
+    /// <see cref="CrossDcRelayService.UserId"/>/<see cref="CrossDcRelayService.LastError"/> directly,
+    /// same reasoning as <see cref="NotificationService"/> above.</summary>
+    public CrossDcRelayService CrossDcRelayService { get; }
     private readonly WhisperNotificationService whisperNotificationService;
     private readonly MentionNotificationService mentionNotificationService;
     private readonly NativeChatHider nativeChatHider;
@@ -129,6 +135,10 @@ public sealed class Plugin : IDalamudPlugin
         whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, NotificationSoundService, Log);
         mentionNotificationService = new MentionNotificationService(ChatCaptureService, Configuration, NotificationService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
+        CrossDcRelayService = new CrossDcRelayService(PluginInterface.ConfigDirectory.FullName, Configuration, Log);
+        // Auto-(re)connects on startup if the feature was already enabled in a previous session - a
+        // no-op if it's still Disabled, same method Settings > Cross-DC calls on every later change.
+        CrossDcRelayService.Reconcile();
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
 
@@ -511,6 +521,11 @@ public sealed class Plugin : IDalamudPlugin
 
     public void ApplyNativeChatHidden() => nativeChatHider.Active = Configuration.HideNativeChat;
 
+    /// <summary>Settings > Cross-DC's handler for every change that affects the relay connection (the
+    /// enable toggle, switching Managed/SelfHosted, editing the self-hosted URL) - reconciles the live
+    /// connection against whatever the config now says.</summary>
+    public void ApplyCrossDcRelaySettings() => CrossDcRelayService.Reconcile();
+
     /// <summary>Wipes all stored chat history from disk and clears the in-memory scrollback that
     /// every open tab/window is currently showing, so the UI reflects it immediately.</summary>
     public void ClearAllHistory()
@@ -601,6 +616,7 @@ public sealed class Plugin : IDalamudPlugin
 
         TabManager.TabRemoved -= OnTabRemoved;
 
+        CrossDcRelayService.Dispose();
         nativeChatHider.Dispose();
         nativeChatInputWatcher.Dispose();
         nativeItemLinkWatcher.Dispose();
