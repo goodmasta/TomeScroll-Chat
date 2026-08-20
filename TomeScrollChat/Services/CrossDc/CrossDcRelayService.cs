@@ -53,6 +53,7 @@ public sealed class CrossDcRelayService : IDisposable
     private readonly string configDirectory;
     private readonly Configuration configuration;
     private readonly IPluginLog log;
+    private readonly Func<string?> getLocalPlayerName;
     private readonly object gate = new();
 
     // Serializes entire admin-tooling request/response *cycles*, not just the send - a second call
@@ -90,11 +91,12 @@ public sealed class CrossDcRelayService : IDisposable
     /// chat, so the cross-DC tab actually shows it live instead of only on next open.</summary>
     public event Action<string, CrossDcChatMessage>? MessageAppended;
 
-    public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log)
+    public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log, Func<string?> getLocalPlayerName)
     {
         this.configDirectory = configDirectory;
         this.configuration = configuration;
         this.log = log;
+        this.getLocalPlayerName = getLocalPlayerName;
     }
 
     public bool IsConnected { get; private set; }
@@ -219,6 +221,13 @@ public sealed class CrossDcRelayService : IDisposable
     public bool HasKeyFor(string contactUserId) =>
         connectedUrl != null && identity?.GetPeerPublicKey(connectedUrl, contactUserId) != null;
 
+    /// <summary>The contact's character name (as announced via <c>keyAnnounce</c> - see
+    /// <see cref="SendKeyAnnounceAsync"/>/the <c>keyAnnounce</c> case in <see cref="HandleIncomingPayload"/>),
+    /// or the raw relay userId if no announcement carrying a name has arrived yet - always something
+    /// non-empty either way, so callers never need their own fallback.</summary>
+    public string GetDisplayName(string contactUserId) =>
+        (connectedUrl != null ? identity?.GetPeerDisplayName(connectedUrl, contactUserId) : null) ?? contactUserId;
+
     /// <summary>Encrypts and sends a chat message to an already-paired contact - false (and no local
     /// history entry added) if there's no live connection, no key for them yet (see
     /// <see cref="HasKeyFor"/>), or the send itself fails. Unlike the admin-tooling requests, there's no
@@ -260,7 +269,7 @@ public sealed class CrossDcRelayService : IDisposable
         if (identity == null)
             return;
 
-        var envelope = new ChatKeyAnnounceEnvelope("keyAnnounce", identity.EncryptionPublicKeyBase64);
+        var envelope = new ChatKeyAnnounceEnvelope("keyAnnounce", identity.EncryptionPublicKeyBase64, getLocalPlayerName());
         var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
         await SendRawAsync(new RelaySendRequest("send", contactUserId, payload), cancellationToken).ConfigureAwait(false);
     }
@@ -577,6 +586,16 @@ public sealed class CrossDcRelayService : IDisposable
                 {
                     identity?.SetPeerPublicKey(connectedUrl, fromUserId, announce.PublicKey);
                     log.Info("TomeScrollChat: received a cross-DC key announcement from {From}", fromUserId);
+
+                    // A display name riding along with this announcement (see SendKeyAnnounceAsync) is
+                    // new information about a contact that may already have a tab named after their raw
+                    // userId (created before this arrived) - re-raise ContactAdded so Plugin's
+                    // GetOrCreateCrossDcTab gets a chance to upgrade that placeholder name now.
+                    if (!string.IsNullOrEmpty(announce.DisplayName))
+                    {
+                        identity?.SetPeerDisplayName(connectedUrl, fromUserId, announce.DisplayName);
+                        ContactAdded?.Invoke(fromUserId);
+                    }
                 }
                 break;
 

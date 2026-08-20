@@ -46,7 +46,7 @@ internal sealed record RelayMessageEnvelope(string? Type, string? From, string? 
 /// <c>keyAnnounce</c> (announce this identity's X25519 public key to a newly-paired contact) and
 /// <c>chat</c> (an encrypted message). Both share the same "type" field so the receiver can tell them
 /// apart the same way the outer relay protocol does.</summary>
-internal sealed record ChatKeyAnnounceEnvelope(string Type, string PublicKey);
+internal sealed record ChatKeyAnnounceEnvelope(string Type, string PublicKey, string? DisplayName = null);
 internal sealed record ChatMessageEnvelope(string Type, string Nonce, string Ciphertext);
 
 /// <summary>Send/receive helpers for JSON text frames over a <see cref="WebSocket"/> - the client-side

@@ -23,6 +23,7 @@ public sealed class MainWindow : Window, IDisposable
 {
     private static readonly Vector4 BlinkBase = new(1f, 1f, 1f, 1f);
     private static readonly Vector4 LinkshellBadgeColor = new(0.35f, 0.9f, 0.35f, 1f);
+    private static readonly Vector4 CrossDcBadgeColor = new(0.4f, 0.75f, 1f, 1f);
 
     /// <summary>Vertical gap below the (now bordered) "Messages" child and between the toolbar/input
     /// rows - tighter than the theme's default ItemSpacing.Y, which read as an oddly large gap once
@@ -1004,6 +1005,12 @@ public sealed class MainWindow : Window, IDisposable
         {
             var badge = tab.IsCrossWorldLinkshell ? "[CWLS] " : "[LS] ";
             drawList.AddText(new Vector2(textX, textY), ImGui.ColorConvertFloat4ToU32(LinkshellBadgeColor), badge);
+            textX += ImGui.CalcTextSize(badge).X;
+        }
+        else if (tab.IsCrossDcTab)
+        {
+            const string badge = "[CD] ";
+            drawList.AddText(new Vector2(textX, textY), ImGui.ColorConvertFloat4ToU32(CrossDcBadgeColor), badge);
             textX += ImGui.CalcTextSize(badge).X;
         }
 

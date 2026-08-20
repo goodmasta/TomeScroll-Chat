@@ -136,7 +136,7 @@ public sealed class Plugin : IDalamudPlugin
         whisperNotificationService = new WhisperNotificationService(ChatCaptureService, Configuration, NotificationService, NotificationSoundService, Log);
         mentionNotificationService = new MentionNotificationService(ChatCaptureService, Configuration, NotificationService, Log);
         nativeChatHider = new NativeChatHider(Framework, GameGui) { Active = Configuration.HideNativeChat };
-        CrossDcRelayService = new CrossDcRelayService(PluginInterface.ConfigDirectory.FullName, Configuration, Log);
+        CrossDcRelayService = new CrossDcRelayService(PluginInterface.ConfigDirectory.FullName, Configuration, Log, GetLocalPlayerKey);
         // Auto-(re)connects on startup if the feature was already enabled in a previous session - a
         // no-op if it's still Disabled, same method Settings > Cross-DC calls on every later change.
         CrossDcRelayService.Reconcile();
@@ -231,7 +231,7 @@ public sealed class Plugin : IDalamudPlugin
     /// mutates a plain <see cref="List{T}"/> the UI enumerates every frame, unlike the simple property
     /// reads/writes the rest of <see cref="CrossDcRelayService"/> already does cross-thread.</summary>
     private void OnCrossDcContactAdded(string contactUserId) =>
-        Framework.RunOnFrameworkThread(() => TabManager.GetOrCreateCrossDcTab(contactUserId, contactUserId));
+        Framework.RunOnFrameworkThread(() => TabManager.GetOrCreateCrossDcTab(contactUserId, CrossDcRelayService.GetDisplayName(contactUserId)));
 
     /// <summary>Routes one cross-DC chat message (incoming or this identity's own outgoing) into the
     /// same tab-rendering/history pipeline native chat uses - the cross-DC mirror of
@@ -244,12 +244,12 @@ public sealed class Plugin : IDalamudPlugin
     private void OnCrossDcMessageAppended(string contactUserId, CrossDcChatMessage message) =>
         Framework.RunOnFrameworkThread(() =>
         {
-            var tab = TabManager.GetOrCreateCrossDcTab(contactUserId, contactUserId);
+            var tab = TabManager.GetOrCreateCrossDcTab(contactUserId, CrossDcRelayService.GetDisplayName(contactUserId));
             var record = new ChatMessageRecord
             {
                 TimestampUtc = message.Timestamp.UtcDateTime,
                 ChatType = message.IsOutgoing ? XivChatType.TellOutgoing : XivChatType.TellIncoming,
-                SenderName = contactUserId,
+                SenderName = CrossDcRelayService.GetDisplayName(contactUserId),
                 SenderKey = contactUserId,
                 IsFromLocalPlayer = message.IsOutgoing,
                 Body = message.Text,

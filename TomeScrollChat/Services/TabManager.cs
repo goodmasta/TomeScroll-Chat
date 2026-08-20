@@ -161,12 +161,27 @@ public sealed class TabManager
     /// <summary>Finds the existing tab for one paired cross-DC contact, or creates it - the cross-DC
     /// mirror of <see cref="GetOrCreatePmTab"/>. Always a main-window tab (no self-hosted-window default
     /// equivalent to <see cref="Configuration.OpenWhispersInSeparateWindow"/> for cross-DC yet); the
-    /// player can still detach it by hand afterwards like any other tab.</summary>
+    /// player can still detach it by hand afterwards like any other tab.
+    ///
+    /// <para>A tab can exist before the contact's character name is known (created the moment pairing
+    /// completes, with the raw relay userId as a placeholder <paramref name="displayName"/> - the name
+    /// announcement is a separate, later message, see <see cref="Services.CrossDc.CrossDcRelayService"/>'s
+    /// <c>keyAnnounce</c> handling). If the tab's current name is still exactly that placeholder (the
+    /// contact's own userId), a newly-supplied real <paramref name="displayName"/> upgrades it in place -
+    /// but only then, so a name the player has since customised by hand is never overwritten.</para></summary>
     public ChatTabConfig GetOrCreateCrossDcTab(string contactUserId, string displayName)
     {
         var existing = configuration.Tabs.FirstOrDefault(t => t.IsCrossDcTab && t.CrossDcContactUserId == contactUserId);
         if (existing != null)
+        {
+            if (existing.Name == contactUserId && displayName != contactUserId)
+            {
+                existing.Name = displayName;
+                configuration.Save();
+            }
+
             return existing;
+        }
 
         var tab = new ChatTabConfig
         {

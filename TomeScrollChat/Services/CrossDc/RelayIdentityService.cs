@@ -61,6 +61,7 @@ public sealed class RelayIdentityService : IDisposable
     private readonly HashSet<string> adminUrls;
     private readonly Dictionary<string, HashSet<string>> contactsByUrl;
     private readonly Dictionary<string, Dictionary<string, string>> peerKeysByUrl;
+    private readonly Dictionary<string, Dictionary<string, string>> peerNamesByUrl;
 
     public RelayIdentityService(string configDirectory, IPluginLog log)
     {
@@ -76,6 +77,7 @@ public sealed class RelayIdentityService : IDisposable
             adminUrls = state.AdminUrls;
             contactsByUrl = state.ContactsByUrl;
             peerKeysByUrl = state.PeerKeysByUrl;
+            peerNamesByUrl = state.PeerNamesByUrl;
             return;
         }
 
@@ -84,6 +86,7 @@ public sealed class RelayIdentityService : IDisposable
         adminUrls = new HashSet<string>();
         contactsByUrl = new Dictionary<string, HashSet<string>>();
         peerKeysByUrl = new Dictionary<string, Dictionary<string, string>>();
+        peerNamesByUrl = new Dictionary<string, Dictionary<string, string>>();
         Save();
     }
 
@@ -165,6 +168,28 @@ public sealed class RelayIdentityService : IDisposable
         Save();
     }
 
+    /// <summary>The character name/world <paramref name="contactUserId"/> announced on <paramref name="url"/>
+    /// (see <see cref="SetPeerDisplayName"/>), or null if none has arrived yet - callers fall back to the
+    /// raw relay userId in that case.</summary>
+    public string? GetPeerDisplayName(string url, string contactUserId) =>
+        peerNamesByUrl.TryGetValue(url, out var names) && names.TryGetValue(contactUserId, out var name) ? name : null;
+
+    /// <summary>Records the display name a contact announced on <paramref name="url"/> (piggybacked on
+    /// the same <c>keyAnnounce</c> as their X25519 public key - see <see cref="CrossDcRelayService"/>),
+    /// persisted immediately. Overwrites any previous value - a character rename, or the contact simply
+    /// logging in on a different character, should take effect.</summary>
+    public void SetPeerDisplayName(string url, string contactUserId, string displayName)
+    {
+        if (!peerNamesByUrl.TryGetValue(url, out var names))
+            peerNamesByUrl[url] = names = new Dictionary<string, string>();
+
+        if (names.TryGetValue(contactUserId, out var existing) && existing == displayName)
+            return;
+
+        names[contactUserId] = displayName;
+        Save();
+    }
+
     /// <summary>Encrypts <paramref name="plaintext"/> for <paramref name="peerUserId"/> (whose X25519
     /// public key is <paramref name="peerPublicKeyBase64"/> - see <see cref="GetPeerPublicKey"/>), binding
     /// <paramref name="fromUserId"/>/<paramref name="peerUserId"/> as associated data so a ciphertext
@@ -227,7 +252,7 @@ public sealed class RelayIdentityService : IDisposable
         return ChatKeyDerivation.DeriveKey(shared, ChatKeySalt, ChatKeyInfo, ChatCipher, ExportableKeyParams);
     }
 
-    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl)? TryLoad(string path, IPluginLog log)
+    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl, Dictionary<string, Dictionary<string, string>> PeerNamesByUrl)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))
             return null;
@@ -240,13 +265,15 @@ public sealed class RelayIdentityService : IDisposable
 
             var signing = Key.Import(SigningAlgorithm, Convert.FromBase64String(stored.SigningKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
             var encryption = Key.Import(EncryptionAlgorithm, Convert.FromBase64String(stored.EncryptionKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
-            // AdminUrls/ContactsByUrl/PeerKeysByUrl didn't exist in identity files written before those
-            // fields were added - null here just means "none recorded yet", not a corrupt/unreadable file.
+            // AdminUrls/ContactsByUrl/PeerKeysByUrl/PeerNamesByUrl didn't exist in identity files written
+            // before those fields were added - null here just means "none recorded yet", not a corrupt/
+            // unreadable file.
             var adminUrls = new HashSet<string>(stored.AdminUrls ?? Enumerable.Empty<string>());
             var contactsByUrl = (stored.ContactsByUrl ?? new Dictionary<string, List<string>>())
                 .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
             var peerKeysByUrl = stored.PeerKeysByUrl ?? new Dictionary<string, Dictionary<string, string>>();
-            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl);
+            var peerNamesByUrl = stored.PeerNamesByUrl ?? new Dictionary<string, Dictionary<string, string>>();
+            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl, peerNamesByUrl);
         }
         catch (Exception ex)
         {
@@ -269,7 +296,8 @@ public sealed class RelayIdentityService : IDisposable
                 Convert.ToBase64String(encryptionKey.Export(KeyBlobFormat.RawPrivateKey)),
                 adminUrls.ToList(),
                 contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()),
-                peerKeysByUrl);
+                peerKeysByUrl,
+                peerNamesByUrl);
             File.WriteAllText(path, JsonSerializer.Serialize(stored));
         }
         catch (Exception ex)
@@ -289,5 +317,6 @@ public sealed class RelayIdentityService : IDisposable
         string EncryptionKeySeed,
         List<string>? AdminUrls = null,
         Dictionary<string, List<string>>? ContactsByUrl = null,
-        Dictionary<string, Dictionary<string, string>>? PeerKeysByUrl = null);
+        Dictionary<string, Dictionary<string, string>>? PeerKeysByUrl = null,
+        Dictionary<string, Dictionary<string, string>>? PeerNamesByUrl = null);
 }
