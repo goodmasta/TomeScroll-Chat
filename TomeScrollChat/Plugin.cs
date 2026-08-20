@@ -144,6 +144,9 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService.MessageRouted += OnMessageRouted;
         CrossDcRelayService.ContactAdded += OnCrossDcContactAdded;
         CrossDcRelayService.MessageAppended += OnCrossDcMessageAppended;
+        CrossDcRelayService.GroupJoined += OnCrossDcGroupJoined;
+        CrossDcRelayService.GroupLeft += OnCrossDcGroupLeft;
+        CrossDcRelayService.GroupMessageAppended += OnCrossDcGroupMessageAppended;
 
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
@@ -262,6 +265,50 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.NotifyUnread(tab);
         });
 
+    /// <summary>Creates/finds the tab for a joined cross-DC group - the group mirror of
+    /// <see cref="OnCrossDcContactAdded"/>. Same framework-thread marshalling, same reasoning.</summary>
+    private void OnCrossDcGroupJoined(string groupId) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var name = CrossDcRelayService.Groups.FirstOrDefault(g => g.Id == groupId)?.Name ?? groupId;
+            TabManager.GetOrCreateGroupTab(groupId, name);
+        });
+
+    /// <summary>Closes (and stops tracking history for, going forward) a group's tab once this identity is
+    /// no longer a member - left voluntarily, kicked, or the group was deleted. Doesn't delete already-
+    /// persisted history, same as closing any other tab - just removes the tab itself.</summary>
+    private void OnCrossDcGroupLeft(string groupId) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var tab = TabManager.Tabs.FirstOrDefault(t => t.IsGroupTab && t.CrossDcGroupId == groupId);
+            if (tab != null)
+                TabManager.RemoveTab(tab);
+        });
+
+    /// <summary>Routes one group chat message into the same tab-rendering/history pipeline as everything
+    /// else - the group mirror of <see cref="OnCrossDcMessageAppended"/>.</summary>
+    private void OnCrossDcGroupMessageAppended(string groupId, CrossDcChatMessage message) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var name = CrossDcRelayService.Groups.FirstOrDefault(g => g.Id == groupId)?.Name ?? groupId;
+            var tab = TabManager.GetOrCreateGroupTab(groupId, name);
+            var record = new ChatMessageRecord
+            {
+                TimestampUtc = message.Timestamp.UtcDateTime,
+                ChatType = XivChatType.Party,
+                SenderName = CrossDcRelayService.GetDisplayName(message.SenderUserId),
+                SenderKey = message.SenderUserId,
+                IsFromLocalPlayer = message.IsOutgoing,
+                Body = message.Text,
+                RoutingKey = TabMessageBuffer.RoutingKey(tab),
+            };
+            if (!tab.DisableLogging)
+                ChatHistoryService.Enqueue(record);
+            TabMessageBuffer.Append(tab, record);
+            if (!message.IsOutgoing)
+                mainWindow.NotifyUnread(tab);
+        });
+
     /// <summary>Whether a captured message is the local player's own outgoing message - same check
     /// <see cref="Windows.ChatMessageRenderer.DrawMessage"/> uses to show "You" instead of a name.</summary>
     private static bool IsOwnMessage(ChatMessageRecord record)
@@ -285,6 +332,12 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        if (tab.IsGroupTab && tab.CrossDcGroupId != null)
+        {
+            SendCrossDcGroupFromTab(tab.CrossDcGroupId, text);
+            return;
+        }
+
         if (tab.IsPmTab && tab.PmPartnerKey != null)
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
@@ -305,6 +358,20 @@ public sealed class Plugin : IDalamudPlugin
             var sent = await CrossDcRelayService.SendChatMessageAsync(contactUserId, text).ConfigureAwait(false);
             if (!sent)
                 await Framework.RunOnFrameworkThread(() => ToastGui.ShowError("Couldn't send that message - no connection or no key for this contact yet."));
+        });
+    }
+
+    /// <summary>Group-chat mirror of <see cref="SendCrossDcFromTab"/> - a failure here most commonly means
+    /// this identity hasn't received a sealed copy of the group's key yet (see
+    /// <see cref="Services.CrossDc.CrossDcRelayService.Groups"/>'s doc comment on why that can briefly
+    /// happen right after joining).</summary>
+    private void SendCrossDcGroupFromTab(string groupId, string text)
+    {
+        _ = Task.Run(async () =>
+        {
+            var sent = await CrossDcRelayService.SendGroupMessageAsync(groupId, text).ConfigureAwait(false);
+            if (!sent)
+                await Framework.RunOnFrameworkThread(() => ToastGui.ShowError("Couldn't send that message - no connection or no group key yet."));
         });
     }
 
@@ -460,7 +527,7 @@ public sealed class Plugin : IDalamudPlugin
     /// "Export to file..." handler.</summary>
     public void ExportTabToFile(ChatTabConfig tab)
     {
-        var routingKey = tab.IsCrossDcTab ? TabMessageBuffer.RoutingKey(tab) : tab.IsPmTab ? tab.PmPartnerKey : tab.Id.ToString();
+        var routingKey = tab.IsCrossDcTab || tab.IsGroupTab ? TabMessageBuffer.RoutingKey(tab) : tab.IsPmTab ? tab.PmPartnerKey : tab.Id.ToString();
         if (string.IsNullOrEmpty(routingKey))
             return;
 
@@ -674,6 +741,9 @@ public sealed class Plugin : IDalamudPlugin
         ChatCaptureService.MessageRouted -= OnMessageRouted;
         CrossDcRelayService.ContactAdded -= OnCrossDcContactAdded;
         CrossDcRelayService.MessageAppended -= OnCrossDcMessageAppended;
+        CrossDcRelayService.GroupJoined -= OnCrossDcGroupJoined;
+        CrossDcRelayService.GroupLeft -= OnCrossDcGroupLeft;
+        CrossDcRelayService.GroupMessageAppended -= OnCrossDcGroupMessageAppended;
 
         WindowSystem.RemoveAllWindows();
         mainWindow.Dispose();

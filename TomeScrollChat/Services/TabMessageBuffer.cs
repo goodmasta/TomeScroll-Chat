@@ -41,9 +41,13 @@ public sealed class TabMessageBuffer
         }
     }
 
-    public static string RoutingKey(ChatTabConfig tab) => tab.IsCrossDcTab
-        ? $"crossdc:{tab.CrossDcContactUserId ?? tab.Id.ToString()}"
-        : tab.IsPmTab ? tab.PmPartnerKey ?? tab.Id.ToString() : tab.Id.ToString();
+    public static string RoutingKey(ChatTabConfig tab) => tab switch
+    {
+        { IsCrossDcTab: true } => $"crossdc:{tab.CrossDcContactUserId ?? tab.Id.ToString()}",
+        { IsGroupTab: true } => $"crossdcgroup:{tab.CrossDcGroupId ?? tab.Id.ToString()}",
+        { IsPmTab: true } => tab.PmPartnerKey ?? tab.Id.ToString(),
+        _ => tab.Id.ToString(),
+    };
 
     /// <summary>Drops every in-memory scrollback so cleared/purged disk history isn't still shown
     /// from cache until the next reload.</summary>

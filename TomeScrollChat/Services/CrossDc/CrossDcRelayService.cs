@@ -18,6 +18,13 @@ namespace TomeScrollChat.Services.CrossDc;
 /// actually sent it (this identity's own <see cref="CrossDcRelayService.UserId"/> for an outgoing one).</summary>
 public sealed record CrossDcChatMessage(string SenderUserId, string Text, DateTimeOffset Timestamp, bool IsOutgoing);
 
+/// <summary>Snapshot of one group this identity belongs to - the public, read-only view of
+/// <see cref="RelayIdentityService"/>'s own mutable <see cref="GroupState"/>, deliberately not exposing
+/// <see cref="GroupState.KeyBase64"/>/<see cref="GroupState.Epoch"/> (crypto material, nobody outside
+/// <see cref="CrossDcRelayService"/> needs it). <see cref="OwnerId"/> empty means "not known yet" - see
+/// <see cref="CrossDcRelayService.Groups"/>'s own doc comment for why that can happen.</summary>
+public sealed record CrossDcGroupInfo(string Id, string Name, string OwnerId, IReadOnlyList<string> Members, IReadOnlyList<string> ModeratorIds);
+
 /// <summary>
 /// Owns the cross-DC relay connection lifecycle - resolves which server to use from
 /// <see cref="Configuration.CrossDcRelayMode"/>, connects, completes the Ed25519 challenge/response
@@ -70,12 +77,26 @@ public sealed class CrossDcRelayService : IDisposable
     private string? connectedUrl;
     private ClientWebSocket? socket;
 
-    private enum PendingAction { None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite }
+    private enum PendingAction
+    {
+        None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite,
+        CreateGroup, CreateGroupInvite, RedeemGroupInvite, GetGroupKeyDirectory, SetGroupMemberKey, GetGroupMemberKey,
+        PromoteModerator, DemoteModerator, TransferGroupOwnership, KickGroupMember, LeaveGroup,
+    }
     private PendingAction pendingAction = PendingAction.None;
     private TaskCompletionSource<bool>? pendingCompletion;
 
     // In-memory only, see CrossDcChatMessage's own doc comment. Keyed by the *other* party's userId.
     private readonly Dictionary<string, List<CrossDcChatMessage>> messagesByContact = new();
+
+    // Same, keyed by groupId instead of a contact's userId.
+    private readonly Dictionary<string, List<CrossDcChatMessage>> messagesByGroup = new();
+
+    // The result of the most recent getGroupKeyDirectory call - read immediately after GetGroupKeyDirectoryAsync
+    // returns true, never held onto longer than that single caller's use of it (requestLock guarantees
+    // nothing else can be mid-flight and overwrite it in between, same reasoning as every other *Error
+    // field's freshness contract).
+    private Dictionary<string, string> lastGroupKeyDirectory = new();
 
     /// <summary>Fired for every contact this identity has ever paired with on the current relay, once on
     /// each fresh connect (so a tab exists for each of them even if the player never opens Settings) and
@@ -90,6 +111,19 @@ public sealed class CrossDcRelayService : IDisposable
     /// <c>ChatHistoryService</c> the same way <c>ChatCaptureService.MessageRouted</c> does for native
     /// chat, so the cross-DC tab actually shows it live instead of only on next open.</summary>
     public event Action<string, CrossDcChatMessage>? MessageAppended;
+
+    /// <summary>Fired for every group this identity currently belongs to, once on each fresh connect
+    /// (self-healing tabs, same reasoning as <see cref="ContactAdded"/>) and again the moment a brand-new
+    /// <c>createGroup</c>/<c>redeemGroupInvite</c> succeeds.</summary>
+    public event Action<string>? GroupJoined;
+
+    /// <summary>Fired when this identity stops being a member of a group it previously tracked - it left
+    /// voluntarily, was kicked, or (as the group's last member) deleted it by leaving. <c>Plugin</c> uses
+    /// this to close/remove the matching tab.</summary>
+    public event Action<string>? GroupLeft;
+
+    /// <summary>The group-chat mirror of <see cref="MessageAppended"/>.</summary>
+    public event Action<string, CrossDcChatMessage>? GroupMessageAppended;
 
     public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log, Func<string?> getLocalPlayerName)
     {
@@ -154,6 +188,23 @@ public sealed class CrossDcRelayService : IDisposable
     /// etc.) - null if none yet, or the last one succeeded.</summary>
     public string? PairError { get; private set; }
 
+    /// <summary>Every group this identity currently belongs to on the *current* relay (empty while
+    /// disconnected) - refreshed on connect and after every group membership/role change, whether this
+    /// client caused it or just observed a push about it. <see cref="CrossDcGroupInfo.OwnerId"/> is empty
+    /// ("unknown") until this client has actually been told who it is - creating the group (this client is
+    /// the owner), or a live <c>groupOwnershipTransferred</c> - since the relay has no "get group info"
+    /// query to otherwise learn it from (see <see cref="RefreshGroupsSnapshot"/>'s own doc comment).</summary>
+    public IReadOnlyList<CrossDcGroupInfo> Groups { get; private set; } = Array.Empty<CrossDcGroupInfo>();
+
+    /// <summary>Most recently created group-invite code (see <see cref="CreateGroupInviteAsync"/>) - same
+    /// shape/lifetime as <see cref="InviteCode"/>, just for a group instead of a 1:1 pairing.</summary>
+    public string? GroupInviteCode { get; private set; }
+
+    /// <summary>Reason the most recent group-related action failed - shared across every group action
+    /// (create/invite/join/promote/demote/transfer/kick/leave) rather than one field each, since Settings
+    /// only ever has one such action in flight at a time and reads this immediately after awaiting it.</summary>
+    public string? GroupError { get; private set; }
+
     /// <summary>Reconciles the live connection against the current config. Safe to call any time,
     /// including repeatedly with nothing changed (a no-op in that case).</summary>
     public void Reconcile()
@@ -206,6 +257,90 @@ public sealed class CrossDcRelayService : IDisposable
     public Task<bool> RedeemInviteAsync(string code, CancellationToken cancellationToken = default) =>
         SendAndAwaitAsync(PendingAction.RedeemInvite, new RelayRedeemInviteRequest("redeemInvite", code), cancellationToken);
 
+    /// <summary>Re-sends this identity's current character name (and X25519 public key) to
+    /// <paramref name="contactUserId"/> - the manual "refresh name" action, for when it's changed since
+    /// the last announcement (a character rename, or simply logging in as someone else) and the automatic
+    /// paths (right after pairing, or a send discovering no key yet) haven't fired again on their own.
+    /// Best-effort/fire-and-forget, same as every other keyAnnounce - there's nothing to await a result
+    /// of, the contact's tab/messages just start showing the new name once it arrives.</summary>
+    public Task RefreshMyNameAsync(string contactUserId, CancellationToken cancellationToken = default) =>
+        SendKeyAnnounceAsync(contactUserId, cancellationToken);
+
+    /// <summary>Sends <c>createGroup</c> - this identity becomes the new group's owner. Generates and
+    /// keeps the group's symmetric chat key entirely locally (no relay round-trip needed for the creator's
+    /// own copy - only *other* members' copies ever need sealing/distribution, see
+    /// <see cref="DistributeGroupKeyToMemberAsync"/>). Result surfaces as <see cref="Groups"/> (gains the
+    /// new group)/<see cref="GroupError"/>.</summary>
+    public Task<bool> CreateGroupAsync(string name, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.CreateGroup, new RelayCreateGroupRequest("createGroup", name, identity?.EncryptionPublicKeyBase64), cancellationToken);
+
+    /// <summary>Sends <c>createGroupInvite</c> - owner-only server-side. Result surfaces as
+    /// <see cref="GroupInviteCode"/>/<see cref="GroupError"/>.</summary>
+    public Task<bool> CreateGroupInviteAsync(string groupId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.CreateGroupInvite, new RelayCreateGroupInviteRequest("createGroupInvite", groupId), cancellationToken);
+
+    /// <summary>Sends <c>redeemGroupInvite</c> with a code the group's owner created and shared
+    /// out-of-band. Result surfaces as <see cref="Groups"/> (gains the new membership)/
+    /// <see cref="GroupError"/> - this identity's own copy of the group's key isn't included in the join
+    /// response (the relay only ever hands out sealed keys via <c>getGroupMemberKey</c>/
+    /// <c>groupKeyRotated</c>, see <see cref="ApplySealedGroupKey"/>), so the group's messages may briefly
+    /// show as undecryptable until an online owner/moderator seals one for this identity.</summary>
+    public Task<bool> RedeemGroupInviteAsync(string code, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.RedeemGroupInvite, new RelayRedeemGroupInviteRequest("redeemGroupInvite", code, identity?.EncryptionPublicKeyBase64), cancellationToken);
+
+    /// <summary>Sends <c>getGroupMemberKey</c> - fetches (and unseals/caches, see
+    /// <see cref="ApplySealedGroupKey"/>) this identity's own current sealed copy of the group's key. Any
+    /// member can call this any time; mainly useful right after joining, or on reconnect for a group this
+    /// identity still has no key for.</summary>
+    public Task<bool> GetGroupMemberKeyAsync(string groupId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.GetGroupMemberKey, new RelayGetGroupMemberKeyRequest("getGroupMemberKey", groupId), cancellationToken);
+
+    /// <summary>Sends <c>getGroupKeyDirectory</c> - any member can fetch the public-key directory. Result
+    /// is stashed in <see cref="lastGroupKeyDirectory"/> for whichever internal caller (
+    /// <see cref="DistributeGroupKeyToMemberAsync"/>/<see cref="RekeyAndDistributeAsync"/>) just awaited
+    /// this, per the field's own doc comment.</summary>
+    private Task<bool> GetGroupKeyDirectoryAsync(string groupId, CancellationToken cancellationToken) =>
+        SendAndAwaitAsync(PendingAction.GetGroupKeyDirectory, new RelayGetGroupKeyDirectoryRequest("getGroupKeyDirectory", groupId), cancellationToken);
+
+    /// <summary>Sends <c>setGroupMemberKey</c> - owner/moderator-only server-side. Internal: always called
+    /// as part of <see cref="DistributeGroupKeyToMemberAsync"/>/<see cref="RekeyAndDistributeAsync"/>,
+    /// never directly from UI (there's nothing meaningful for a person to type in for a "sealed key").</summary>
+    private Task<bool> SetGroupMemberKeyAsync(string groupId, string userId, string sealedKeyBase64, long epoch, CancellationToken cancellationToken) =>
+        SendAndAwaitAsync(PendingAction.SetGroupMemberKey, new RelaySetGroupMemberKeyRequest("setGroupMemberKey", groupId, userId, sealedKeyBase64, epoch), cancellationToken);
+
+    /// <summary>Sends <c>promoteModerator</c> - owner-only server-side, capped at 10 moderators per group
+    /// (see TomeScrollRelay's own <c>GroupRegistry</c>). Result surfaces as an updated
+    /// <see cref="Groups"/> entry's <see cref="CrossDcGroupInfo.ModeratorIds"/>/<see cref="GroupError"/>.</summary>
+    public Task<bool> PromoteModeratorAsync(string groupId, string userId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.PromoteModerator, new RelayPromoteModeratorRequest("promoteModerator", groupId, userId), cancellationToken);
+
+    /// <summary>Sends <c>demoteModerator</c> - owner-only server-side.</summary>
+    public Task<bool> DemoteModeratorAsync(string groupId, string userId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.DemoteModerator, new RelayDemoteModeratorRequest("demoteModerator", groupId, userId), cancellationToken);
+
+    /// <summary>Sends <c>transferGroupOwnership</c> - owner-only server-side, target must already be a
+    /// member. The outgoing owner keeps their membership, just becomes a regular member (moderator status
+    /// isn't automatically granted in return - see TomeScrollRelay's own <c>GroupRegistry.SetOwnerAsync</c>).</summary>
+    public Task<bool> TransferGroupOwnershipAsync(string groupId, string newOwnerId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.TransferGroupOwnership, new RelayTransferGroupOwnershipRequest("transferGroupOwnership", groupId, newOwnerId), cancellationToken);
+
+    /// <summary>Sends <c>kickGroupMember</c> - owner or moderator only server-side (a moderator can only
+    /// kick regular members, not the owner or another moderator). On success, rotates the group's key and
+    /// redistributes it to every remaining member so the kicked member loses read access to future
+    /// messages - see <see cref="RekeyAndDistributeAsync"/>, triggered from the <c>groupMemberKicked</c>
+    /// case in <see cref="DispatchFrame"/> once this identity observes its own action's broadcast.</summary>
+    public Task<bool> KickGroupMemberAsync(string groupId, string userId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.KickGroupMember, new RelayKickGroupMemberRequest("kickGroupMember", groupId, userId), cancellationToken);
+
+    /// <summary>Sends <c>leaveGroup</c> - voluntary departure. If this identity owns the group and isn't
+    /// its last member, the relay rejects this (see <see cref="GroupError"/>) until ownership is
+    /// transferred first; if it *is* the last member, leaving deletes the group entirely. An online
+    /// owner/moderator who observes this identity's departure (the <c>groupMemberLeft</c> push) is who
+    /// actually performs the resulting key rotation - this identity isn't a member any more to do it
+    /// itself.</summary>
+    public Task<bool> LeaveGroupAsync(string groupId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.LeaveGroup, new RelayLeaveGroupRequest("leaveGroup", groupId), cancellationToken);
+
     /// <summary>Message history with <paramref name="contactUserId"/>, oldest first - empty if there's
     /// been no exchange with them yet this session (not persisted, see <see cref="CrossDcChatMessage"/>'s
     /// doc comment).</summary>
@@ -220,6 +355,11 @@ public sealed class CrossDcRelayService : IDisposable
     /// offline when this identity first paired with them).</summary>
     public bool HasKeyFor(string contactUserId) =>
         connectedUrl != null && identity?.GetPeerPublicKey(connectedUrl, contactUserId) != null;
+
+    /// <summary>The group-chat mirror of <see cref="HasKeyFor"/> - true once this identity has unsealed
+    /// at least one copy of <paramref name="groupId"/>'s current key (see <see cref="ApplySealedGroupKey"/>).</summary>
+    public bool HasGroupKey(string groupId) =>
+        connectedUrl != null && identity?.GetGroup(connectedUrl, groupId)?.KeyBase64 != null;
 
     /// <summary>The contact's character name (as announced via <c>keyAnnounce</c> - see
     /// <see cref="SendKeyAnnounceAsync"/>/the <c>keyAnnounce</c> case in <see cref="HandleIncomingPayload"/>),
@@ -281,6 +421,241 @@ public sealed class CrossDcRelayService : IDisposable
 
         messages.Add(message);
         MessageAppended?.Invoke(contactUserId, message);
+    }
+
+    /// <summary>Message history with <paramref name="groupId"/>, oldest first - the group-chat mirror of
+    /// <see cref="GetMessages"/>.</summary>
+    public IReadOnlyList<CrossDcChatMessage> GetGroupMessages(string groupId) =>
+        messagesByGroup.TryGetValue(groupId, out var messages) ? messages : Array.Empty<CrossDcChatMessage>();
+
+    /// <summary>Encrypts and sends a chat message to a group this identity has a current key for - false
+    /// (and no local history entry added) if there's no live connection, no group key yet (see
+    /// <see cref="Groups"/>'s doc comment on why that can briefly happen right after joining), or the send
+    /// itself fails.</summary>
+    public async Task<bool> SendGroupMessageAsync(string groupId, string text, CancellationToken cancellationToken = default)
+    {
+        if (connectedUrl == null || identity == null || UserId == null)
+            return false;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state?.KeyBase64 == null)
+            return false;
+
+        var nonce = RandomNumberGenerator.GetBytes(24);
+        var plaintext = Encoding.UTF8.GetBytes(text);
+        var ciphertext = identity.EncryptGroupMessage(Convert.FromBase64String(state.KeyBase64), groupId, state.Epoch, UserId, nonce, plaintext);
+        if (ciphertext == null)
+            return false;
+
+        var envelope = new GroupChatMessageEnvelope("chat", Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext), state.Epoch);
+        var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
+        if (!await SendRawAsync(new RelaySendGroupRequest("sendGroup", groupId, payload), cancellationToken).ConfigureAwait(false))
+            return false;
+
+        AppendGroupMessage(groupId, new CrossDcChatMessage(UserId, text, DateTimeOffset.UtcNow, IsOutgoing: true));
+        return true;
+    }
+
+    private void AppendGroupMessage(string groupId, CrossDcChatMessage message)
+    {
+        if (!messagesByGroup.TryGetValue(groupId, out var messages))
+            messagesByGroup[groupId] = messages = new List<CrossDcChatMessage>();
+
+        messages.Add(message);
+        GroupMessageAppended?.Invoke(groupId, message);
+    }
+
+    private void RefreshGroupsSnapshot()
+    {
+        if (connectedUrl == null || identity == null)
+        {
+            Groups = Array.Empty<CrossDcGroupInfo>();
+            return;
+        }
+
+        Groups = identity.GetGroups(connectedUrl)
+            .Select(kvp => new CrossDcGroupInfo(kvp.Key, kvp.Value.Name, kvp.Value.OwnerId, kvp.Value.Members.ToArray(), kvp.Value.ModeratorIds.ToArray()))
+            .ToArray();
+    }
+
+    /// <summary>Seals the group's *current* (unrotated) key for one newly-joined member and distributes it
+    /// via <c>setGroupMemberKey</c> - called when this identity (an owner or moderator) observes a live
+    /// <c>groupMemberJoined</c> push while online. No rotation needed for an admission, only for a
+    /// departure - see <see cref="RekeyAndDistributeAsync"/>'s own doc comment for why the two differ.
+    /// Best-effort: silently gives up if the key directory fetch fails or doesn't (yet) have the new
+    /// member's public key on file.</summary>
+    private async Task DistributeGroupKeyToMemberAsync(string groupId, string memberId, byte[] groupKey, long epoch, CancellationToken cancellationToken)
+    {
+        if (identity == null)
+            return;
+
+        if (!await GetGroupKeyDirectoryAsync(groupId, cancellationToken).ConfigureAwait(false))
+            return;
+
+        if (!lastGroupKeyDirectory.TryGetValue(memberId, out var memberPublicKey))
+            return;
+
+        var sealedKey = identity.SealGroupKeyFor(memberPublicKey, groupId, epoch, memberId, groupKey);
+        if (sealedKey != null)
+            await SetGroupMemberKeyAsync(groupId, memberId, sealedKey, epoch, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Generates a brand-new group key at the next epoch and seals/distributes it to every
+    /// *remaining* member (this identity's own copy is updated directly, no relay round-trip needed) -
+    /// the security-critical step after a kick or voluntary departure: unlike admitting a new member (see
+    /// <see cref="DistributeGroupKeyToMemberAsync"/>), someone who's no longer in the group must lose the
+    /// ability to decrypt *future* messages, which only rotating the key actually achieves (they still
+    /// have the old epoch's key, but every member has since moved on to the new one). Called by whoever
+    /// performed the kick (reacting to their own action's broadcast) or, for a voluntary leave, by an
+    /// online owner/moderator reacting to the <c>groupMemberLeft</c> push - see both call sites in
+    /// <see cref="DispatchFrame"/>. Best-effort per member: a member whose public key isn't on file yet is
+    /// simply skipped, same as <see cref="DistributeGroupKeyToMemberAsync"/>.</summary>
+    private async Task RekeyAndDistributeAsync(string groupId, CancellationToken cancellationToken)
+    {
+        if (identity == null || connectedUrl == null || UserId == null)
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state == null)
+            return;
+
+        if (!await GetGroupKeyDirectoryAsync(groupId, cancellationToken).ConfigureAwait(false))
+            return;
+
+        var newKey = RelayIdentityService.GenerateGroupKey();
+        var newEpoch = state.Epoch + 1;
+
+        foreach (var memberId in state.Members)
+        {
+            if (memberId == UserId)
+                continue;
+
+            if (!lastGroupKeyDirectory.TryGetValue(memberId, out var memberPublicKey))
+                continue;
+
+            var sealedKey = identity.SealGroupKeyFor(memberPublicKey, groupId, newEpoch, memberId, newKey);
+            if (sealedKey != null)
+                await SetGroupMemberKeyAsync(groupId, memberId, sealedKey, newEpoch, cancellationToken).ConfigureAwait(false);
+        }
+
+        state.KeyBase64 = Convert.ToBase64String(newKey);
+        state.Epoch = newEpoch;
+        identity.PersistGroups();
+        log.Info("TomeScrollChat: rotated cross-DC group {GroupId} to epoch {Epoch}", groupId, newEpoch);
+    }
+
+    /// <summary>Unseals and caches this identity's own copy of a group's key - shared by the
+    /// <c>groupMemberKey</c> (a fetch this identity requested) and <c>groupKeyRotated</c> (an unsolicited
+    /// live push) cases in <see cref="DispatchFrame"/>. A no-op if this would go *backwards* (an
+    /// out-of-order delivery of an older epoch than what's already cached), since the newer key is
+    /// strictly more useful and downgrading would only lose the ability to read newer messages.</summary>
+    private void ApplySealedGroupKey(string groupId, string sealedKeyBase64, long epoch)
+    {
+        if (identity == null || connectedUrl == null || UserId == null)
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state == null)
+            return;
+
+        if (state.KeyBase64 != null && epoch <= state.Epoch)
+            return;
+
+        var unsealed = identity.UnsealGroupKey(sealedKeyBase64, groupId, epoch, UserId);
+        if (unsealed == null)
+        {
+            log.Warning("TomeScrollChat: failed to unseal cross-DC group {GroupId}'s key at epoch {Epoch}", groupId, epoch);
+            return;
+        }
+
+        state.KeyBase64 = Convert.ToBase64String(unsealed);
+        state.Epoch = epoch;
+        identity.PersistGroups();
+        log.Info("TomeScrollChat: cross-DC group {GroupId} key ready (epoch {Epoch})", groupId, epoch);
+    }
+
+    private void UpdateGroupRole(string groupId, string userId, bool isModerator)
+    {
+        if (connectedUrl == null || identity == null)
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state == null)
+            return;
+
+        if (isModerator)
+        {
+            if (!state.ModeratorIds.Contains(userId))
+                state.ModeratorIds.Add(userId);
+        }
+        else
+        {
+            state.ModeratorIds.Remove(userId);
+        }
+
+        identity.PersistGroups();
+        RefreshGroupsSnapshot();
+    }
+
+    /// <summary>Someone else joined a group this identity is in (unsolicited push). If this identity is
+    /// the owner or a moderator, seals/distributes the group's current key to them - see
+    /// <see cref="DistributeGroupKeyToMemberAsync"/>.</summary>
+    private void HandleGroupMemberJoined(string groupId, string newMemberId)
+    {
+        if (connectedUrl == null || identity == null)
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state == null)
+            return;
+
+        if (!state.Members.Contains(newMemberId))
+        {
+            state.Members.Add(newMemberId);
+            identity.PersistGroups();
+        }
+
+        RefreshGroupsSnapshot();
+        log.Info("TomeScrollChat: {UserId} joined cross-DC group {GroupId}", newMemberId, groupId);
+
+        var myUserId = UserId;
+        if (myUserId != null && state.KeyBase64 != null && (state.OwnerId == myUserId || state.ModeratorIds.Contains(myUserId)))
+            _ = DistributeGroupKeyToMemberAsync(groupId, newMemberId, Convert.FromBase64String(state.KeyBase64), state.Epoch, CancellationToken.None);
+    }
+
+    /// <summary>Parses the client-level envelope carried inside a relay <c>groupMessage</c>'s opaque
+    /// <c>payload</c> (see <see cref="GroupChatMessageEnvelope"/>) and decrypts it - the group-chat mirror
+    /// of <see cref="HandleIncomingPayload"/>'s <c>chat</c> case.</summary>
+    private void HandleIncomingGroupPayload(string groupId, string fromUserId, string payloadJson)
+    {
+        if (connectedUrl == null || identity == null)
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state?.KeyBase64 == null)
+        {
+            log.Warning("TomeScrollChat: received a cross-DC group message for {GroupId} but have no key yet - dropping", groupId);
+            return;
+        }
+
+        var envelope = TryDeserialize<GroupChatMessageEnvelope>(payloadJson);
+        if (envelope is not { Nonce.Length: > 0, Ciphertext.Length: > 0 })
+            return;
+
+        if (envelope.Epoch != state.Epoch)
+        {
+            log.Warning("TomeScrollChat: cross-DC group {GroupId} message epoch {MessageEpoch} doesn't match this identity's current key epoch {KeyEpoch} - dropping", groupId, envelope.Epoch, state.Epoch);
+            return;
+        }
+
+        var plaintext = identity.DecryptGroupMessage(Convert.FromBase64String(state.KeyBase64), groupId, envelope.Epoch, fromUserId, Convert.FromBase64String(envelope.Nonce), Convert.FromBase64String(envelope.Ciphertext));
+        if (plaintext == null)
+        {
+            log.Warning("TomeScrollChat: failed to decrypt a cross-DC group message for {GroupId} from {From} - dropping", groupId, fromUserId);
+            return;
+        }
+
+        AppendGroupMessage(groupId, new CrossDcChatMessage(fromUserId, Encoding.UTF8.GetString(plaintext), DateTimeOffset.UtcNow, IsOutgoing: false));
     }
 
     /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
@@ -397,6 +772,17 @@ public sealed class CrossDcRelayService : IDisposable
             Contacts = identity.GetContacts(url).ToArray();
             foreach (var contactUserId in Contacts)
                 ContactAdded?.Invoke(contactUserId);
+
+            RefreshGroupsSnapshot();
+            foreach (var (groupId, state) in identity.GetGroups(url).ToArray())
+            {
+                GroupJoined?.Invoke(groupId);
+                // Retry in case this identity joined (or missed a rotation) while nobody who could seal a
+                // key was online - best-effort, matches every other group notification's contract.
+                if (state.KeyBase64 == null)
+                    _ = GetGroupMemberKeyAsync(groupId, cancellationToken);
+            }
+
             log.Info("TomeScrollChat: connected to cross-DC relay as {UserId} ({Url})", userId, url);
 
             while (!cancellationToken.IsCancellationRequested)
@@ -529,6 +915,200 @@ public sealed class CrossDcRelayService : IDisposable
                     HandleIncomingPayload(incoming.From, incoming.Payload);
                 break;
 
+            case "groupCreated":
+                var createdMessage = TryDeserialize<RelayGroupCreatedMessage>(rawJson);
+                if (createdMessage is { GroupId.Length: > 0, Name.Length: > 0 } && connectedUrl != null && identity != null && UserId != null)
+                {
+                    var groupKey = RelayIdentityService.GenerateGroupKey();
+                    var state = new GroupState
+                    {
+                        Name = createdMessage.Name,
+                        OwnerId = UserId,
+                        Members = new List<string> { UserId },
+                        ModeratorIds = new List<string>(),
+                        KeyBase64 = Convert.ToBase64String(groupKey),
+                        Epoch = 1,
+                    };
+                    identity.UpsertGroup(connectedUrl, createdMessage.GroupId, state);
+                    RefreshGroupsSnapshot();
+                    GroupJoined?.Invoke(createdMessage.GroupId);
+                    log.Info("TomeScrollChat: created cross-DC group {GroupId} ({Name})", createdMessage.GroupId, createdMessage.Name);
+                }
+                GroupError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupInvite":
+                var groupInviteMessage = TryDeserialize<RelayGroupInviteMessage>(rawJson);
+                GroupInviteCode = groupInviteMessage?.Code;
+                GroupError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "joinedGroup":
+                var joinedMessage = TryDeserialize<RelayJoinedGroupMessage>(rawJson);
+                if (joinedMessage is { GroupId.Length: > 0, Name.Length: > 0 } && connectedUrl != null && identity != null)
+                {
+                    var state = identity.GetGroup(connectedUrl, joinedMessage.GroupId) ?? new GroupState();
+                    state.Name = joinedMessage.Name;
+                    state.Members = (joinedMessage.Members ?? Array.Empty<string>()).ToList();
+                    identity.UpsertGroup(connectedUrl, joinedMessage.GroupId, state);
+                    RefreshGroupsSnapshot();
+                    GroupJoined?.Invoke(joinedMessage.GroupId);
+                    log.Info("TomeScrollChat: joined cross-DC group {GroupId} ({Name}, {Count} member(s))", joinedMessage.GroupId, joinedMessage.Name, state.Members.Count);
+                    // Nobody's necessarily sealed a key for this identity yet - best-effort fetch right
+                    // away in case an online owner/moderator already reacted to the groupMemberJoined push.
+                    _ = GetGroupMemberKeyAsync(joinedMessage.GroupId, CancellationToken.None);
+                }
+                GroupError = null;
+                if (pendingAction == PendingAction.RedeemGroupInvite)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupMemberJoined":
+                var memberJoinedMessage = TryDeserialize<RelayGroupMemberJoinedMessage>(rawJson);
+                if (memberJoinedMessage is { GroupId.Length: > 0, UserId.Length: > 0 })
+                    HandleGroupMemberJoined(memberJoinedMessage.GroupId, memberJoinedMessage.UserId);
+                break;
+
+            case "groupKeyDirectory":
+                var directoryMessage = TryDeserialize<RelayGroupKeyDirectoryMessage>(rawJson);
+                lastGroupKeyDirectory = directoryMessage?.Members ?? new Dictionary<string, string>();
+                GroupError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupMemberKeySet":
+                GroupError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupKeyRotated":
+                var rotatedMessage = TryDeserialize<RelayGroupKeyRotatedMessage>(rawJson);
+                if (rotatedMessage is { GroupId.Length: > 0, SealedKey.Length: > 0, Epoch: { } rotatedEpoch })
+                    ApplySealedGroupKey(rotatedMessage.GroupId, rotatedMessage.SealedKey, rotatedEpoch);
+                break;
+
+            case "groupMemberKey":
+                var memberKeyMessage = TryDeserialize<RelayGroupMemberKeyMessage>(rawJson);
+                if (memberKeyMessage is { GroupId.Length: > 0, SealedKey.Length: > 0, Epoch: { } memberEpoch })
+                    ApplySealedGroupKey(memberKeyMessage.GroupId, memberKeyMessage.SealedKey, memberEpoch);
+                GroupError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupMessage":
+                var groupMessageEnvelope = TryDeserialize<RelayGroupMessageEnvelope>(rawJson);
+                if (groupMessageEnvelope is { GroupId.Length: > 0, From.Length: > 0, Payload.Length: > 0 })
+                    HandleIncomingGroupPayload(groupMessageEnvelope.GroupId, groupMessageEnvelope.From, groupMessageEnvelope.Payload);
+                break;
+
+            case "moderatorPromoted":
+                var promotedMessage = TryDeserialize<RelayModeratorPromotedMessage>(rawJson);
+                if (promotedMessage is { GroupId.Length: > 0, UserId.Length: > 0 })
+                    UpdateGroupRole(promotedMessage.GroupId, promotedMessage.UserId, isModerator: true);
+                GroupError = null;
+                if (pendingAction == PendingAction.PromoteModerator)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "moderatorDemoted":
+                var demotedMessage = TryDeserialize<RelayModeratorDemotedMessage>(rawJson);
+                if (demotedMessage is { GroupId.Length: > 0, UserId.Length: > 0 })
+                    UpdateGroupRole(demotedMessage.GroupId, demotedMessage.UserId, isModerator: false);
+                GroupError = null;
+                if (pendingAction == PendingAction.DemoteModerator)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupOwnershipTransferred":
+                var transferredMessage = TryDeserialize<RelayGroupOwnershipTransferredMessage>(rawJson);
+                if (transferredMessage is { GroupId.Length: > 0, NewOwnerId.Length: > 0 } && connectedUrl != null && identity != null)
+                {
+                    var state = identity.GetGroup(connectedUrl, transferredMessage.GroupId);
+                    if (state != null)
+                    {
+                        state.OwnerId = transferredMessage.NewOwnerId;
+                        // Owner status supersedes moderator - matches TomeScrollRelay's own GroupRegistry.SetOwnerAsync.
+                        state.ModeratorIds.Remove(transferredMessage.NewOwnerId);
+                        identity.PersistGroups();
+                        RefreshGroupsSnapshot();
+                    }
+                }
+                GroupError = null;
+                if (pendingAction == PendingAction.TransferGroupOwnership)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupMemberKicked":
+                var kickedMessage = TryDeserialize<RelayGroupMemberKickedMessage>(rawJson);
+                if (kickedMessage is { GroupId.Length: > 0, UserId.Length: > 0 })
+                {
+                    if (kickedMessage.UserId == UserId)
+                    {
+                        if (connectedUrl != null)
+                            identity?.RemoveGroup(connectedUrl, kickedMessage.GroupId);
+                        RefreshGroupsSnapshot();
+                        GroupLeft?.Invoke(kickedMessage.GroupId);
+                        log.Info("TomeScrollChat: kicked from cross-DC group {GroupId}", kickedMessage.GroupId);
+                    }
+                    else if (connectedUrl != null && identity != null)
+                    {
+                        var state = identity.GetGroup(connectedUrl, kickedMessage.GroupId);
+                        if (state != null)
+                        {
+                            state.Members.Remove(kickedMessage.UserId);
+                            state.ModeratorIds.Remove(kickedMessage.UserId);
+                            identity.PersistGroups();
+                            RefreshGroupsSnapshot();
+
+                            // Our own kick request completes via observing this same broadcast (the relay
+                            // never sends the kicker a separate direct ack - see KickGroupMemberAsync's
+                            // doc comment) - and it's specifically the kicker's job to rotate the key now.
+                            if (pendingAction == PendingAction.KickGroupMember)
+                                _ = RekeyAndDistributeAsync(kickedMessage.GroupId, CancellationToken.None);
+                        }
+                    }
+                }
+                GroupError = null;
+                if (pendingAction == PendingAction.KickGroupMember)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "leftGroup":
+                var leftMessage = TryDeserialize<RelayLeftGroupMessage>(rawJson);
+                if (leftMessage is { GroupId.Length: > 0 } && connectedUrl != null)
+                {
+                    identity?.RemoveGroup(connectedUrl, leftMessage.GroupId);
+                    RefreshGroupsSnapshot();
+                    GroupLeft?.Invoke(leftMessage.GroupId);
+                    log.Info("TomeScrollChat: left cross-DC group {GroupId}", leftMessage.GroupId);
+                }
+                GroupError = null;
+                if (pendingAction == PendingAction.LeaveGroup)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "groupMemberLeft":
+                var memberLeftMessage = TryDeserialize<RelayGroupMemberLeftMessage>(rawJson);
+                if (memberLeftMessage is { GroupId.Length: > 0, UserId.Length: > 0 } && connectedUrl != null && identity != null)
+                {
+                    var state = identity.GetGroup(connectedUrl, memberLeftMessage.GroupId);
+                    if (state != null)
+                    {
+                        state.Members.Remove(memberLeftMessage.UserId);
+                        state.ModeratorIds.Remove(memberLeftMessage.UserId);
+                        identity.PersistGroups();
+                        RefreshGroupsSnapshot();
+                        log.Info("TomeScrollChat: {UserId} left cross-DC group {GroupId}", memberLeftMessage.UserId, memberLeftMessage.GroupId);
+
+                        var myUserId = UserId;
+                        if (myUserId != null && (state.OwnerId == myUserId || state.ModeratorIds.Contains(myUserId)))
+                            _ = RekeyAndDistributeAsync(memberLeftMessage.GroupId, CancellationToken.None);
+                    }
+                }
+                break;
+
             case "error":
                 var reason = TryDeserialize<RelayErrorMessage>(rawJson)?.Reason ?? "Unknown error";
                 switch (pendingAction)
@@ -547,6 +1127,19 @@ public sealed class CrossDcRelayService : IDisposable
                         break;
                     case PendingAction.RedeemInvite:
                         PairError = reason;
+                        break;
+                    case PendingAction.CreateGroup:
+                    case PendingAction.CreateGroupInvite:
+                    case PendingAction.RedeemGroupInvite:
+                    case PendingAction.GetGroupKeyDirectory:
+                    case PendingAction.SetGroupMemberKey:
+                    case PendingAction.GetGroupMemberKey:
+                    case PendingAction.PromoteModerator:
+                    case PendingAction.DemoteModerator:
+                    case PendingAction.TransferGroupOwnership:
+                    case PendingAction.KickGroupMember:
+                    case PendingAction.LeaveGroup:
+                        GroupError = reason;
                         break;
                     default:
                         log.Debug("TomeScrollChat: cross-DC relay error with no pending request to attribute it to: {Reason}", reason);

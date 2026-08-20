@@ -170,6 +170,10 @@ public static class ChatMessageRenderer
         // ever comes back wrong for some channel. Outgoing tells are authored by the local player but
         // their Sender field carries the *target's* payload (e.g. "To Name"), not the player's own - so
         // TellOutgoing is its own reliable "this is me" signal, same as before.
+        // Neither flavor of relay tab has a "Name@World" to feed the four native-lookup context-menu
+        // actions below - see those items' own comments.
+        var isRelayTab = tab.IsCrossDcTab || tab.IsGroupTab;
+
         var localPlayerName = localPlayerKey?.Split('@')[0];
         var isOwn = msg.IsFromLocalPlayer ||
                     msg.ChatType == XivChatType.TellOutgoing ||
@@ -342,22 +346,22 @@ public static class ChatMessageRenderer
             // Whispering yourself makes no sense, and the game's own "Send Tell" menu item only works
             // from native UI (party list, target, etc.) and does nothing here since this window isn't
             // a native addon - this is the only way to whisper someone straight from chat.
-            if (!tab.IsCrossDcTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Tell"))
+            if (!isRelayTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Tell"))
                 onSendTell(msg.SenderKey);
 
             // Works by name+world (like the vanilla `/invite` command) with no need to target/see the
             // player. Native-only - msg.SenderKey is a relay userId, not a "Name@World", for a cross-DC
             // tab, so none of these four native-lookup actions apply.
-            if (!tab.IsCrossDcTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Party Invite"))
+            if (!isRelayTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Party Invite"))
                 onPartyInvite(msg.SenderKey);
 
             // Goes through "/friendlist add" as a plain text command, not a dedicated native call -
             // see Plugin.SendFriendRequest for why.
-            if (!tab.IsCrossDcTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Friend Request"))
+            if (!isRelayTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("Send Friend Request"))
                 onFriendRequest(msg.SenderKey);
 
             // Also only works when the player is actually nearby - see AdventurerPlateService.
-            if (!tab.IsCrossDcTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("View Adventurer Plate"))
+            if (!isRelayTab && !isOwn && !string.IsNullOrEmpty(msg.SenderKey) && ImGui.MenuItem("View Adventurer Plate"))
                 onViewPlate(msg.SenderKey);
 
             // Both write straight to Configuration (also editable in bulk from Settings > Players),

@@ -39,6 +39,15 @@ public sealed class ChatTabConfig
     /// the cross-DC equivalent of <see cref="PmPartnerKey"/>.</summary>
     public string? CrossDcContactUserId { get; set; }
 
+    /// <summary>True for a tab auto-created for one joined cross-DC group ("relay linkshell" - see
+    /// <see cref="Services.CrossDc.CrossDcRelayService"/>/<see cref="Services.TabManager.GetOrCreateGroupTab"/>) -
+    /// same self-healing lifecycle as <see cref="IsCrossDcTab"/>, just a many-member E2E-encrypted
+    /// conversation instead of a 1:1 one.</summary>
+    public bool IsGroupTab { get; set; }
+
+    /// <summary>The relay's group id this tab is pinned to, when <see cref="IsGroupTab"/>.</summary>
+    public string? CrossDcGroupId { get; set; }
+
     /// <summary>Additional text filter applied on top of channel membership.</summary>
     public ChatTabFilterMode FilterMode { get; set; } = ChatTabFilterMode.None;
 
@@ -136,7 +145,7 @@ public sealed class ChatTabConfig
     /// save every time to avoid a disk write per chat line).</summary>
     public int UnreadCount { get; set; }
 
-    /// <summary>Whisper and cross-DC tabs always notify; regular tabs only if the user opted in.</summary>
+    /// <summary>Whisper, cross-DC, and group tabs always notify; regular tabs only if the user opted in.</summary>
     [JsonIgnore]
-    public bool ShouldNotify => IsPmTab || IsCrossDcTab || NotifyOnNewMessage;
+    public bool ShouldNotify => IsPmTab || IsCrossDcTab || IsGroupTab || NotifyOnNewMessage;
 }

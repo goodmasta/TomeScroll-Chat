@@ -27,6 +27,10 @@ public sealed class ConfigWindow : Window, IDisposable
     private string crossDcRedeemCodeInput = string.Empty;
     private string? crossDcSelectedContact;
     private string crossDcMessageInput = string.Empty;
+    private string crossDcGroupNameInput = string.Empty;
+    private string crossDcGroupRedeemCodeInput = string.Empty;
+    private string? crossDcSelectedGroupId;
+    private string crossDcGroupMessageInput = string.Empty;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1404,6 +1408,10 @@ public sealed class ConfigWindow : Window, IDisposable
 
                 ImGui.Spacing();
                 ImGui.Separator();
+                DrawCrossDcGroups();
+
+                ImGui.Spacing();
+                ImGui.Separator();
                 DrawCrossDcAdmin();
             }
 
@@ -1469,7 +1477,7 @@ public sealed class ConfigWindow : Window, IDisposable
                 {
                     foreach (var contact in relay.Contacts)
                     {
-                        if (ImGui.Selectable(contact, contact == crossDcSelectedContact))
+                        if (ImGui.Selectable(relay.GetDisplayName(contact), contact == crossDcSelectedContact))
                             crossDcSelectedContact = contact;
                     }
                 }
@@ -1495,7 +1503,12 @@ public sealed class ConfigWindow : Window, IDisposable
             crossDcSelectedContact = relay.Contacts[0];
 
         ImGui.Spacing();
-        ImGui.TextUnformatted($"Chat with {crossDcSelectedContact}");
+        ImGui.TextUnformatted($"Chat with {relay.GetDisplayName(crossDcSelectedContact)}");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Refresh my name##crossDcRefreshName"))
+            _ = relay.RefreshMyNameAsync(crossDcSelectedContact);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Re-sends your current character name to this contact - use this if you renamed/switched characters since you last paired or messaged.");
 
         using (var child = ImRaii.Child("CrossDcMessagesView", new Vector2(0, 160), true))
         {
@@ -1503,7 +1516,7 @@ public sealed class ConfigWindow : Window, IDisposable
             {
                 foreach (var message in relay.GetMessages(crossDcSelectedContact))
                 {
-                    var label = message.IsOutgoing ? "You" : message.SenderUserId;
+                    var label = message.IsOutgoing ? "You" : relay.GetDisplayName(message.SenderUserId);
                     ImGui.TextUnformatted($"[{message.Timestamp.ToLocalTime():HH:mm}] {label}: {message.Text}");
                 }
             }
@@ -1528,6 +1541,210 @@ public sealed class ConfigWindow : Window, IDisposable
 
         if (!hasKey)
             ImGui.TextDisabled("Waiting for this contact's encryption key (usually arrives within moments of pairing) before you can message them.");
+    }
+
+    /// <summary>Creating/joining groups ("relay linkshells" - multi-member end-to-end-encrypted chats, as
+    /// opposed to <see cref="DrawCrossDcPairing"/>'s 1:1 contacts), the resulting group list with each
+    /// one's role relative to this identity, and (once a group is selected) its member roster/management
+    /// actions and chat - see <see cref="DrawCrossDcGroupDetails"/>. Mirrors DrawCrossDcPairing's overall
+    /// shape closely (invite codes shared out-of-band, same as a 1:1 contact).</summary>
+    private void DrawCrossDcGroups()
+    {
+        var relay = plugin.CrossDcRelayService;
+
+        ImGui.TextUnformatted("Groups");
+        ImGui.TextDisabled("A multi-member end-to-end-encrypted chat, invite-only - same out-of-band code sharing as a 1:1 contact.");
+
+        ImGui.SetNextItemWidth(240);
+        ImGui.InputTextWithHint("##crossDcGroupName", "Group name", ref crossDcGroupNameInput, 64);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(crossDcGroupNameInput.Trim().Length == 0))
+        {
+            if (ImGui.Button("Create group"))
+            {
+                var name = crossDcGroupNameInput.Trim();
+                crossDcGroupNameInput = string.Empty;
+                _ = relay.CreateGroupAsync(name);
+            }
+        }
+
+        ImGui.SetNextItemWidth(160);
+        ImGui.InputTextWithHint("##crossDcGroupRedeemCode", "Group invite code", ref crossDcGroupRedeemCodeInput, 16, ImGuiInputTextFlags.CharsUppercase);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(crossDcGroupRedeemCodeInput.Length == 0))
+        {
+            if (ImGui.Button("Join group"))
+            {
+                var code = crossDcGroupRedeemCodeInput;
+                crossDcGroupRedeemCodeInput = string.Empty;
+                _ = relay.RedeemGroupInviteAsync(code);
+            }
+        }
+
+        if (relay.GroupError != null)
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.GroupError);
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"Your groups ({relay.Groups.Count})");
+        if (relay.Groups.Count == 0)
+        {
+            ImGui.TextDisabled("None yet.");
+            return;
+        }
+
+        using (var child = ImRaii.Child("CrossDcGroupsView", new Vector2(0, 100), true))
+        {
+            if (child.Success)
+            {
+                foreach (var group in relay.Groups)
+                {
+                    var role = group.OwnerId == relay.UserId ? " (owner)"
+                        : group.ModeratorIds.Contains(relay.UserId ?? string.Empty) ? " (moderator)"
+                        : string.Empty;
+                    if (ImGui.Selectable($"{group.Name}{role}##group_{group.Id}", group.Id == crossDcSelectedGroupId))
+                        crossDcSelectedGroupId = group.Id;
+                }
+            }
+        }
+
+        var selectedGroup = relay.Groups.FirstOrDefault(g => g.Id == crossDcSelectedGroupId) ?? relay.Groups[0];
+        crossDcSelectedGroupId = selectedGroup.Id;
+        DrawCrossDcGroupDetails(relay, selectedGroup);
+    }
+
+    /// <summary>Member roster (with role-gated promote/demote/transfer-ownership/kick actions - see each
+    /// button's own condition, matching TomeScrollRelay's own owner &gt; moderator &gt; member server-side
+    /// enforcement exactly so a button never shows only to fail when clicked) plus the group's chat, for
+    /// whichever group is selected in <see cref="DrawCrossDcGroups"/>.</summary>
+    private void DrawCrossDcGroupDetails(CrossDcRelayService relay, CrossDcGroupInfo group)
+    {
+        var myUserId = relay.UserId ?? string.Empty;
+        var isOwner = group.OwnerId == myUserId;
+        var isModerator = group.ModeratorIds.Contains(myUserId);
+        var canManage = isOwner || isModerator;
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"{group.Name} - {group.Members.Count} member(s)");
+        if (group.OwnerId.Length == 0)
+            ImGui.TextDisabled("Owner unknown until an ownership change happens while you're connected - the relay has no \"who owns this\" query to ask otherwise.");
+
+        if (isOwner)
+        {
+            if (ImGui.Button("Create invite code##crossDcGroupInvite"))
+                _ = relay.CreateGroupInviteAsync(group.Id);
+
+            if (relay.GroupInviteCode != null)
+            {
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(160);
+                var codeDisplay = relay.GroupInviteCode;
+                ImGui.InputText("##crossDcGroupInviteDisplay", ref codeDisplay, codeDisplay.Length, ImGuiInputTextFlags.ReadOnly);
+                ImGui.SameLine();
+                if (ImGui.SmallButton("Copy##crossDcCopyGroupInvite"))
+                    ImGui.SetClipboardText(relay.GroupInviteCode);
+            }
+        }
+
+        using (var child = ImRaii.Child("CrossDcGroupMembersView", new Vector2(0, 140), true))
+        {
+            if (child.Success)
+            {
+                foreach (var memberId in group.Members)
+                {
+                    var memberIsOwner = memberId == group.OwnerId;
+                    var memberIsModerator = group.ModeratorIds.Contains(memberId);
+                    var memberRole = memberIsOwner ? " (owner)" : memberIsModerator ? " (moderator)" : string.Empty;
+                    var isSelf = memberId == myUserId;
+                    ImGui.TextUnformatted($"{relay.GetDisplayName(memberId)}{memberRole}{(isSelf ? " - you" : string.Empty)}");
+
+                    if (isSelf)
+                        continue;
+
+                    if (isOwner && !memberIsOwner)
+                    {
+                        ImGui.SameLine();
+                        if (!memberIsModerator)
+                        {
+                            if (ImGui.SmallButton($"Promote##promote_{memberId}"))
+                                _ = relay.PromoteModeratorAsync(group.Id, memberId);
+                        }
+                        else if (ImGui.SmallButton($"Demote##demote_{memberId}"))
+                        {
+                            _ = relay.DemoteModeratorAsync(group.Id, memberId);
+                        }
+
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Make owner##transfer_{memberId}"))
+                            _ = relay.TransferGroupOwnershipAsync(group.Id, memberId);
+                    }
+
+                    // Owner can kick anyone but another owner (there's only one); a moderator can only
+                    // kick regular members, matching TomeScrollRelay's own enforcement exactly.
+                    if (canManage && !memberIsOwner && (isOwner || !memberIsModerator))
+                    {
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Kick##kick_{memberId}"))
+                            _ = relay.KickGroupMemberAsync(group.Id, memberId);
+                    }
+                }
+            }
+        }
+
+        if (relay.GroupError != null)
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.GroupError);
+
+        ImGui.Spacing();
+        if (ImGui.Button("Leave group##crossDcLeaveGroup"))
+            _ = relay.LeaveGroupAsync(group.Id);
+        if (isOwner && group.Members.Count > 1)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(transfer ownership to someone else first - the relay won't let its owner just walk away)");
+        }
+
+        DrawCrossDcGroupMessages(relay, group);
+    }
+
+    /// <summary>Message history for whichever group is selected, plus a box to send a new one - the
+    /// group-chat mirror of <see cref="DrawCrossDcMessages"/>. Sending is disabled until this identity has
+    /// a copy of the group's current key (see <see cref="CrossDcRelayService.HasGroupKey"/>'s doc comment
+    /// for when that can briefly not be the case yet).</summary>
+    private void DrawCrossDcGroupMessages(CrossDcRelayService relay, CrossDcGroupInfo group)
+    {
+        ImGui.Spacing();
+        ImGui.TextUnformatted("Chat");
+
+        using (var child = ImRaii.Child("CrossDcGroupMessagesView", new Vector2(0, 160), true))
+        {
+            if (child.Success)
+            {
+                foreach (var message in relay.GetGroupMessages(group.Id))
+                {
+                    var label = message.IsOutgoing ? "You" : relay.GetDisplayName(message.SenderUserId);
+                    ImGui.TextUnformatted($"[{message.Timestamp.ToLocalTime():HH:mm}] {label}: {message.Text}");
+                }
+            }
+        }
+
+        var hasKey = relay.HasGroupKey(group.Id);
+        using (ImRaii.Disabled(!hasKey))
+        {
+            ImGui.SetNextItemWidth(320);
+            var sendPressed = ImGui.InputTextWithHint("##crossDcGroupMessageInput", "Message...", ref crossDcGroupMessageInput, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+            ImGui.SameLine();
+            sendPressed |= ImGui.Button("Send##crossDcGroupSendMessage");
+
+            if (sendPressed && crossDcGroupMessageInput.Length > 0)
+            {
+                var text = crossDcGroupMessageInput;
+                crossDcGroupMessageInput = string.Empty;
+                var groupId = group.Id;
+                _ = relay.SendGroupMessageAsync(groupId, text);
+            }
+        }
+
+        if (!hasKey)
+            ImGui.TextDisabled("Waiting for an owner/moderator to seal this group's key for you (usually arrives within moments if one's online) before you can message it.");
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap

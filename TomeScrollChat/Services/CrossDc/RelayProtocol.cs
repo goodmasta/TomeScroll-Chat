@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Net.WebSockets;
 using System.Text;
@@ -40,6 +41,57 @@ internal sealed record RelayPairedMessage(string? Type, string? With);
 
 internal sealed record RelaySendRequest(string Type, string To, string Payload);
 internal sealed record RelayMessageEnvelope(string? Type, string? From, string? Payload);
+
+// Groups ("relay linkshells") - mirrors TomeScrollRelay's own Relay/GroupProtocolMessages.cs exactly,
+// field for field, since both ends serialize with the same camelCase JsonSerializerDefaults.Web
+// convention. See CrossDcRelayService's own doc comments for the client-side flow (key sealing/
+// rotation, who reacts to which push) - the relay only ever stores/relays opaque blobs and enforces
+// the owner > moderator > member hierarchy; it has no idea what any of the key material means.
+internal sealed record RelayCreateGroupRequest(string Type, string? Name, string? PublicKey);
+internal sealed record RelayGroupCreatedMessage(string? Type, string? GroupId, string? Name);
+
+internal sealed record RelayCreateGroupInviteRequest(string Type, string GroupId);
+internal sealed record RelayGroupInviteMessage(string? Type, string? Code);
+
+internal sealed record RelayRedeemGroupInviteRequest(string Type, string? Code, string? PublicKey);
+internal sealed record RelayJoinedGroupMessage(string? Type, string? GroupId, string? Name, string[]? Members);
+internal sealed record RelayGroupMemberJoinedMessage(string? Type, string? GroupId, string? UserId);
+
+internal sealed record RelayGetGroupKeyDirectoryRequest(string Type, string? GroupId);
+internal sealed record RelayGroupKeyDirectoryMessage(string? Type, string? GroupId, Dictionary<string, string>? Members);
+
+internal sealed record RelaySetGroupMemberKeyRequest(string Type, string? GroupId, string? UserId, string? SealedKey, long Epoch);
+internal sealed record RelayGroupMemberKeySetMessage(string? Type, string? GroupId, string? UserId, long? Epoch);
+internal sealed record RelayGroupKeyRotatedMessage(string? Type, string? GroupId, string? SealedKey, long? Epoch);
+
+internal sealed record RelayGetGroupMemberKeyRequest(string Type, string? GroupId);
+internal sealed record RelayGroupMemberKeyMessage(string? Type, string? GroupId, string? SealedKey, long? Epoch);
+
+internal sealed record RelaySendGroupRequest(string Type, string GroupId, string Payload);
+internal sealed record RelayGroupMessageEnvelope(string? Type, string? GroupId, string? From, string? Payload);
+
+internal sealed record RelayPromoteModeratorRequest(string Type, string? GroupId, string? UserId);
+internal sealed record RelayModeratorPromotedMessage(string? Type, string? GroupId, string? UserId);
+
+internal sealed record RelayDemoteModeratorRequest(string Type, string? GroupId, string? UserId);
+internal sealed record RelayModeratorDemotedMessage(string? Type, string? GroupId, string? UserId);
+
+internal sealed record RelayTransferGroupOwnershipRequest(string Type, string? GroupId, string? NewOwnerId);
+internal sealed record RelayGroupOwnershipTransferredMessage(string? Type, string? GroupId, string? NewOwnerId);
+
+internal sealed record RelayKickGroupMemberRequest(string Type, string? GroupId, string? UserId);
+internal sealed record RelayGroupMemberKickedMessage(string? Type, string? GroupId, string? UserId, string? KickedBy);
+
+internal sealed record RelayLeaveGroupRequest(string Type, string? GroupId);
+internal sealed record RelayLeftGroupMessage(string? Type, string? GroupId);
+internal sealed record RelayGroupMemberLeftMessage(string? Type, string? GroupId, string? UserId);
+
+/// <summary>Client-level envelope carried as the opaque <c>payload</c> of a relay <c>sendGroup</c>/
+/// <c>groupMessage</c> - the group-chat mirror of <see cref="ChatMessageEnvelope"/>, just also naming
+/// which key <see cref="Epoch"/> it was encrypted under (a group's key rotates on every kick/leave - see
+/// <see cref="RelayGroupKeyRotatedMessage"/> - so a message needs to say which one applies, unlike 1:1
+/// chat where the derived key never changes).</summary>
+internal sealed record GroupChatMessageEnvelope(string Type, string Nonce, string Ciphertext, long Epoch);
 
 /// <summary>Client-level envelope carried as the opaque <c>payload</c> of a relay <c>send</c>/
 /// <c>message</c> - the relay never looks inside this, it's purely between the two clients. Two kinds:

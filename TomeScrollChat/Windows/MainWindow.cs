@@ -24,6 +24,7 @@ public sealed class MainWindow : Window, IDisposable
     private static readonly Vector4 BlinkBase = new(1f, 1f, 1f, 1f);
     private static readonly Vector4 LinkshellBadgeColor = new(0.35f, 0.9f, 0.35f, 1f);
     private static readonly Vector4 CrossDcBadgeColor = new(0.4f, 0.75f, 1f, 1f);
+    private static readonly Vector4 GroupBadgeColor = new(0.75f, 0.5f, 1f, 1f);
 
     /// <summary>Vertical gap below the (now bordered) "Messages" child and between the toolbar/input
     /// rows - tighter than the theme's default ItemSpacing.Y, which read as an oddly large gap once
@@ -709,11 +710,13 @@ public sealed class MainWindow : Window, IDisposable
     /// reappearing. There's no reason for the tab you're already looking at to ever jump position from
     /// its own traffic in the first place, so it's excluded from the bubble-to-top treatment
     /// entirely now.</para></summary>
+    private static bool IsPrivateTab(ChatTabConfig tab) => tab.IsPmTab || tab.IsCrossDcTab || tab.IsGroupTab;
+
     private List<ChatTabConfig> GetOrderedTabs() =>
         plugin.TabManager.Tabs
             .Where(t => !t.IsDetached)
-            .OrderBy(t => t.IsPmTab || t.IsCrossDcTab ? 1 : 0)
-            .ThenBy(t => (t.IsPmTab || t.IsCrossDcTab) && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
+            .OrderBy(t => IsPrivateTab(t) ? 1 : 0)
+            .ThenBy(t => IsPrivateTab(t) && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
             .ToList();
 
     private void DrawSidebar()
@@ -948,7 +951,7 @@ public sealed class MainWindow : Window, IDisposable
         // Settings > General - whisper and cross-DC tabs (both private 1:1 conversations) default to
         // WhisperNotifyColor, regular tabs to the separate blink/count defaults.
         var config = Plugin.Configuration;
-        var isPrivateTab = tab.IsPmTab || tab.IsCrossDcTab;
+        var isPrivateTab = IsPrivateTab(tab);
         var blinkColor = tab.BlinkColorOverride ?? (isPrivateTab ? config.WhisperNotifyColor : config.ChannelBlinkColor);
         var countColor = tab.UnreadCountColorOverride ?? (isPrivateTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor);
 
@@ -1011,6 +1014,12 @@ public sealed class MainWindow : Window, IDisposable
         {
             const string badge = "[CD] ";
             drawList.AddText(new Vector2(textX, textY), ImGui.ColorConvertFloat4ToU32(CrossDcBadgeColor), badge);
+            textX += ImGui.CalcTextSize(badge).X;
+        }
+        else if (tab.IsGroupTab)
+        {
+            const string badge = "[GRP] ";
+            drawList.AddText(new Vector2(textX, textY), ImGui.ColorConvertFloat4ToU32(GroupBadgeColor), badge);
             textX += ImGui.CalcTextSize(badge).X;
         }
 
@@ -1532,6 +1541,12 @@ public sealed class MainWindow : Window, IDisposable
             return;
         }
 
+        if (tab.IsGroupTab)
+        {
+            ImGui.TextDisabled($"Sending to: {tab.Name} (cross-DC group)");
+            return;
+        }
+
         var sendable = ChatChannelCatalog.SendableChannels.Where(c => tab.Channels.Contains(c.Type)).ToList();
 
         // Self-limiting - only fires the one frame the command is still actually blank, so it's safe
@@ -1601,7 +1616,7 @@ public sealed class MainWindow : Window, IDisposable
         // tab's first sendable channel this same frame - a tab still blank at this point genuinely
         // has nowhere to send to (e.g. the built-in "Log" tab), so composing is disabled outright
         // rather than silently falling back to whatever the game's ambient channel happens to be.
-        var canWrite = tab.IsPmTab || tab.IsCrossDcTab || !string.IsNullOrEmpty(tab.OutgoingChannelCommand);
+        var canWrite = tab.IsPmTab || tab.IsCrossDcTab || tab.IsGroupTab || !string.IsNullOrEmpty(tab.OutgoingChannelCommand);
 
         // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
         // "the very next widget") - doing it *after*, like before the icon buttons were added here,

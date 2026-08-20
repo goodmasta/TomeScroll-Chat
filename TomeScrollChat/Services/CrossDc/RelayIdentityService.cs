@@ -62,6 +62,7 @@ public sealed class RelayIdentityService : IDisposable
     private readonly Dictionary<string, HashSet<string>> contactsByUrl;
     private readonly Dictionary<string, Dictionary<string, string>> peerKeysByUrl;
     private readonly Dictionary<string, Dictionary<string, string>> peerNamesByUrl;
+    private readonly Dictionary<string, Dictionary<string, GroupState>> groupsByUrl;
 
     public RelayIdentityService(string configDirectory, IPluginLog log)
     {
@@ -78,6 +79,7 @@ public sealed class RelayIdentityService : IDisposable
             contactsByUrl = state.ContactsByUrl;
             peerKeysByUrl = state.PeerKeysByUrl;
             peerNamesByUrl = state.PeerNamesByUrl;
+            groupsByUrl = state.GroupsByUrl;
             return;
         }
 
@@ -87,6 +89,7 @@ public sealed class RelayIdentityService : IDisposable
         contactsByUrl = new Dictionary<string, HashSet<string>>();
         peerKeysByUrl = new Dictionary<string, Dictionary<string, string>>();
         peerNamesByUrl = new Dictionary<string, Dictionary<string, string>>();
+        groupsByUrl = new Dictionary<string, Dictionary<string, GroupState>>();
         Save();
     }
 
@@ -190,6 +193,168 @@ public sealed class RelayIdentityService : IDisposable
         Save();
     }
 
+    /// <summary>Every group this identity currently belongs to on <paramref name="url"/>, keyed by group
+    /// id - empty if none. Membership here just means "this client still thinks it's in the group";
+    /// <see cref="RemoveGroup"/> is how <see cref="CrossDcRelayService"/> clears an entry once it's told
+    /// otherwise (kicked, left, or the group was deleted).</summary>
+    public IReadOnlyDictionary<string, GroupState> GetGroups(string url) =>
+        groupsByUrl.TryGetValue(url, out var groups) ? groups : EmptyGroups;
+
+    public GroupState? GetGroup(string url, string groupId) =>
+        groupsByUrl.TryGetValue(url, out var groups) && groups.TryGetValue(groupId, out var group) ? group : null;
+
+    /// <summary>Inserts or wholesale-replaces <paramref name="state"/> for <paramref name="groupId"/> on
+    /// <paramref name="url"/>, persisted immediately. Callers that instead mutate a <see cref="GroupState"/>
+    /// already obtained from <see cref="GetGroup"/> in place (it's a live reference into the same backing
+    /// dictionary, not a copy) should call <see cref="PersistGroups"/> afterward instead of this.</summary>
+    public void UpsertGroup(string url, string groupId, GroupState state)
+    {
+        if (!groupsByUrl.TryGetValue(url, out var groups))
+            groupsByUrl[url] = groups = new Dictionary<string, GroupState>();
+
+        groups[groupId] = state;
+        Save();
+    }
+
+    /// <summary>Drops <paramref name="groupId"/> entirely (kicked, left, or the owner deleted it by
+    /// leaving as its last member) - a no-op if it wasn't tracked in the first place.</summary>
+    public void RemoveGroup(string url, string groupId)
+    {
+        if (groupsByUrl.TryGetValue(url, out var groups) && groups.Remove(groupId))
+            Save();
+    }
+
+    /// <summary>Persists after mutating a <see cref="GroupState"/> obtained from <see cref="GetGroup"/>
+    /// directly (member list, roles, key material) - see <see cref="UpsertGroup"/>'s doc comment.</summary>
+    public void PersistGroups() => Save();
+
+    private static readonly Dictionary<string, GroupState> EmptyGroups = new();
+
+    /// <summary>A fresh random 32-byte symmetric key, sized for <see cref="AeadAlgorithm.XChaCha20Poly1305"/> -
+    /// what a group's owner generates once at creation, and whoever kicks/whoever reacts to a member
+    /// leaving generates again for the next epoch (see <see cref="CrossDcRelayService"/>'s rekey flow).</summary>
+    public static byte[] GenerateGroupKey() => System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+
+    // Fixed, public HKDF inputs for the group-key-sealing derivation specifically - domain-separated
+    // from ChatKeySalt/ChatKeyInfo (1:1 chat) and from the group *message* key (which isn't HKDF-derived
+    // at all, see EncryptGroupMessage/DecryptGroupMessage - the group key itself already *is* the AEAD
+    // key, sealing is the only place HKDF is involved for groups).
+    private static readonly byte[] GroupSealSalt = Encoding.UTF8.GetBytes("TomeScrollChat/cross-dc-group/seal/v1");
+    private static readonly byte[] GroupSealInfo = Encoding.UTF8.GetBytes("group-key-seal");
+    private const int X25519PublicKeyLength = 32;
+    private const int SealNonceLength = 24;
+
+    /// <summary>"Seals" <paramref name="groupKey"/> for one specific member as an opaque blob the relay
+    /// stores/hands back without understanding (<c>SealedKey</c> in TomeScrollRelay's own
+    /// <c>GroupProtocolMessages.cs</c>) - a NaCl-style anonymous sealed box: a fresh ephemeral X25519
+    /// keypair is ECDH'd against the recipient's public key, HKDF'd into a wrapping key, and used to
+    /// AEAD-encrypt <paramref name="groupKey"/>; the ephemeral public key travels alongside the
+    /// ciphertext so unsealing only ever needs the recipient's own private key, never the sealer's
+    /// identity. That's deliberate: the relay's own protocol carries no "sealed by" field at all (any
+    /// owner or moderator can perform a seal - see <see cref="CrossDcRelayService"/>'s rekey/admit flow),
+    /// so the recipient has no way to know who sealed it even if they wanted to - and doesn't need to,
+    /// since the ephemeral key makes each seal self-contained and independently verifiable via the AEAD
+    /// tag regardless of who produced it. Null if the recipient's public key is malformed.</summary>
+    public string? SealGroupKeyFor(string recipientPublicKeyBase64, string groupId, long epoch, string recipientUserId, byte[] groupKey)
+    {
+        try
+        {
+            using var ephemeral = Key.Create(EncryptionAlgorithm, ExportableKeyParams);
+            var recipientPublicKey = PublicKey.Import(EncryptionAlgorithm, Convert.FromBase64String(recipientPublicKeyBase64), KeyBlobFormat.RawPublicKey);
+
+            using var shared = EncryptionAlgorithm.Agree(ephemeral, recipientPublicKey, ExportableSecretParams);
+            if (shared == null)
+                return null;
+
+            using var wrapKey = ChatKeyDerivation.DeriveKey(shared, GroupSealSalt, GroupSealInfo, ChatCipher, ExportableKeyParams);
+            var nonce = System.Security.Cryptography.RandomNumberGenerator.GetBytes(SealNonceLength);
+            var ciphertext = ChatCipher.Encrypt(wrapKey, nonce, BuildGroupAad(groupId, epoch, recipientUserId), groupKey);
+            var ephemeralPublicBytes = ephemeral.PublicKey.Export(KeyBlobFormat.RawPublicKey);
+
+            var packed = new byte[ephemeralPublicBytes.Length + nonce.Length + ciphertext.Length];
+            Buffer.BlockCopy(ephemeralPublicBytes, 0, packed, 0, ephemeralPublicBytes.Length);
+            Buffer.BlockCopy(nonce, 0, packed, ephemeralPublicBytes.Length, nonce.Length);
+            Buffer.BlockCopy(ciphertext, 0, packed, ephemeralPublicBytes.Length + nonce.Length, ciphertext.Length);
+            return Convert.ToBase64String(packed);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to seal a cross-DC group key for {RecipientUserId}", recipientUserId);
+            return null;
+        }
+    }
+
+    /// <summary>Unseals this identity's own copy of a group key (see <see cref="SealGroupKeyFor"/>) using
+    /// its private X25519 key against the ephemeral public key embedded in <paramref name="sealedBase64"/>.
+    /// Null if malformed, or if authentication fails (wrong groupId/epoch/recipient, tampered, or sealed
+    /// for someone else's public key entirely).</summary>
+    public byte[]? UnsealGroupKey(string sealedBase64, string groupId, long epoch, string myUserId)
+    {
+        try
+        {
+            var packed = Convert.FromBase64String(sealedBase64);
+            if (packed.Length <= X25519PublicKeyLength + SealNonceLength)
+                return null;
+
+            var ephemeralPublicBytes = packed.AsSpan(0, X25519PublicKeyLength).ToArray();
+            var nonce = packed.AsSpan(X25519PublicKeyLength, SealNonceLength).ToArray();
+            var ciphertext = packed.AsSpan(X25519PublicKeyLength + SealNonceLength).ToArray();
+
+            var ephemeralPublicKey = PublicKey.Import(EncryptionAlgorithm, ephemeralPublicBytes, KeyBlobFormat.RawPublicKey);
+            using var shared = EncryptionAlgorithm.Agree(encryptionKey, ephemeralPublicKey, ExportableSecretParams);
+            if (shared == null)
+                return null;
+
+            using var wrapKey = ChatKeyDerivation.DeriveKey(shared, GroupSealSalt, GroupSealInfo, ChatCipher, ExportableKeyParams);
+            return ChatCipher.Decrypt(wrapKey, nonce, BuildGroupAad(groupId, epoch, myUserId), ciphertext);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to unseal a cross-DC group key for group {GroupId}", groupId);
+            return null;
+        }
+    }
+
+    /// <summary>Encrypts a group chat message directly with the group's own raw symmetric key (no HKDF -
+    /// unlike 1:1 chat, this key doesn't come from an ECDH agreement, it's a random value generated once
+    /// and distributed via <see cref="SealGroupKeyFor"/>, so it's already exactly the right size/shape for
+    /// <see cref="AeadAlgorithm.XChaCha20Poly1305"/> to use as-is). Binds group/epoch/sender as associated
+    /// data so a ciphertext can't be replayed into a different group, under a different epoch's key, or as
+    /// if sent by someone else.</summary>
+    public byte[]? EncryptGroupMessage(byte[] groupKey, string groupId, long epoch, string fromUserId, byte[] nonce, byte[] plaintext)
+    {
+        try
+        {
+            using var key = Key.Import(ChatCipher, groupKey, KeyBlobFormat.RawSymmetricKey, ExportableKeyParams);
+            return ChatCipher.Encrypt(key, nonce, BuildGroupAad(groupId, epoch, fromUserId), plaintext);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to encrypt a cross-DC group message for {GroupId}", groupId);
+            return null;
+        }
+    }
+
+    /// <summary>Decrypts a group chat message - see <see cref="EncryptGroupMessage"/>. Null (message
+    /// dropped) if authentication fails, most commonly because the group's key has since rotated (a kick
+    /// or someone leaving - see <see cref="CrossDcRelayService"/>) past the epoch this message was
+    /// encrypted under; this client only ever keeps the *current* epoch's key, not a rotation history.</summary>
+    public byte[]? DecryptGroupMessage(byte[] groupKey, string groupId, long epoch, string fromUserId, byte[] nonce, byte[] ciphertext)
+    {
+        try
+        {
+            using var key = Key.Import(ChatCipher, groupKey, KeyBlobFormat.RawSymmetricKey, ExportableKeyParams);
+            return ChatCipher.Decrypt(key, nonce, BuildGroupAad(groupId, epoch, fromUserId), ciphertext);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to decrypt a cross-DC group message from {FromUserId}", fromUserId);
+            return null;
+        }
+    }
+
+    private static byte[] BuildGroupAad(string groupId, long epoch, string userId) => Encoding.UTF8.GetBytes($"{groupId}:{epoch}:{userId}");
+
     /// <summary>Encrypts <paramref name="plaintext"/> for <paramref name="peerUserId"/> (whose X25519
     /// public key is <paramref name="peerPublicKeyBase64"/> - see <see cref="GetPeerPublicKey"/>), binding
     /// <paramref name="fromUserId"/>/<paramref name="peerUserId"/> as associated data so a ciphertext
@@ -252,7 +417,7 @@ public sealed class RelayIdentityService : IDisposable
         return ChatKeyDerivation.DeriveKey(shared, ChatKeySalt, ChatKeyInfo, ChatCipher, ExportableKeyParams);
     }
 
-    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl, Dictionary<string, Dictionary<string, string>> PeerNamesByUrl)? TryLoad(string path, IPluginLog log)
+    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl, Dictionary<string, Dictionary<string, string>> PeerNamesByUrl, Dictionary<string, Dictionary<string, GroupState>> GroupsByUrl)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))
             return null;
@@ -265,15 +430,16 @@ public sealed class RelayIdentityService : IDisposable
 
             var signing = Key.Import(SigningAlgorithm, Convert.FromBase64String(stored.SigningKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
             var encryption = Key.Import(EncryptionAlgorithm, Convert.FromBase64String(stored.EncryptionKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
-            // AdminUrls/ContactsByUrl/PeerKeysByUrl/PeerNamesByUrl didn't exist in identity files written
-            // before those fields were added - null here just means "none recorded yet", not a corrupt/
-            // unreadable file.
+            // AdminUrls/ContactsByUrl/PeerKeysByUrl/PeerNamesByUrl/GroupsByUrl didn't exist in identity
+            // files written before those fields were added - null here just means "none recorded yet",
+            // not a corrupt/unreadable file.
             var adminUrls = new HashSet<string>(stored.AdminUrls ?? Enumerable.Empty<string>());
             var contactsByUrl = (stored.ContactsByUrl ?? new Dictionary<string, List<string>>())
                 .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
             var peerKeysByUrl = stored.PeerKeysByUrl ?? new Dictionary<string, Dictionary<string, string>>();
             var peerNamesByUrl = stored.PeerNamesByUrl ?? new Dictionary<string, Dictionary<string, string>>();
-            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl, peerNamesByUrl);
+            var groupsByUrl = stored.GroupsByUrl ?? new Dictionary<string, Dictionary<string, GroupState>>();
+            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl, peerNamesByUrl, groupsByUrl);
         }
         catch (Exception ex)
         {
@@ -297,7 +463,8 @@ public sealed class RelayIdentityService : IDisposable
                 adminUrls.ToList(),
                 contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()),
                 peerKeysByUrl,
-                peerNamesByUrl);
+                peerNamesByUrl,
+                groupsByUrl);
             File.WriteAllText(path, JsonSerializer.Serialize(stored));
         }
         catch (Exception ex)
@@ -318,5 +485,33 @@ public sealed class RelayIdentityService : IDisposable
         List<string>? AdminUrls = null,
         Dictionary<string, List<string>>? ContactsByUrl = null,
         Dictionary<string, Dictionary<string, string>>? PeerKeysByUrl = null,
-        Dictionary<string, Dictionary<string, string>>? PeerNamesByUrl = null);
+        Dictionary<string, Dictionary<string, string>>? PeerNamesByUrl = null,
+        Dictionary<string, Dictionary<string, GroupState>>? GroupsByUrl = null);
+}
+
+/// <summary>One group ("relay linkshell") this identity belongs to on some relay URL - the client-side
+/// mirror of what TomeScrollRelay's own <c>GroupRegistry</c> tracks server-side, plus the one thing the
+/// relay never sees: <see cref="KeyBase64"/>/<see cref="Epoch"/>, this member's current plaintext copy of
+/// the group's symmetric chat key (unsealed once via <see cref="RelayIdentityService.UnsealGroupKey"/>,
+/// then just kept here so every subsequent message doesn't need a fresh unseal). A mutable class, not a
+/// record - <see cref="CrossDcRelayService"/> mutates a live instance obtained from
+/// <see cref="RelayIdentityService.GetGroup"/> in place (member list changes, role changes, key rotation)
+/// rather than reconstructing and replacing the whole thing on every single field update.</summary>
+public sealed class GroupState
+{
+    public string Name { get; set; } = string.Empty;
+    public string OwnerId { get; set; } = string.Empty;
+    public List<string> Members { get; set; } = new();
+    public List<string> ModeratorIds { get; set; } = new();
+
+    /// <summary>This member's own current plaintext group key, base64 - null until unsealed at least
+    /// once (e.g. right after joining, before an owner/moderator has gotten around to sealing one for
+    /// this member - see <see cref="CrossDcRelayService"/>'s <c>groupMemberJoined</c> handling).</summary>
+    public string? KeyBase64 { get; set; }
+
+    /// <summary>Which rotation <see cref="KeyBase64"/> corresponds to - a message encrypted under a
+    /// different epoch than this can't be decrypted with it (see
+    /// <see cref="RelayIdentityService.DecryptGroupMessage"/>), most commonly because a kick/leave since
+    /// then rotated the key forward and this member hasn't received the new one yet.</summary>
+    public long Epoch { get; set; }
 }

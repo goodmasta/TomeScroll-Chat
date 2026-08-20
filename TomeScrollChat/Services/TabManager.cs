@@ -92,7 +92,7 @@ public sealed class TabManager
     /// <summary>Whisper and cross-DC tabs are both private 1:1 conversations and sort together, below
     /// regular tabs, in the sidebar (see <c>MainWindow.GetOrderedTabs</c>) - the grouping predicate
     /// <see cref="CanMoveTab"/>/<see cref="MoveTab"/> use to match that.</summary>
-    private static bool IsPrivateTab(ChatTabConfig tab) => tab.IsPmTab || tab.IsCrossDcTab;
+    private static bool IsPrivateTab(ChatTabConfig tab) => tab.IsPmTab || tab.IsCrossDcTab || tab.IsGroupTab;
 
     /// <summary>True if <see cref="MoveTab"/> would actually move <paramref name="tab"/> - i.e. it's
     /// not already first/last among tabs sharing its own private/regular group. Backs the "Move up"/
@@ -188,6 +188,29 @@ public sealed class TabManager
             Name = displayName,
             IsCrossDcTab = true,
             CrossDcContactUserId = contactUserId,
+        };
+        configuration.Tabs.Add(tab);
+        configuration.Save();
+        TabAdded?.Invoke(tab);
+        return tab;
+    }
+
+    /// <summary>Finds the existing tab for one joined cross-DC group, or creates it - the group-chat
+    /// mirror of <see cref="GetOrCreateCrossDcTab"/>. Groups have no rename feature server-side (see
+    /// TomeScrollRelay's own <c>GroupProtocolMessages.cs</c> - there's no request for it), so unlike the
+    /// cross-DC contact case there's no "placeholder name" to ever upgrade later; the name is fixed at
+    /// creation and this only ever needs to find-or-create.</summary>
+    public ChatTabConfig GetOrCreateGroupTab(string groupId, string name)
+    {
+        var existing = configuration.Tabs.FirstOrDefault(t => t.IsGroupTab && t.CrossDcGroupId == groupId);
+        if (existing != null)
+            return existing;
+
+        var tab = new ChatTabConfig
+        {
+            Name = name,
+            IsGroupTab = true,
+            CrossDcGroupId = groupId,
         };
         configuration.Tabs.Add(tab);
         configuration.Save();
