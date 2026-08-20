@@ -1471,23 +1471,59 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted($"Contacts on this server ({relay.Contacts.Count})");
         if (relay.Contacts.Count > 0)
         {
-            using var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true);
-            if (child.Success)
+            using (var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true))
             {
-                foreach (var contact in relay.Contacts)
+                if (child.Success)
                 {
-                    ImGui.TextUnformatted(relay.GetDisplayName(contact));
-                    ImGui.SameLine();
-                    if (ImGui.SmallButton($"Refresh my name##crossDcRefreshName_{contact}"))
-                        _ = relay.RefreshMyNameAsync(contact);
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip("Re-sends your current character name to this contact - use this if you renamed/switched characters since you last paired or messaged.");
+                    foreach (var contact in relay.Contacts)
+                    {
+                        ImGui.TextUnformatted(relay.GetDisplayName(contact));
+
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Refresh my name##crossDcRefreshName_{contact}"))
+                            _ = relay.RefreshMyNameAsync(contact);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip("Re-sends your current character name to this contact - use this if you renamed/switched characters since you last paired or messaged.");
+
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Remove##crossDcUnpair_{contact}"))
+                            _ = relay.UnpairAsync(contact);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip("Ends the pairing and closes their tab. They can invite you again later if you want to re-pair.");
+
+                        ImGui.SameLine();
+                        if (ImGui.SmallButton($"Block##crossDcBlock_{contact}"))
+                            _ = relay.BlockUserAsync(contact);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip("Ends the pairing and stops them from pairing with you again via a new invite code, until you unblock them.");
+                    }
                 }
             }
         }
         else
         {
             ImGui.TextDisabled("None yet.");
+        }
+
+        if (relay.RelationshipError != null)
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.RelationshipError);
+
+        if (relay.Blocked.Count > 0)
+        {
+            ImGui.Spacing();
+            ImGui.TextUnformatted($"Blocked on this server ({relay.Blocked.Count})");
+            ImGui.TextDisabled("Only shows users blocked from this installation - the relay has no \"list my blocks\" query to recall others.");
+            using var child = ImRaii.Child("CrossDcBlockedView", new Vector2(0, 80), true);
+            if (child.Success)
+            {
+                foreach (var blocked in relay.Blocked)
+                {
+                    ImGui.TextUnformatted(blocked);
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton($"Unblock##crossDcUnblock_{blocked}"))
+                        _ = relay.UnblockUserAsync(blocked);
+                }
+            }
         }
     }
 

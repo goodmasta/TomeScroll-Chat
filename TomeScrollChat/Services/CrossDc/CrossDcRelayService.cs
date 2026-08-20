@@ -79,7 +79,7 @@ public sealed class CrossDcRelayService : IDisposable
 
     private enum PendingAction
     {
-        None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite,
+        None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite, Unpair, BlockUser, UnblockUser,
         CreateGroup, CreateGroupInvite, RedeemGroupInvite, GetGroupKeyDirectory, SetGroupMemberKey, GetGroupMemberKey,
         PromoteModerator, DemoteModerator, TransferGroupOwnership, KickGroupMember, LeaveGroup,
     }
@@ -111,6 +111,11 @@ public sealed class CrossDcRelayService : IDisposable
     /// <c>ChatHistoryService</c> the same way <c>ChatCaptureService.MessageRouted</c> does for native
     /// chat, so the cross-DC tab actually shows it live instead of only on next open.</summary>
     public event Action<string, CrossDcChatMessage>? MessageAppended;
+
+    /// <summary>Fired when a 1:1 contact stops being one - this identity unpaired, blocked them (which
+    /// always unpairs first server-side), or observed the other side doing either of those live.
+    /// <c>Plugin</c> uses this to close the matching tab, same as <see cref="GroupLeft"/> does for groups.</summary>
+    public event Action<string>? ContactRemoved;
 
     /// <summary>Fired for every group this identity currently belongs to, once on each fresh connect
     /// (self-healing tabs, same reasoning as <see cref="ContactAdded"/>) and again the moment a brand-new
@@ -188,6 +193,15 @@ public sealed class CrossDcRelayService : IDisposable
     /// etc.) - null if none yet, or the last one succeeded.</summary>
     public string? PairError { get; private set; }
 
+    /// <summary>Every user ID this identity has ever blocked on the *current* relay (empty while
+    /// disconnected) - see <see cref="RelayIdentityService.GetBlocked"/>'s own doc comment for why this
+    /// can only ever reflect blocks this exact client performed, not a server-side query.</summary>
+    public IReadOnlyList<string> Blocked { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Reason the most recent <c>unpair</c>/<c>blockUser</c>/<c>unblockUser</c> attempt failed -
+    /// shared across the three, same reasoning as <see cref="GroupError"/>.</summary>
+    public string? RelationshipError { get; private set; }
+
     /// <summary>Every group this identity currently belongs to on the *current* relay (empty while
     /// disconnected) - refreshed on connect and after every group membership/role change, whether this
     /// client caused it or just observed a push about it. <see cref="CrossDcGroupInfo.OwnerId"/> is empty
@@ -256,6 +270,28 @@ public sealed class CrossDcRelayService : IDisposable
     /// Result also surfaces as <see cref="Contacts"/> (gains the new pairing)/<see cref="PairError"/>.</summary>
     public Task<bool> RedeemInviteAsync(string code, CancellationToken cancellationToken = default) =>
         SendAndAwaitAsync(PendingAction.RedeemInvite, new RelayRedeemInviteRequest("redeemInvite", code), cancellationToken);
+
+    /// <summary>Sends <c>unpair</c> - either side of a 1:1 pairing can end it unilaterally, no
+    /// confirmation needed from the other side. Result surfaces as <see cref="Contacts"/> (loses the
+    /// pairing)/<see cref="RelationshipError"/>; <see cref="ContactRemoved"/> fires either way (this
+    /// identity's own unpair, or the other side unpairing/blocking - both arrive as the same <c>unpaired</c>
+    /// frame, see <see cref="DispatchFrame"/>).</summary>
+    public Task<bool> UnpairAsync(string contactUserId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.Unpair, new RelayUnpairRequest("unpair", contactUserId), cancellationToken);
+
+    /// <summary>Sends <c>blockUser</c> - always unpairs first if they were paired (matching the relay's
+    /// own behavior, see TomeScrollRelay's <c>RelayConnectionHandler.BlockUserAsync</c>), and stops them
+    /// from pairing with this identity again via a fresh invite code. Result surfaces as
+    /// <see cref="Blocked"/> (gains the block)/<see cref="Contacts"/> (loses the pairing, if there was
+    /// one)/<see cref="RelationshipError"/>.</summary>
+    public Task<bool> BlockUserAsync(string contactUserId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.BlockUser, new RelayBlockUserRequest("blockUser", contactUserId), cancellationToken);
+
+    /// <summary>Sends <c>unblockUser</c> - only lifts the block, doesn't restore any pairing that existed
+    /// before it (a fresh invite code is needed to pair again, same as pairing from scratch). Result
+    /// surfaces as <see cref="Blocked"/> (loses the block)/<see cref="RelationshipError"/>.</summary>
+    public Task<bool> UnblockUserAsync(string contactUserId, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.UnblockUser, new RelayUnblockUserRequest("unblockUser", contactUserId), cancellationToken);
 
     /// <summary>Re-sends this identity's current character name (and X25519 public key) to
     /// <paramref name="contactUserId"/> - the manual "refresh name" action, for when it's changed since
@@ -421,6 +457,20 @@ public sealed class CrossDcRelayService : IDisposable
 
         messages.Add(message);
         MessageAppended?.Invoke(contactUserId, message);
+    }
+
+    /// <summary>Drops <paramref name="contactUserId"/> as a contact (and their in-memory message history)
+    /// and fires <see cref="ContactRemoved"/> - shared by the <c>unpaired</c> and <c>userBlocked</c> cases
+    /// in <see cref="DispatchFrame"/>, since blocking always unpairs too.</summary>
+    private void RemoveContactLocal(string contactUserId)
+    {
+        if (connectedUrl == null || identity == null)
+            return;
+
+        identity.RemoveContact(connectedUrl, contactUserId);
+        Contacts = identity.GetContacts(connectedUrl).ToArray();
+        messagesByContact.Remove(contactUserId);
+        ContactRemoved?.Invoke(contactUserId);
     }
 
     /// <summary>Message history with <paramref name="groupId"/>, oldest first - the group-chat mirror of
@@ -773,6 +823,8 @@ public sealed class CrossDcRelayService : IDisposable
             foreach (var contactUserId in Contacts)
                 ContactAdded?.Invoke(contactUserId);
 
+            Blocked = identity.GetBlocked(url).ToArray();
+
             RefreshGroupsSnapshot();
             foreach (var (groupId, state) in identity.GetGroups(url).ToArray())
             {
@@ -906,6 +958,45 @@ public sealed class CrossDcRelayService : IDisposable
                 }
                 PairError = null;
                 if (pendingAction == PendingAction.RedeemInvite)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "unpaired":
+                // Same dual solicited/unsolicited shape as "paired" - this identity's own unpair request
+                // completing, or the other side unpairing/blocking, pushed live (best-effort, no offline
+                // queue for this one - see TomeScrollRelay's own UnpairAsync doc comment).
+                var unpairedMessage = TryDeserialize<RelayUnpairedMessage>(rawJson);
+                if (unpairedMessage?.With is { Length: > 0 } unpairedWith)
+                    RemoveContactLocal(unpairedWith);
+                RelationshipError = null;
+                if (pendingAction == PendingAction.Unpair)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "userBlocked":
+                var blockedMessage = TryDeserialize<RelayUserBlockedMessage>(rawJson);
+                if (blockedMessage?.UserId is { Length: > 0 } blockedUserId && connectedUrl != null && identity != null)
+                {
+                    identity.AddBlocked(connectedUrl, blockedUserId);
+                    Blocked = identity.GetBlocked(connectedUrl).ToArray();
+                    // The relay always unpairs on block too (see BlockUserAsync's own doc comment) - no
+                    // separate "unpaired" frame arrives for the blocker's own side, just this one.
+                    RemoveContactLocal(blockedUserId);
+                }
+                RelationshipError = null;
+                if (pendingAction == PendingAction.BlockUser)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "userUnblocked":
+                var unblockedMessage = TryDeserialize<RelayUserUnblockedMessage>(rawJson);
+                if (unblockedMessage?.UserId is { Length: > 0 } unblockedUserId && connectedUrl != null && identity != null)
+                {
+                    identity.RemoveBlocked(connectedUrl, unblockedUserId);
+                    Blocked = identity.GetBlocked(connectedUrl).ToArray();
+                }
+                RelationshipError = null;
+                if (pendingAction == PendingAction.UnblockUser)
                     pendingCompletion?.TrySetResult(true);
                 break;
 
@@ -1127,6 +1218,11 @@ public sealed class CrossDcRelayService : IDisposable
                         break;
                     case PendingAction.RedeemInvite:
                         PairError = reason;
+                        break;
+                    case PendingAction.Unpair:
+                    case PendingAction.BlockUser:
+                    case PendingAction.UnblockUser:
+                        RelationshipError = reason;
                         break;
                     case PendingAction.CreateGroup:
                     case PendingAction.CreateGroupInvite:

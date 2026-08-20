@@ -143,6 +143,7 @@ public sealed class Plugin : IDalamudPlugin
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
         CrossDcRelayService.ContactAdded += OnCrossDcContactAdded;
+        CrossDcRelayService.ContactRemoved += OnCrossDcContactRemoved;
         CrossDcRelayService.MessageAppended += OnCrossDcMessageAppended;
         CrossDcRelayService.GroupJoined += OnCrossDcGroupJoined;
         CrossDcRelayService.GroupLeft += OnCrossDcGroupLeft;
@@ -235,6 +236,17 @@ public sealed class Plugin : IDalamudPlugin
     /// reads/writes the rest of <see cref="CrossDcRelayService"/> already does cross-thread.</summary>
     private void OnCrossDcContactAdded(string contactUserId) =>
         Framework.RunOnFrameworkThread(() => TabManager.GetOrCreateCrossDcTab(contactUserId, CrossDcRelayService.GetDisplayName(contactUserId)));
+
+    /// <summary>Closes a contact's tab once this identity is no longer paired with them - unpaired,
+    /// blocked, or the other side did either. Doesn't delete already-persisted history, same as closing
+    /// any other tab - see <see cref="OnCrossDcGroupLeft"/>'s own doc comment for the same reasoning.</summary>
+    private void OnCrossDcContactRemoved(string contactUserId) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var tab = TabManager.Tabs.FirstOrDefault(t => t.IsCrossDcTab && t.CrossDcContactUserId == contactUserId);
+            if (tab != null)
+                TabManager.RemoveTab(tab);
+        });
 
     /// <summary>Routes one cross-DC chat message (incoming or this identity's own outgoing) into the
     /// same tab-rendering/history pipeline native chat uses - the cross-DC mirror of
@@ -740,6 +752,7 @@ public sealed class Plugin : IDalamudPlugin
 
         ChatCaptureService.MessageRouted -= OnMessageRouted;
         CrossDcRelayService.ContactAdded -= OnCrossDcContactAdded;
+        CrossDcRelayService.ContactRemoved -= OnCrossDcContactRemoved;
         CrossDcRelayService.MessageAppended -= OnCrossDcMessageAppended;
         CrossDcRelayService.GroupJoined -= OnCrossDcGroupJoined;
         CrossDcRelayService.GroupLeft -= OnCrossDcGroupLeft;

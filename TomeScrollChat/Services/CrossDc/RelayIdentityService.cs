@@ -60,6 +60,7 @@ public sealed class RelayIdentityService : IDisposable
     private readonly Key encryptionKey;
     private readonly HashSet<string> adminUrls;
     private readonly Dictionary<string, HashSet<string>> contactsByUrl;
+    private readonly Dictionary<string, HashSet<string>> blockedByUrl;
     private readonly Dictionary<string, Dictionary<string, string>> peerKeysByUrl;
     private readonly Dictionary<string, Dictionary<string, string>> peerNamesByUrl;
     private readonly Dictionary<string, Dictionary<string, GroupState>> groupsByUrl;
@@ -77,6 +78,7 @@ public sealed class RelayIdentityService : IDisposable
             encryptionKey = state.Encryption;
             adminUrls = state.AdminUrls;
             contactsByUrl = state.ContactsByUrl;
+            blockedByUrl = state.BlockedByUrl;
             peerKeysByUrl = state.PeerKeysByUrl;
             peerNamesByUrl = state.PeerNamesByUrl;
             groupsByUrl = state.GroupsByUrl;
@@ -87,6 +89,7 @@ public sealed class RelayIdentityService : IDisposable
         encryptionKey = Key.Create(EncryptionAlgorithm, ExportableKeyParams);
         adminUrls = new HashSet<string>();
         contactsByUrl = new Dictionary<string, HashSet<string>>();
+        blockedByUrl = new Dictionary<string, HashSet<string>>();
         peerKeysByUrl = new Dictionary<string, Dictionary<string, string>>();
         peerNamesByUrl = new Dictionary<string, Dictionary<string, string>>();
         groupsByUrl = new Dictionary<string, Dictionary<string, GroupState>>();
@@ -147,6 +150,54 @@ public sealed class RelayIdentityService : IDisposable
             contactsByUrl[url] = contacts = new HashSet<string>();
 
         if (contacts.Add(userId))
+            Save();
+    }
+
+    /// <summary>Removes <paramref name="userId"/> from <paramref name="url"/>'s contact list (unpaired, or
+    /// blocked - the relay always unpairs on block too), persisted immediately, and drops their cached
+    /// X25519 public key/display name along with it - a re-pairing later re-announces both fresh anyway,
+    /// so there's no reason to keep stale copies around for someone no longer a contact. A no-op if they
+    /// weren't a contact in the first place.</summary>
+    public void RemoveContact(string url, string userId)
+    {
+        var changed = false;
+
+        if (contactsByUrl.TryGetValue(url, out var contacts))
+            changed |= contacts.Remove(userId);
+
+        if (peerKeysByUrl.TryGetValue(url, out var keys))
+            changed |= keys.Remove(userId);
+
+        if (peerNamesByUrl.TryGetValue(url, out var names))
+            changed |= names.Remove(userId);
+
+        if (changed)
+            Save();
+    }
+
+    /// <summary>Every userId this identity has ever blocked on <paramref name="url"/> - the relay has no
+    /// "list my blocks" query (same reasoning as <see cref="GetContacts"/>'s own doc comment), so this is
+    /// only ever as complete as the blocks this exact client instance has performed/observed.</summary>
+    public IReadOnlyCollection<string> GetBlocked(string url) =>
+        blockedByUrl.TryGetValue(url, out var blocked) ? blocked : Array.Empty<string>();
+
+    /// <summary>Records a successful <c>blockUser</c> against <paramref name="userId"/> on
+    /// <paramref name="url"/>, persisted immediately. A no-op if already recorded.</summary>
+    public void AddBlocked(string url, string userId)
+    {
+        if (!blockedByUrl.TryGetValue(url, out var blocked))
+            blockedByUrl[url] = blocked = new HashSet<string>();
+
+        if (blocked.Add(userId))
+            Save();
+    }
+
+    /// <summary>Records a successful <c>unblockUser</c> against <paramref name="userId"/> on
+    /// <paramref name="url"/> - doesn't restore any pairing that existed before the block, matching the
+    /// relay's own behavior. A no-op if they weren't recorded as blocked.</summary>
+    public void RemoveBlocked(string url, string userId)
+    {
+        if (blockedByUrl.TryGetValue(url, out var blocked) && blocked.Remove(userId))
             Save();
     }
 
@@ -417,7 +468,7 @@ public sealed class RelayIdentityService : IDisposable
         return ChatKeyDerivation.DeriveKey(shared, ChatKeySalt, ChatKeyInfo, ChatCipher, ExportableKeyParams);
     }
 
-    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl, Dictionary<string, Dictionary<string, string>> PeerNamesByUrl, Dictionary<string, Dictionary<string, GroupState>> GroupsByUrl)? TryLoad(string path, IPluginLog log)
+    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, HashSet<string>> BlockedByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl, Dictionary<string, Dictionary<string, string>> PeerNamesByUrl, Dictionary<string, Dictionary<string, GroupState>> GroupsByUrl)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))
             return null;
@@ -430,16 +481,18 @@ public sealed class RelayIdentityService : IDisposable
 
             var signing = Key.Import(SigningAlgorithm, Convert.FromBase64String(stored.SigningKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
             var encryption = Key.Import(EncryptionAlgorithm, Convert.FromBase64String(stored.EncryptionKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
-            // AdminUrls/ContactsByUrl/PeerKeysByUrl/PeerNamesByUrl/GroupsByUrl didn't exist in identity
-            // files written before those fields were added - null here just means "none recorded yet",
-            // not a corrupt/unreadable file.
+            // AdminUrls/ContactsByUrl/BlockedByUrl/PeerKeysByUrl/PeerNamesByUrl/GroupsByUrl didn't exist
+            // in identity files written before those fields were added - null here just means "none
+            // recorded yet", not a corrupt/unreadable file.
             var adminUrls = new HashSet<string>(stored.AdminUrls ?? Enumerable.Empty<string>());
             var contactsByUrl = (stored.ContactsByUrl ?? new Dictionary<string, List<string>>())
+                .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
+            var blockedByUrl = (stored.BlockedByUrl ?? new Dictionary<string, List<string>>())
                 .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
             var peerKeysByUrl = stored.PeerKeysByUrl ?? new Dictionary<string, Dictionary<string, string>>();
             var peerNamesByUrl = stored.PeerNamesByUrl ?? new Dictionary<string, Dictionary<string, string>>();
             var groupsByUrl = stored.GroupsByUrl ?? new Dictionary<string, Dictionary<string, GroupState>>();
-            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl, peerNamesByUrl, groupsByUrl);
+            return (signing, encryption, adminUrls, contactsByUrl, blockedByUrl, peerKeysByUrl, peerNamesByUrl, groupsByUrl);
         }
         catch (Exception ex)
         {
@@ -462,6 +515,7 @@ public sealed class RelayIdentityService : IDisposable
                 Convert.ToBase64String(encryptionKey.Export(KeyBlobFormat.RawPrivateKey)),
                 adminUrls.ToList(),
                 contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()),
+                blockedByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()),
                 peerKeysByUrl,
                 peerNamesByUrl,
                 groupsByUrl);
@@ -484,6 +538,7 @@ public sealed class RelayIdentityService : IDisposable
         string EncryptionKeySeed,
         List<string>? AdminUrls = null,
         Dictionary<string, List<string>>? ContactsByUrl = null,
+        Dictionary<string, List<string>>? BlockedByUrl = null,
         Dictionary<string, Dictionary<string, string>>? PeerKeysByUrl = null,
         Dictionary<string, Dictionary<string, string>>? PeerNamesByUrl = null,
         Dictionary<string, Dictionary<string, GroupState>>? GroupsByUrl = null);

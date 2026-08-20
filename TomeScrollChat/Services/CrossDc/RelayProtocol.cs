@@ -39,6 +39,15 @@ internal sealed record RelayInviteMessage(string? Type, string? Code);
 internal sealed record RelayRedeemInviteRequest(string Type, string Code);
 internal sealed record RelayPairedMessage(string? Type, string? With);
 
+internal sealed record RelayUnpairRequest(string Type, string? With);
+internal sealed record RelayUnpairedMessage(string? Type, string? With);
+
+internal sealed record RelayBlockUserRequest(string Type, string? UserId);
+internal sealed record RelayUserBlockedMessage(string? Type, string? UserId);
+
+internal sealed record RelayUnblockUserRequest(string Type, string? UserId);
+internal sealed record RelayUserUnblockedMessage(string? Type, string? UserId);
+
 internal sealed record RelaySendRequest(string Type, string To, string Payload);
 internal sealed record RelayMessageEnvelope(string? Type, string? From, string? Payload);
 
