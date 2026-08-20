@@ -1055,6 +1055,10 @@ public sealed class MainWindow : Window, IDisposable
 
         if (tab.IsAutoLinkshellTab)
             width += ImGui.CalcTextSize(tab.IsCrossWorldLinkshell ? "[CWLS] " : "[LS] ").X;
+        else if (tab.IsCrossDcTab)
+            width += ImGui.CalcTextSize("[CD] ").X;
+        else if (tab.IsGroupTab)
+            width += ImGui.CalcTextSize("[GRP] ").X;
 
         width += ImGui.CalcTextSize(tab.Name).X;
 
