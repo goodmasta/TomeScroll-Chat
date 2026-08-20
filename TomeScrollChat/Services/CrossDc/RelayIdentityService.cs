@@ -92,6 +92,17 @@ public sealed class RelayIdentityService : IDisposable
             Save();
     }
 
+    /// <summary>Clears the locally-cached "I'm admin on this URL" fact, so the next connection no longer
+    /// assumes it and a fresh <c>claimAdmin</c> is needed. For when the two sides genuinely disagree -
+    /// e.g. the relay's own admin record was wiped independently of this client (a Redis flush on the
+    /// relay side, not anything this client did) - rather than the client just being stubbornly wrong.
+    /// A no-op if this URL wasn't recorded as admin in the first place.</summary>
+    public void ForgetAdmin(string url)
+    {
+        if (adminUrls.Remove(url))
+            Save();
+    }
+
     private static (Key Signing, Key Encryption, HashSet<string> AdminUrls)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))

@@ -1420,6 +1420,10 @@ public sealed class ConfigWindow : Window, IDisposable
         if (relay.IsAdmin)
         {
             ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.4f, 1f), "Admin rights active on this connection.");
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Forget##crossDcForgetAdmin"))
+                relay.ForgetAdminStatus();
+            ImGui.TextDisabled("If the relay stops recognizing you as admin (e.g. its own data was reset), forget the cached status here and claim again with a fresh key.");
         }
         else
         {

@@ -144,6 +144,21 @@ public sealed class CrossDcRelayService : IDisposable
     public Task<bool> RequestStatsAsync(CancellationToken cancellationToken = default) =>
         SendAndAwaitAsync(PendingAction.GetStats, new RelayGetStatsRequest("getStats"), cancellationToken);
 
+    /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
+    /// <see cref="RelayIdentityService.ForgetAdmin"/>), for when the relay's own admin record no longer
+    /// agrees with what this client remembers (e.g. the relay's Redis was flushed independently of
+    /// anything this client did) - lets the player re-claim with a fresh bootstrap key instead of being
+    /// stuck with a client that insists it's admin while the server keeps saying otherwise. A no-op
+    /// while disconnected, since there's no URL to forget.</summary>
+    public void ForgetAdminStatus()
+    {
+        if (connectedUrl != null)
+            identity?.ForgetAdmin(connectedUrl);
+
+        IsAdmin = false;
+        AdminError = null;
+    }
+
     /// <summary>Sends one request and waits for its matching response to actually arrive (success or
     /// error) before returning - see the <see cref="requestLock"/> field doc comment for why. False if
     /// there's no live connection to send on, the send itself failed, or the connection dropped before a
