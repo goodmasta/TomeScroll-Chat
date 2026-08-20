@@ -26,7 +26,9 @@ public sealed record CrossDcChatMessage(string SenderUserId, string Text, DateTi
 /// rights, pulling server logs, reading the connected-client count) and 1:1 pairing (creating/redeeming
 /// invite codes, tracking who this identity has paired with) - each just a request/response pair (or, for
 /// pairing, an occasional unsolicited push - see <see cref="DispatchFrame"/>'s <c>paired</c> case) over
-/// the same socket, not a whole feature area of its own. Actual message send/receive isn't built yet.
+/// the same socket, not a whole feature area of its own. End-to-end encrypted 1:1 messaging (see
+/// <see cref="SendChatMessageAsync"/>) is also owned here; <c>Plugin</c> bridges it into an actual tab via
+/// <see cref="ContactAdded"/>/<see cref="MessageAppended"/>.
 ///
 /// <para>Entirely inert while <see cref="Configuration.CrossDcRelayMode"/> is
 /// <see cref="RelayMode.Disabled"/> - <see cref="RelayIdentityService"/> (which is what actually
@@ -73,6 +75,20 @@ public sealed class CrossDcRelayService : IDisposable
 
     // In-memory only, see CrossDcChatMessage's own doc comment. Keyed by the *other* party's userId.
     private readonly Dictionary<string, List<CrossDcChatMessage>> messagesByContact = new();
+
+    /// <summary>Fired for every contact this identity has ever paired with on the current relay, once on
+    /// each fresh connect (so a tab exists for each of them even if the player never opens Settings) and
+    /// again the moment a brand-new pairing completes live. <c>Plugin</c> subscribes to this to create/
+    /// find the matching tab (<see cref="Services.TabManager.GetOrCreateCrossDcTab"/>) - deliberately
+    /// fires for *already-known* contacts too on every reconnect rather than only new ones, so a tab the
+    /// player closed comes back the same self-healing way a whisper tab does.</summary>
+    public event Action<string>? ContactAdded;
+
+    /// <summary>Fired every time a message (incoming or outgoing) is added to <see cref="GetMessages"/>'s
+    /// backing store - <c>Plugin</c> subscribes to this to push it into <c>TabMessageBuffer</c>/
+    /// <c>ChatHistoryService</c> the same way <c>ChatCaptureService.MessageRouted</c> does for native
+    /// chat, so the cross-DC tab actually shows it live instead of only on next open.</summary>
+    public event Action<string, CrossDcChatMessage>? MessageAppended;
 
     public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log)
     {
@@ -255,6 +271,7 @@ public sealed class CrossDcRelayService : IDisposable
             messagesByContact[contactUserId] = messages = new List<CrossDcChatMessage>();
 
         messages.Add(message);
+        MessageAppended?.Invoke(contactUserId, message);
     }
 
     /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
@@ -369,6 +386,8 @@ public sealed class CrossDcRelayService : IDisposable
                 log.Info("TomeScrollChat: cross-DC relay admin rights recalled for {UserId} ({Url})", userId, url);
             }
             Contacts = identity.GetContacts(url).ToArray();
+            foreach (var contactUserId in Contacts)
+                ContactAdded?.Invoke(contactUserId);
             log.Info("TomeScrollChat: connected to cross-DC relay as {UserId} ({Url})", userId, url);
 
             while (!cancellationToken.IsCancellationRequested)
@@ -483,6 +502,7 @@ public sealed class CrossDcRelayService : IDisposable
                     if (connectedUrl != null)
                         identity?.AddContact(connectedUrl, withId);
                     Contacts = connectedUrl != null ? identity?.GetContacts(connectedUrl).ToArray() ?? Contacts : Contacts;
+                    ContactAdded?.Invoke(withId);
                     log.Info("TomeScrollChat: cross-DC relay paired with {With}", withId);
                     // Announce this identity's encryption key to the new contact right away, so a
                     // message can actually be sent to them without the player needing to do anything -

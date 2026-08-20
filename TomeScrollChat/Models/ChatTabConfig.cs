@@ -29,6 +29,16 @@ public sealed class ChatTabConfig
     /// <summary>"Name@World" of the whisper partner this tab is pinned to, when <see cref="IsPmTab"/>.</summary>
     public string? PmPartnerKey { get; set; }
 
+    /// <summary>True for a tab auto-created for one paired cross-datacenter contact (see
+    /// <see cref="Services.CrossDc.CrossDcRelayService"/>/<see cref="Services.TabManager.GetOrCreateCrossDcTab"/>) -
+    /// same self-healing lifecycle as a whisper tab (<see cref="IsPmTab"/>), just backed by the relay's
+    /// end-to-end-encrypted 1:1 channel instead of the game's native tell.</summary>
+    public bool IsCrossDcTab { get; set; }
+
+    /// <summary>The relay's userId for the paired contact this tab is pinned to, when <see cref="IsCrossDcTab"/> -
+    /// the cross-DC equivalent of <see cref="PmPartnerKey"/>.</summary>
+    public string? CrossDcContactUserId { get; set; }
+
     /// <summary>Additional text filter applied on top of channel membership.</summary>
     public ChatTabFilterMode FilterMode { get; set; } = ChatTabFilterMode.None;
 
@@ -126,7 +136,7 @@ public sealed class ChatTabConfig
     /// save every time to avoid a disk write per chat line).</summary>
     public int UnreadCount { get; set; }
 
-    /// <summary>Whisper tabs always notify; regular tabs only if the user opted in.</summary>
+    /// <summary>Whisper and cross-DC tabs always notify; regular tabs only if the user opted in.</summary>
     [JsonIgnore]
-    public bool ShouldNotify => IsPmTab || NotifyOnNewMessage;
+    public bool ShouldNotify => IsPmTab || IsCrossDcTab || NotifyOnNewMessage;
 }

@@ -691,10 +691,12 @@ public sealed class MainWindow : Window, IDisposable
     /// <see cref="DrawBrowserTabStrip"/>, so both layouts always agree on tab order. A snapshot rather
     /// than iterating the live list directly, since closing a whisper tab from either layout's context
     /// menu mutates <c>TabManager.Tabs</c> mid-draw, which would otherwise throw. Regular tabs always
-    /// keep their existing relative order and stay above every PM tab; within the PM tabs specifically,
-    /// unread ones bubble to the top of that group (not above the regular tabs) so a new whisper is
-    /// easy to spot without reshuffling the whole list. OrderBy/ThenBy are stable, so ties (same
-    /// PM-ness, same unread-ness) keep their original relative order.
+    /// keep their existing relative order and stay above every private (whisper or cross-DC) tab; within
+    /// that private group specifically, unread ones bubble to the top (not above the regular tabs) so a
+    /// new message is easy to spot without reshuffling the whole list - cross-DC tabs are folded into the
+    /// same group as whisper tabs here since both are private 1:1 conversations, same as
+    /// <see cref="Services.TabManager"/>'s own move/reorder grouping. OrderBy/ThenBy are stable, so ties
+    /// (same group, same unread-ness) keep their original relative order.
     ///
     /// <para>Fixed 2026-08-17: the currently-selected tab used to bubble like any other PM tab once its
     /// UnreadCount ticked above 0 - fine normally, since a tab you're actively looking at gets its
@@ -709,8 +711,8 @@ public sealed class MainWindow : Window, IDisposable
     private List<ChatTabConfig> GetOrderedTabs() =>
         plugin.TabManager.Tabs
             .Where(t => !t.IsDetached)
-            .OrderBy(t => t.IsPmTab ? 1 : 0)
-            .ThenBy(t => t.IsPmTab && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
+            .OrderBy(t => t.IsPmTab || t.IsCrossDcTab ? 1 : 0)
+            .ThenBy(t => (t.IsPmTab || t.IsCrossDcTab) && t.UnreadCount > 0 && t.Id != selectedTabId ? 0 : 1)
             .ToList();
 
     private void DrawSidebar()
@@ -942,15 +944,17 @@ public sealed class MainWindow : Window, IDisposable
         var drawList = ImGui.GetWindowDrawList();
 
         // Per-tab override (see Settings > Tabs) if set, otherwise the global default from
-        // Settings > General - whisper tabs default to WhisperNotifyColor, regular tabs to the
-        // separate blink/count defaults.
+        // Settings > General - whisper and cross-DC tabs (both private 1:1 conversations) default to
+        // WhisperNotifyColor, regular tabs to the separate blink/count defaults.
         var config = Plugin.Configuration;
-        var blinkColor = tab.BlinkColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelBlinkColor);
-        var countColor = tab.UnreadCountColorOverride ?? (tab.IsPmTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor);
+        var isPrivateTab = tab.IsPmTab || tab.IsCrossDcTab;
+        var blinkColor = tab.BlinkColorOverride ?? (isPrivateTab ? config.WhisperNotifyColor : config.ChannelBlinkColor);
+        var countColor = tab.UnreadCountColorOverride ?? (isPrivateTab ? config.WhisperNotifyColor : config.ChannelUnreadCountColor);
 
-        // Tab's own explicit colour (Settings > Tabs) first, then - for whisper tabs only - the
-        // partner's by-nickname preset (Settings > Players, or "Set Tab Colour" on their messages),
-        // so a colour picked before this exact tab existed still applies once it's (re)created.
+        // Tab's own explicit colour (Settings > Tabs) first, then - for whisper tabs only, since a
+        // cross-DC contact's userId isn't the same key space as a "Name@World" - the partner's
+        // by-nickname preset (Settings > Players, or "Set Tab Colour" on their messages), so a colour
+        // picked before this exact tab existed still applies once it's (re)created.
         var restColor = tab.TabColorOverride ??
                          (tab.IsPmTab && !string.IsNullOrEmpty(tab.PmPartnerKey) && config.PlayerTabColors.TryGetValue(tab.PmPartnerKey, out var playerTabColor)
                              ? playerTabColor
@@ -1512,6 +1516,15 @@ public sealed class MainWindow : Window, IDisposable
     /// </summary>
     private void DrawOutgoingChannelLabel(ChatTabConfig tab)
     {
+        // Cross-DC tabs have no native channel/OutgoingChannelCommand at all - pinned to exactly one
+        // relay contact instead, same "always exactly one destination" shape a PM tab has, just not
+        // expressed through ChatChannelCatalog since there's nothing native to pick from.
+        if (tab.IsCrossDcTab)
+        {
+            ImGui.TextDisabled($"Sending to: {tab.Name} (cross-DC)");
+            return;
+        }
+
         var sendable = ChatChannelCatalog.SendableChannels.Where(c => tab.Channels.Contains(c.Type)).ToList();
 
         // Self-limiting - only fires the one frame the command is still actually blank, so it's safe
@@ -1581,7 +1594,7 @@ public sealed class MainWindow : Window, IDisposable
         // tab's first sendable channel this same frame - a tab still blank at this point genuinely
         // has nowhere to send to (e.g. the built-in "Log" tab), so composing is disabled outright
         // rather than silently falling back to whatever the game's ambient channel happens to be.
-        var canWrite = tab.IsPmTab || !string.IsNullOrEmpty(tab.OutgoingChannelCommand);
+        var canWrite = tab.IsPmTab || tab.IsCrossDcTab || !string.IsNullOrEmpty(tab.OutgoingChannelCommand);
 
         // Re-focusing after a send has to happen right before the input box is submitted (offset 0 =
         // "the very next widget") - doing it *after*, like before the icon buttons were added here,

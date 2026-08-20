@@ -89,26 +89,31 @@ public sealed class TabManager
             TabAdded?.Invoke(tab);
     }
 
+    /// <summary>Whisper and cross-DC tabs are both private 1:1 conversations and sort together, below
+    /// regular tabs, in the sidebar (see <c>MainWindow.GetOrderedTabs</c>) - the grouping predicate
+    /// <see cref="CanMoveTab"/>/<see cref="MoveTab"/> use to match that.</summary>
+    private static bool IsPrivateTab(ChatTabConfig tab) => tab.IsPmTab || tab.IsCrossDcTab;
+
     /// <summary>True if <see cref="MoveTab"/> would actually move <paramref name="tab"/> - i.e. it's
-    /// not already first/last among tabs sharing its own <see cref="ChatTabConfig.IsPmTab"/> value.
-    /// Backs the "Move up"/"Move down" buttons' disabled state.</summary>
+    /// not already first/last among tabs sharing its own private/regular group. Backs the "Move up"/
+    /// "Move down" buttons' disabled state.</summary>
     public bool CanMoveTab(ChatTabConfig tab, int direction)
     {
-        var group = configuration.Tabs.Where(t => t.IsPmTab == tab.IsPmTab).ToList();
+        var group = configuration.Tabs.Where(t => IsPrivateTab(t) == IsPrivateTab(tab)).ToList();
         var groupIndex = group.IndexOf(tab);
         return groupIndex >= 0 && groupIndex + direction >= 0 && groupIndex + direction < group.Count;
     }
 
     /// <summary>Reorders the sidebar - swaps <paramref name="tab"/> with its neighbour (-1 = up/earlier,
-    /// +1 = down/later) *within its own group* (PM tabs vs. regular tabs), not just the raw next/
-    /// previous entry in <see cref="Configuration.Tabs"/>: whisper tabs are always sorted separately
-    /// from regular ones in the sidebar (see <c>MainWindow.DrawSidebar</c>), so swapping raw list
-    /// positions with an interspersed opposite-group tab would silently do nothing visible - this
+    /// +1 = down/later) *within its own group* (whisper/cross-DC tabs vs. regular tabs), not just the
+    /// raw next/previous entry in <see cref="Configuration.Tabs"/>: private tabs are always sorted
+    /// separately from regular ones in the sidebar (see <c>MainWindow.DrawSidebar</c>), so swapping raw
+    /// list positions with an interspersed opposite-group tab would silently do nothing visible - this
     /// finds the actual same-group neighbour first, wherever it happens to sit in the raw list, and
     /// swaps *that* pair's raw positions instead.</summary>
     public void MoveTab(ChatTabConfig tab, int direction)
     {
-        var group = configuration.Tabs.Where(t => t.IsPmTab == tab.IsPmTab).ToList();
+        var group = configuration.Tabs.Where(t => IsPrivateTab(t) == IsPrivateTab(tab)).ToList();
         var groupIndex = group.IndexOf(tab);
         var targetGroupIndex = groupIndex + direction;
         if (groupIndex < 0 || targetGroupIndex < 0 || targetGroupIndex >= group.Count)
@@ -146,6 +151,28 @@ public sealed class TabManager
             IsDetached = configuration.OpenWhispersInSeparateWindow,
             OutgoingChannelCommand = $"/tell {partnerKey}",
             Channels = new(DefaultTabFactory.TellChannels),
+        };
+        configuration.Tabs.Add(tab);
+        configuration.Save();
+        TabAdded?.Invoke(tab);
+        return tab;
+    }
+
+    /// <summary>Finds the existing tab for one paired cross-DC contact, or creates it - the cross-DC
+    /// mirror of <see cref="GetOrCreatePmTab"/>. Always a main-window tab (no self-hosted-window default
+    /// equivalent to <see cref="Configuration.OpenWhispersInSeparateWindow"/> for cross-DC yet); the
+    /// player can still detach it by hand afterwards like any other tab.</summary>
+    public ChatTabConfig GetOrCreateCrossDcTab(string contactUserId, string displayName)
+    {
+        var existing = configuration.Tabs.FirstOrDefault(t => t.IsCrossDcTab && t.CrossDcContactUserId == contactUserId);
+        if (existing != null)
+            return existing;
+
+        var tab = new ChatTabConfig
+        {
+            Name = displayName,
+            IsCrossDcTab = true,
+            CrossDcContactUserId = contactUserId,
         };
         configuration.Tabs.Add(tab);
         configuration.Save();

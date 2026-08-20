@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Dalamud.Game.Command;
 using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling.Payloads;
@@ -141,6 +142,8 @@ public sealed class Plugin : IDalamudPlugin
         CrossDcRelayService.Reconcile();
 
         ChatCaptureService.MessageRouted += OnMessageRouted;
+        CrossDcRelayService.ContactAdded += OnCrossDcContactAdded;
+        CrossDcRelayService.MessageAppended += OnCrossDcMessageAppended;
 
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
@@ -220,6 +223,45 @@ public sealed class Plugin : IDalamudPlugin
             mainWindow.NotifyUnread(tab);
     }
 
+    /// <summary>Creates/finds the tab for a paired cross-DC contact - fired both for brand-new pairings
+    /// and, on every fresh connect, for every already-known contact (see
+    /// <see cref="Services.CrossDc.CrossDcRelayService.ContactAdded"/>'s own doc comment for why the
+    /// latter is deliberate). Marshalled onto the framework thread since <see cref="CrossDcRelayService"/>
+    /// raises this from its own background receive-loop thread, not the game's - <see cref="TabManager"/>
+    /// mutates a plain <see cref="List{T}"/> the UI enumerates every frame, unlike the simple property
+    /// reads/writes the rest of <see cref="CrossDcRelayService"/> already does cross-thread.</summary>
+    private void OnCrossDcContactAdded(string contactUserId) =>
+        Framework.RunOnFrameworkThread(() => TabManager.GetOrCreateCrossDcTab(contactUserId, contactUserId));
+
+    /// <summary>Routes one cross-DC chat message (incoming or this identity's own outgoing) into the
+    /// same tab-rendering/history pipeline native chat uses - the cross-DC mirror of
+    /// <see cref="ChatCaptureService"/>'s own <c>historyService.Enqueue</c> + <c>MessageRouted</c> pair,
+    /// called directly here instead since cross-DC messages never pass through
+    /// <see cref="ChatCaptureService"/> at all (see <see cref="OnMessageRouted"/> - that event is reserved
+    /// for native chat, so listeners like <see cref="WhisperNotificationService"/>/
+    /// <see cref="AutoReplyService"/> that subscribe to it specifically don't fire for these). Same
+    /// framework-thread marshalling as <see cref="OnCrossDcContactAdded"/>, for the same reason.</summary>
+    private void OnCrossDcMessageAppended(string contactUserId, CrossDcChatMessage message) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            var tab = TabManager.GetOrCreateCrossDcTab(contactUserId, contactUserId);
+            var record = new ChatMessageRecord
+            {
+                TimestampUtc = message.Timestamp.UtcDateTime,
+                ChatType = message.IsOutgoing ? XivChatType.TellOutgoing : XivChatType.TellIncoming,
+                SenderName = contactUserId,
+                SenderKey = contactUserId,
+                IsFromLocalPlayer = message.IsOutgoing,
+                Body = message.Text,
+                RoutingKey = TabMessageBuffer.RoutingKey(tab),
+            };
+            if (!tab.DisableLogging)
+                ChatHistoryService.Enqueue(record);
+            TabMessageBuffer.Append(tab, record);
+            if (!message.IsOutgoing)
+                mainWindow.NotifyUnread(tab);
+        });
+
     /// <summary>Whether a captured message is the local player's own outgoing message - same check
     /// <see cref="Windows.ChatMessageRenderer.DrawMessage"/> uses to show "You" instead of a name.</summary>
     private static bool IsOwnMessage(ChatMessageRecord record)
@@ -237,10 +279,33 @@ public sealed class Plugin : IDalamudPlugin
     /// into the same conversation even if the game's own echo doesn't resolve a player payload.</summary>
     public void SendFromTab(ChatTabConfig tab, string text, IReadOnlyList<PendingItemLink>? attachments = null, IReadOnlyList<PendingPartyFinderLink>? partyFinderAttachments = null, IReadOnlyList<PendingAutoTranslateLink>? autoTranslateAttachments = null, IReadOnlyList<PendingQuestLink>? questAttachments = null)
     {
+        if (tab.IsCrossDcTab && tab.CrossDcContactUserId != null)
+        {
+            SendCrossDcFromTab(tab.CrossDcContactUserId, text);
+            return;
+        }
+
         if (tab.IsPmTab && tab.PmPartnerKey != null)
             ChatCaptureService.PendingOutgoingTellTarget = tab.PmPartnerKey;
 
         ChatSendService.Send(tab.OutgoingChannelCommand, text, attachments, partyFinderAttachments, autoTranslateAttachments, questAttachments);
+    }
+
+    /// <summary>Cross-DC has no attachments (items/PF/quest links/auto-translate phrases only resolve
+    /// against native game state, meaningless to a relay contact possibly on another datacenter entirely)
+    /// and no relay-level send confirmation to wait for - fire-and-forget, matching
+    /// <see cref="CrossDcRelayService.SendChatMessageAsync"/>'s own doc comment. A failure (most likely:
+    /// no key for this contact yet, see <see cref="CrossDcRelayService.HasKeyFor"/>) surfaces as a toast
+    /// since, unlike a dropped native send, there's nothing already visible in the tab to explain why the
+    /// message the player just typed didn't appear.</summary>
+    private void SendCrossDcFromTab(string contactUserId, string text)
+    {
+        _ = Task.Run(async () =>
+        {
+            var sent = await CrossDcRelayService.SendChatMessageAsync(contactUserId, text).ConfigureAwait(false);
+            if (!sent)
+                await Framework.RunOnFrameworkThread(() => ToastGui.ShowError("Couldn't send that message - no connection or no key for this contact yet."));
+        });
     }
 
     /// <summary>Queues an item link and inserts a "&lt;link&gt;" placeholder into the compose box -
@@ -395,7 +460,7 @@ public sealed class Plugin : IDalamudPlugin
     /// "Export to file..." handler.</summary>
     public void ExportTabToFile(ChatTabConfig tab)
     {
-        var routingKey = tab.IsPmTab ? tab.PmPartnerKey : tab.Id.ToString();
+        var routingKey = tab.IsCrossDcTab ? TabMessageBuffer.RoutingKey(tab) : tab.IsPmTab ? tab.PmPartnerKey : tab.Id.ToString();
         if (string.IsNullOrEmpty(routingKey))
             return;
 
@@ -607,6 +672,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CommandName);
 
         ChatCaptureService.MessageRouted -= OnMessageRouted;
+        CrossDcRelayService.ContactAdded -= OnCrossDcContactAdded;
+        CrossDcRelayService.MessageAppended -= OnCrossDcMessageAppended;
 
         WindowSystem.RemoveAllWindows();
         mainWindow.Dispose();

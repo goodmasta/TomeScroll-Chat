@@ -114,6 +114,12 @@ public sealed class DetachedTabWindow : Window, IDisposable
     /// comment for the full reasoning.</summary>
     private void DrawOutgoingChannelLabel()
     {
+        if (Tab.IsCrossDcTab)
+        {
+            ImGui.TextDisabled($"Sending to: {Tab.Name} (cross-DC)");
+            return;
+        }
+
         var sendable = ChatChannelCatalog.SendableChannels.Where(c => Tab.Channels.Contains(c.Type)).ToList();
 
         if (sendable.Count > 0 && string.IsNullOrEmpty(Tab.OutgoingChannelCommand))
@@ -553,7 +559,7 @@ public sealed class DetachedTabWindow : Window, IDisposable
 
         // Resolved after the label above (which is what heals a blank command to the tab's first
         // sendable channel this same frame) - see MainWindow's version for the full reasoning.
-        var canWrite = Tab.IsPmTab || !string.IsNullOrEmpty(Tab.OutgoingChannelCommand);
+        var canWrite = Tab.IsPmTab || Tab.IsCrossDcTab || !string.IsNullOrEmpty(Tab.OutgoingChannelCommand);
 
         // Re-focus has to happen right before the input box (offset 0 = "the very next widget") rather
         // than after, since after now runs through the icon buttons/popup - an unpredictable number of
