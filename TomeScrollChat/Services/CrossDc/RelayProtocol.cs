@@ -29,6 +29,9 @@ internal sealed record RelayClaimAdminRequest(string Type, string Key);
 internal sealed record RelayGetLogsRequest(string Type, int? Lines);
 internal sealed record RelayLogsMessage(string? Type, string[]? Lines);
 
+internal sealed record RelayGetStatsRequest(string Type);
+internal sealed record RelayStatsMessage(string? Type, int? ConnectedClients);
+
 /// <summary>Send/receive helpers for JSON text frames over a <see cref="WebSocket"/> - the client-side
 /// mirror of the relay's own <c>WebSocketJson</c>, so both ends agree on framing as well as casing.</summary>
 internal static class RelaySocketIo

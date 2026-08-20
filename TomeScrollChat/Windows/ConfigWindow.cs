@@ -1443,6 +1443,19 @@ public sealed class ConfigWindow : Window, IDisposable
         using (ImRaii.Disabled(!relay.IsAdmin))
         {
             ImGui.Spacing();
+            if (ImGui.Button("Refresh connected client count"))
+                _ = relay.RequestStatsAsync();
+
+            if (relay.ConnectedClients is { } connectedClients)
+            {
+                ImGui.SameLine();
+                ImGui.TextUnformatted($"{connectedClients} client(s) connected to this relay instance.");
+            }
+
+            if (relay.StatsError != null)
+                ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.StatsError);
+
+            ImGui.Spacing();
             ImGui.SetNextItemWidth(100);
             ImGui.InputInt("Lines##crossDcLogLines", ref crossDcLogLines);
             crossDcLogLines = Math.Clamp(crossDcLogLines, 1, 500);

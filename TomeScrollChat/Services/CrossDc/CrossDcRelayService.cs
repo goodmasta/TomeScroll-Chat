@@ -14,8 +14,8 @@ namespace TomeScrollChat.Services.CrossDc;
 /// <see cref="Configuration.CrossDcRelayMode"/>, connects, completes the Ed25519 challenge/response
 /// handshake (matching TomeScrollRelay's own <c>RelayHandshake</c>), and keeps a background receive
 /// loop running while connected. Also the client side of the relay's admin tooling - claiming admin
-/// rights and pulling server logs - since that only needs a request/response pair over the same socket,
-/// not a whole feature area of its own.
+/// rights, pulling server logs, and reading the connected-client count - since each is just a
+/// request/response pair over the same socket, not a whole feature area of its own.
 ///
 /// <para>Entirely inert while <see cref="Configuration.CrossDcRelayMode"/> is
 /// <see cref="RelayMode.Disabled"/> - <see cref="RelayIdentityService"/> (which is what actually
@@ -41,7 +41,14 @@ public sealed class CrossDcRelayService : IDisposable
     private readonly Configuration configuration;
     private readonly IPluginLog log;
     private readonly object gate = new();
-    private readonly SemaphoreSlim sendLock = new(1, 1);
+
+    // Serializes entire admin-tooling request/response *cycles*, not just the send - a second call
+    // blocks until the first one's response (success or error) actually arrives. The relay's error
+    // frames carry no correlation ID, so this is what makes attributing one to the right request
+    // (AdminError vs LogsError vs StatsError) unambiguous: with this in place, at most one of these
+    // requests is ever outstanding at a time, so there's nothing to disambiguate in the first place -
+    // simpler and more robust than trying to track/queue multiple in-flight requests.
+    private readonly SemaphoreSlim requestLock = new(1, 1);
 
     private RelayIdentityService? identity;
     private CancellationTokenSource? runCts;
@@ -49,13 +56,9 @@ public sealed class CrossDcRelayService : IDisposable
     private string? connectedUrl;
     private ClientWebSocket? socket;
 
-    /// <summary>Which of the two admin-tooling requests (there's no correlation ID in the relay's own
-    /// protocol) is currently awaiting a reply, so a generic <c>error</c> frame gets routed to the right
-    /// one of <see cref="AdminError"/>/<see cref="LogsError"/>. Only meaningful because exactly these two
-    /// fire-and-forget-then-correlate-by-type requests exist right now - if a third one is ever added,
-    /// this stops being enough and needs a real request ID instead.</summary>
-    private enum PendingAction { None, ClaimAdmin, GetLogs }
+    private enum PendingAction { None, ClaimAdmin, GetLogs, GetStats }
     private PendingAction pendingAction = PendingAction.None;
+    private TaskCompletionSource<bool>? pendingCompletion;
 
     public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log)
     {
@@ -74,11 +77,10 @@ public sealed class CrossDcRelayService : IDisposable
     /// a connection actually succeeds.</summary>
     public string? LastError { get; private set; }
 
-    /// <summary>True once <c>claimAdmin</c> has succeeded on the *current* connection. Not persisted or
-    /// re-checked on reconnect - the relay itself remembers admin status durably, but this client has no
-    /// "am I already admin" query, only claimAdmin (which consumes a single-use key, so re-sending an
-    /// already-used one after a reload just errors). Re-run "/tomescrollc" reconnect and claim again with
-    /// a fresh key if that ever matters, or check server-side directly.</summary>
+    /// <summary>True once admin rights are established on the *current* connection - either freshly via
+    /// <c>claimAdmin</c> this session, or recalled from a previous successful claim on this same relay
+    /// URL (see <see cref="RelayIdentityService.IsKnownAdmin"/>; the relay's own grant is durable, so a
+    /// fresh reconnect doesn't need the bootstrap key again once it's already been used once).</summary>
     public bool IsAdmin { get; private set; }
 
     /// <summary>Reason the most recent <c>claimAdmin</c> attempt failed - null if none yet, or the last
@@ -92,6 +94,15 @@ public sealed class CrossDcRelayService : IDisposable
     /// <summary>Reason the most recent <c>getLogs</c> attempt failed (e.g. not an admin) - null if none
     /// yet, or the last one succeeded.</summary>
     public string? LogsError { get; private set; }
+
+    /// <summary>Most recent <c>getStats</c> result - how many clients are connected to *this* relay
+    /// instance (see TomeScrollRelay's own caveat: per-instance, not a global total once there's more
+    /// than one). Null until the first successful fetch.</summary>
+    public int? ConnectedClients { get; private set; }
+
+    /// <summary>Reason the most recent <c>getStats</c> attempt failed - null if none yet, or the last
+    /// one succeeded.</summary>
+    public string? StatsError { get; private set; }
 
     /// <summary>Reconciles the live connection against the current config. Safe to call any time,
     /// including repeatedly with nothing changed (a no-op in that case).</summary>
@@ -118,44 +129,52 @@ public sealed class CrossDcRelayService : IDisposable
 
     /// <summary>Sends <c>claimAdmin</c> with the given bootstrap key - the relay's own admin tooling
     /// (see TomeScrollRelay's <c>AdminBootstrap</c>) prints a fresh single-use key to its own log on
-    /// every startup. Result arrives asynchronously as <see cref="IsAdmin"/>/<see cref="AdminError"/>
-    /// updating on a later frame, not a direct return value - same as every other relay round trip.</summary>
+    /// every startup. Result also surfaces as <see cref="IsAdmin"/>/<see cref="AdminError"/> for Settings
+    /// to poll across frames, since it's typically called fire-and-forget from a button click.</summary>
     public Task<bool> ClaimAdminAsync(string key, CancellationToken cancellationToken = default) =>
-        SendPendingAsync(PendingAction.ClaimAdmin, new RelayClaimAdminRequest("claimAdmin", key), cancellationToken);
+        SendAndAwaitAsync(PendingAction.ClaimAdmin, new RelayClaimAdminRequest("claimAdmin", key), cancellationToken);
 
     /// <summary>Sends <c>getLogs</c> - admin-only server-side, so this only ever succeeds after
-    /// <see cref="IsAdmin"/> is true. Result arrives as <see cref="Logs"/>/<see cref="LogsError"/>
-    /// updating on a later frame.</summary>
+    /// <see cref="IsAdmin"/> is true. Result also surfaces as <see cref="Logs"/>/<see cref="LogsError"/>.</summary>
     public Task<bool> RequestLogsAsync(int lines, CancellationToken cancellationToken = default) =>
-        SendPendingAsync(PendingAction.GetLogs, new RelayGetLogsRequest("getLogs", lines), cancellationToken);
+        SendAndAwaitAsync(PendingAction.GetLogs, new RelayGetLogsRequest("getLogs", lines), cancellationToken);
 
-    /// <summary>False if there's no live connection to send on right now - the caller (Settings) is
-    /// expected to only offer these actions while <see cref="IsConnected"/> anyway, this is just the
-    /// non-racy guard against the connection dropping between the button being drawn and clicked.</summary>
-    private async Task<bool> SendPendingAsync<T>(PendingAction action, T message, CancellationToken cancellationToken)
+    /// <summary>Sends <c>getStats</c> - admin-only server-side. Result also surfaces as
+    /// <see cref="ConnectedClients"/>/<see cref="StatsError"/>.</summary>
+    public Task<bool> RequestStatsAsync(CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.GetStats, new RelayGetStatsRequest("getStats"), cancellationToken);
+
+    /// <summary>Sends one request and waits for its matching response to actually arrive (success or
+    /// error) before returning - see the <see cref="requestLock"/> field doc comment for why. False if
+    /// there's no live connection to send on, the send itself failed, or the connection dropped before a
+    /// response arrived.</summary>
+    private async Task<bool> SendAndAwaitAsync<T>(PendingAction action, T message, CancellationToken cancellationToken)
     {
         var ws = socket;
         if (ws is not { State: WebSocketState.Open })
             return false;
 
-        // One send at a time - ClientWebSocket supports one concurrent send alongside the receive loop's
-        // one concurrent receive, but not two overlapping sends (e.g. a double-clicked button).
-        await sendLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             pendingAction = action;
+            pendingCompletion = completion;
             await RelaySocketIo.SendAsync(ws, message, cancellationToken).ConfigureAwait(false);
-            return true;
+
+            await using (cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken)))
+                return await completion.Task.ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             log.Warning(ex, "TomeScrollChat: failed to send a cross-DC relay {Action} request", action);
-            pendingAction = PendingAction.None;
             return false;
         }
         finally
         {
-            sendLock.Release();
+            pendingAction = PendingAction.None;
+            pendingCompletion = null;
+            requestLock.Release();
         }
     }
 
@@ -188,6 +207,11 @@ public sealed class CrossDcRelayService : IDisposable
             IsConnected = true;
             UserId = userId;
             LastError = null;
+            if (identity.IsKnownAdmin(url))
+            {
+                IsAdmin = true;
+                log.Info("TomeScrollChat: cross-DC relay admin rights recalled for {UserId} ({Url})", userId, url);
+            }
             log.Info("TomeScrollChat: connected to cross-DC relay as {UserId} ({Url})", userId, url);
 
             while (!cancellationToken.IsCancellationRequested)
@@ -240,10 +264,10 @@ public sealed class CrossDcRelayService : IDisposable
         return connected is { Type: "connected", Id.Length: > 0 } ? connected.Id : null;
     }
 
-    /// <summary>Handles <c>adminGranted</c>/<c>logs</c>/<c>error</c> (the only requests this client ever
-    /// sends right now); everything else is just logged by type - a placeholder for the next increment
-    /// (pairing/messaging), proving the receive loop works end to end without yet having anywhere real
-    /// to route those frames to.</summary>
+    /// <summary>Handles <c>adminGranted</c>/<c>logs</c>/<c>stats</c>/<c>error</c> (the only requests this
+    /// client ever sends right now); everything else is just logged by type - a placeholder for the next
+    /// increment (pairing/messaging), proving the receive loop works end to end without yet having
+    /// anywhere real to route those frames to.</summary>
     private void DispatchFrame(string rawJson)
     {
         string? type;
@@ -262,26 +286,44 @@ public sealed class CrossDcRelayService : IDisposable
             case "adminGranted":
                 IsAdmin = true;
                 AdminError = null;
-                pendingAction = PendingAction.None;
+                if (connectedUrl != null)
+                    identity?.MarkAdmin(connectedUrl);
                 log.Info("TomeScrollChat: cross-DC relay admin claim succeeded");
+                pendingCompletion?.TrySetResult(true);
                 break;
 
             case "logs":
                 var logsMessage = TryDeserialize<RelayLogsMessage>(rawJson);
                 Logs = logsMessage?.Lines ?? Array.Empty<string>();
                 LogsError = null;
-                pendingAction = PendingAction.None;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "stats":
+                var statsMessage = TryDeserialize<RelayStatsMessage>(rawJson);
+                ConnectedClients = statsMessage?.ConnectedClients;
+                StatsError = null;
+                pendingCompletion?.TrySetResult(true);
                 break;
 
             case "error":
                 var reason = TryDeserialize<RelayErrorMessage>(rawJson)?.Reason ?? "Unknown error";
-                if (pendingAction == PendingAction.ClaimAdmin)
-                    AdminError = reason;
-                else if (pendingAction == PendingAction.GetLogs)
-                    LogsError = reason;
-                else
-                    log.Debug("TomeScrollChat: cross-DC relay error with no pending request to attribute it to: {Reason}", reason);
-                pendingAction = PendingAction.None;
+                switch (pendingAction)
+                {
+                    case PendingAction.ClaimAdmin:
+                        AdminError = reason;
+                        break;
+                    case PendingAction.GetLogs:
+                        LogsError = reason;
+                        break;
+                    case PendingAction.GetStats:
+                        StatsError = reason;
+                        break;
+                    default:
+                        log.Debug("TomeScrollChat: cross-DC relay error with no pending request to attribute it to: {Reason}", reason);
+                        break;
+                }
+                pendingCompletion?.TrySetResult(false);
                 break;
 
             default:
@@ -315,7 +357,9 @@ public sealed class CrossDcRelayService : IDisposable
         IsConnected = false;
         UserId = null;
         IsAdmin = false;
-        pendingAction = PendingAction.None;
+        // Unblocks a SendAndAwaitAsync call that was waiting on a reply that will now never come - it
+        // returns false, same as an explicit error would.
+        pendingCompletion?.TrySetResult(false);
         if (error != null)
             LastError = error;
     }
@@ -337,6 +381,6 @@ public sealed class CrossDcRelayService : IDisposable
             StopLocked();
 
         identity?.Dispose();
-        sendLock.Dispose();
+        requestLock.Dispose();
     }
 }
