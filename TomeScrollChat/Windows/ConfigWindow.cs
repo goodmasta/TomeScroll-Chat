@@ -25,8 +25,6 @@ public sealed class ConfigWindow : Window, IDisposable
     private string crossDcAdminKeyInput = string.Empty;
     private int crossDcLogLines = 100;
     private string crossDcRedeemCodeInput = string.Empty;
-    private string? crossDcSelectedContact;
-    private string crossDcMessageInput = string.Empty;
     private string crossDcGroupNameInput = string.Empty;
     private string crossDcGroupRedeemCodeInput = string.Empty;
     private string? crossDcSelectedGroupId;
@@ -1424,8 +1422,10 @@ public sealed class ConfigWindow : Window, IDisposable
     /// <summary>Creating/redeeming invite codes and the resulting contact list. The code itself is
     /// deliberately never sent anywhere by this plugin - copy it and share it however you'd share
     /// anything else out-of-band (voice, Discord, ...), then the other side pastes it in and redeems it
-    /// here. Actual messaging with a paired contact isn't built yet - this is just establishing who
-    /// you're allowed to message once it is.</summary>
+    /// here. Actual chatting with a paired contact happens in its own tab (auto-created the moment
+    /// pairing completes - see <c>Plugin.OnCrossDcContactAdded</c>), not here - this is just establishing
+    /// who you're allowed to message, plus the one contact-level action (re-announcing your name) that
+    /// doesn't belong inside a chat tab.</summary>
     private void DrawCrossDcPairing()
     {
         var relay = plugin.CrossDcRelayService;
@@ -1471,76 +1471,24 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted($"Contacts on this server ({relay.Contacts.Count})");
         if (relay.Contacts.Count > 0)
         {
-            using (var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true))
+            using var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true);
+            if (child.Success)
             {
-                if (child.Success)
+                foreach (var contact in relay.Contacts)
                 {
-                    foreach (var contact in relay.Contacts)
-                    {
-                        if (ImGui.Selectable(relay.GetDisplayName(contact), contact == crossDcSelectedContact))
-                            crossDcSelectedContact = contact;
-                    }
+                    ImGui.TextUnformatted(relay.GetDisplayName(contact));
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton($"Refresh my name##crossDcRefreshName_{contact}"))
+                        _ = relay.RefreshMyNameAsync(contact);
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("Re-sends your current character name to this contact - use this if you renamed/switched characters since you last paired or messaged.");
                 }
             }
-
-            DrawCrossDcMessages(relay);
         }
         else
         {
             ImGui.TextDisabled("None yet.");
         }
-    }
-
-    /// <summary>Message history with whichever contact is selected above, plus a box to send a new one -
-    /// only drawn once at least one contact exists. Sending is disabled until this identity has received
-    /// the contact's encryption key (an automatic exchange right after pairing - see
-    /// <see cref="CrossDcRelayService"/>'s <c>keyAnnounce</c> handling), which is usually immediate but
-    /// can take a moment if they were offline when the pairing happened.</summary>
-    private void DrawCrossDcMessages(CrossDcRelayService relay)
-    {
-        crossDcSelectedContact ??= relay.Contacts[0];
-        if (!relay.Contacts.Contains(crossDcSelectedContact))
-            crossDcSelectedContact = relay.Contacts[0];
-
-        ImGui.Spacing();
-        ImGui.TextUnformatted($"Chat with {relay.GetDisplayName(crossDcSelectedContact)}");
-        ImGui.SameLine();
-        if (ImGui.SmallButton("Refresh my name##crossDcRefreshName"))
-            _ = relay.RefreshMyNameAsync(crossDcSelectedContact);
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Re-sends your current character name to this contact - use this if you renamed/switched characters since you last paired or messaged.");
-
-        using (var child = ImRaii.Child("CrossDcMessagesView", new Vector2(0, 160), true))
-        {
-            if (child.Success)
-            {
-                foreach (var message in relay.GetMessages(crossDcSelectedContact))
-                {
-                    var label = message.IsOutgoing ? "You" : relay.GetDisplayName(message.SenderUserId);
-                    ImGui.TextUnformatted($"[{message.Timestamp.ToLocalTime():HH:mm}] {label}: {message.Text}");
-                }
-            }
-        }
-
-        var hasKey = relay.HasKeyFor(crossDcSelectedContact);
-        using (ImRaii.Disabled(!hasKey))
-        {
-            ImGui.SetNextItemWidth(320);
-            var sendPressed = ImGui.InputTextWithHint("##crossDcMessageInput", "Message...", ref crossDcMessageInput, 500, ImGuiInputTextFlags.EnterReturnsTrue);
-            ImGui.SameLine();
-            sendPressed |= ImGui.Button("Send##crossDcSendMessage");
-
-            if (sendPressed && crossDcMessageInput.Length > 0)
-            {
-                var text = crossDcMessageInput;
-                crossDcMessageInput = string.Empty;
-                var contact = crossDcSelectedContact;
-                _ = relay.SendChatMessageAsync(contact, text);
-            }
-        }
-
-        if (!hasKey)
-            ImGui.TextDisabled("Waiting for this contact's encryption key (usually arrives within moments of pairing) before you can message them.");
     }
 
     /// <summary>Creating/joining groups ("relay linkshells" - multi-member end-to-end-encrypted chats, as
