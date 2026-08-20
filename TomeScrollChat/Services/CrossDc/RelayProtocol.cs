@@ -38,6 +38,17 @@ internal sealed record RelayInviteMessage(string? Type, string? Code);
 internal sealed record RelayRedeemInviteRequest(string Type, string Code);
 internal sealed record RelayPairedMessage(string? Type, string? With);
 
+internal sealed record RelaySendRequest(string Type, string To, string Payload);
+internal sealed record RelayMessageEnvelope(string? Type, string? From, string? Payload);
+
+/// <summary>Client-level envelope carried as the opaque <c>payload</c> of a relay <c>send</c>/
+/// <c>message</c> - the relay never looks inside this, it's purely between the two clients. Two kinds:
+/// <c>keyAnnounce</c> (announce this identity's X25519 public key to a newly-paired contact) and
+/// <c>chat</c> (an encrypted message). Both share the same "type" field so the receiver can tell them
+/// apart the same way the outer relay protocol does.</summary>
+internal sealed record ChatKeyAnnounceEnvelope(string Type, string PublicKey);
+internal sealed record ChatMessageEnvelope(string Type, string Nonce, string Ciphertext);
+
 /// <summary>Send/receive helpers for JSON text frames over a <see cref="WebSocket"/> - the client-side
 /// mirror of the relay's own <c>WebSocketJson</c>, so both ends agree on framing as well as casing.</summary>
 internal static class RelaySocketIo

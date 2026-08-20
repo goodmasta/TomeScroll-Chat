@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using Dalamud.Plugin.Services;
 using NSec.Cryptography;
@@ -11,9 +12,11 @@ namespace TomeScrollChat.Services.CrossDc;
 /// <summary>
 /// This installation's cross-DC relay identity - an Ed25519 keypair (the identity itself; a relay
 /// derives the user ID from its public key, see TomeScrollRelay's own <c>RelayIdentity</c>) and an
-/// X25519 keypair (for the message-encryption key exchange, unused until a later increment builds that
-/// layer - generated and persisted now so it doesn't need its own migration then). Also remembers which
-/// relay server URLs this identity has successfully claimed admin rights on (see
+/// X25519 keypair for per-contact message encryption (see <see cref="EncryptFor"/>/
+/// <see cref="DecryptFrom"/>): each contact's messages use a key derived via X25519 ECDH + HKDF-SHA256
+/// from this identity's private key and that contact's public key (announced once per pairing - see
+/// <see cref="SetPeerPublicKey"/>), then XChaCha20-Poly1305 for the actual authenticated encryption.
+/// Also remembers which relay server URLs this identity has successfully claimed admin rights on (see
 /// <see cref="IsKnownAdmin"/>/<see cref="MarkAdmin"/>) - the relay itself grants admin durably (survives
 /// its own restarts, see TomeScrollRelay's <c>AdminRegistry</c>), so without this the player would need
 /// to re-claim with a fresh bootstrap key on every single reconnect, even though the relay never forgot.
@@ -23,24 +26,33 @@ namespace TomeScrollChat.Services.CrossDc;
 /// keys have no business going through the same path as human-editable settings (same reasoning
 /// <see cref="Configuration.GeminiApiKey"/>'s doc comment gives for being excluded from
 /// <c>ResetToDefaults</c>, taken one step further here - it isn't even in that file at all), and the
-/// admin-URLs list travels with the identity it belongs to for the same reason pairings/groups don't
-/// carry over between relay servers - it's per (identity, server), not a global preference. Same
-/// reasoning covers the paired-contact list (see <see cref="GetContacts"/>/<see cref="AddContact"/>):
-/// the relay has no "list my pairs" query, but this client is always present for every pairing it's
-/// ever part of (either directly redeeming a code, or receiving the resulting notification), so tracking
-/// it locally as pairings happen is enough - no new relay query needed for this. Instantiated
-/// lazily by <see cref="CrossDcRelayService"/> only once <see cref="Configuration.CrossDcRelayMode"/> is
-/// actually non-Disabled, per the explicit "nothing happens at all while the feature is off"
-/// requirement - not even key generation.</para>
+/// admin-URLs/contacts/peer-keys all travel with the identity they belong to for the same reason
+/// pairings/groups don't carry over between relay servers - it's per (identity, server), not a global
+/// preference. Same reasoning covers the paired-contact list (see <see cref="GetContacts"/>/
+/// <see cref="AddContact"/>): the relay has no "list my pairs" query, but this client is always present
+/// for every pairing it's ever part of (either directly redeeming a code, or receiving the resulting
+/// notification), so tracking it locally as pairings happen is enough - no new relay query needed for
+/// this. Instantiated lazily by <see cref="CrossDcRelayService"/> only once
+/// <see cref="Configuration.CrossDcRelayMode"/> is actually non-Disabled, per the explicit "nothing
+/// happens at all while the feature is off" requirement - not even key generation.</para>
 /// </summary>
 public sealed class RelayIdentityService : IDisposable
 {
     private static readonly SignatureAlgorithm SigningAlgorithm = SignatureAlgorithm.Ed25519;
     private static readonly KeyAgreementAlgorithm EncryptionAlgorithm = KeyAgreementAlgorithm.X25519;
+    private static readonly KeyDerivationAlgorithm ChatKeyDerivation = KeyDerivationAlgorithm.HkdfSha256;
+    private static readonly AeadAlgorithm ChatCipher = AeadAlgorithm.XChaCha20Poly1305;
 
-    // KeyCreationParameters is a ref struct (NSec's choice, not this codebase's) - it can't be a static
-    // field, only ever a fresh local/inline value.
+    // Fixed, public, non-secret inputs to HKDF - not a secret in their own right, just domain-separating
+    // this specific derivation (chat message keys) from any other thing that might ever derive from the
+    // same raw X25519 shared secret.
+    private static readonly byte[] ChatKeySalt = Encoding.UTF8.GetBytes("TomeScrollChat/cross-dc-chat/v1");
+    private static readonly byte[] ChatKeyInfo = Encoding.UTF8.GetBytes("chat-key");
+
+    // KeyCreationParameters/SharedSecretCreationParameters are ref structs (NSec's choice, not this
+    // codebase's) - can't be static fields, only ever fresh local/inline values.
     private static KeyCreationParameters ExportableKeyParams => new() { ExportPolicy = KeyExportPolicies.AllowPlaintextExport };
+    private static SharedSecretCreationParameters ExportableSecretParams => new() { ExportPolicy = KeyExportPolicies.AllowPlaintextExport };
 
     private readonly string path;
     private readonly IPluginLog log;
@@ -48,6 +60,7 @@ public sealed class RelayIdentityService : IDisposable
     private readonly Key encryptionKey;
     private readonly HashSet<string> adminUrls;
     private readonly Dictionary<string, HashSet<string>> contactsByUrl;
+    private readonly Dictionary<string, Dictionary<string, string>> peerKeysByUrl;
 
     public RelayIdentityService(string configDirectory, IPluginLog log)
     {
@@ -62,6 +75,7 @@ public sealed class RelayIdentityService : IDisposable
             encryptionKey = state.Encryption;
             adminUrls = state.AdminUrls;
             contactsByUrl = state.ContactsByUrl;
+            peerKeysByUrl = state.PeerKeysByUrl;
             return;
         }
 
@@ -69,6 +83,7 @@ public sealed class RelayIdentityService : IDisposable
         encryptionKey = Key.Create(EncryptionAlgorithm, ExportableKeyParams);
         adminUrls = new HashSet<string>();
         contactsByUrl = new Dictionary<string, HashSet<string>>();
+        peerKeysByUrl = new Dictionary<string, Dictionary<string, string>>();
         Save();
     }
 
@@ -77,8 +92,9 @@ public sealed class RelayIdentityService : IDisposable
     /// itself; the relay derives this installation's user ID by hashing it.</summary>
     public string SigningPublicKeyBase64 => Convert.ToBase64String(signingKey.PublicKey.Export(KeyBlobFormat.RawPublicKey));
 
-    /// <summary>Standard base64 X25519 public key - for the message-encryption key exchange, not yet
-    /// consumed by anything (see the type doc comment).</summary>
+    /// <summary>Standard base64 X25519 public key - announced to a contact once per pairing (see
+    /// <see cref="CrossDcRelayService"/>'s <c>keyAnnounce</c> handling) so they can derive the same
+    /// per-contact chat key this identity does.</summary>
     public string EncryptionPublicKeyBase64 => Convert.ToBase64String(encryptionKey.PublicKey.Export(KeyBlobFormat.RawPublicKey));
 
     /// <summary>Signs arbitrary bytes with the Ed25519 identity key - used to answer the relay's
@@ -128,7 +144,90 @@ public sealed class RelayIdentityService : IDisposable
             Save();
     }
 
-    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl)? TryLoad(string path, IPluginLog log)
+    /// <summary>The X25519 public key <paramref name="contactUserId"/> announced on <paramref name="url"/>
+    /// (see <see cref="SetPeerPublicKey"/>), or null if no announcement has been received yet - callers
+    /// can't encrypt/decrypt for this contact until this returns non-null.</summary>
+    public string? GetPeerPublicKey(string url, string contactUserId) =>
+        peerKeysByUrl.TryGetValue(url, out var keys) && keys.TryGetValue(contactUserId, out var key) ? key : null;
+
+    /// <summary>Records the X25519 public key a contact announced on <paramref name="url"/>, persisted
+    /// immediately. Overwrites any previous value for that contact (a contact re-announcing, e.g. after
+    /// generating a new identity of their own, should take effect rather than being ignored).</summary>
+    public void SetPeerPublicKey(string url, string contactUserId, string publicKeyBase64)
+    {
+        if (!peerKeysByUrl.TryGetValue(url, out var keys))
+            peerKeysByUrl[url] = keys = new Dictionary<string, string>();
+
+        if (keys.TryGetValue(contactUserId, out var existing) && existing == publicKeyBase64)
+            return;
+
+        keys[contactUserId] = publicKeyBase64;
+        Save();
+    }
+
+    /// <summary>Encrypts <paramref name="plaintext"/> for <paramref name="peerUserId"/> (whose X25519
+    /// public key is <paramref name="peerPublicKeyBase64"/> - see <see cref="GetPeerPublicKey"/>), binding
+    /// <paramref name="fromUserId"/>/<paramref name="peerUserId"/> as associated data so a ciphertext
+    /// can't silently be replayed as if it came from/to someone else. Null if the peer's public key is
+    /// malformed or the underlying X25519 agreement fails - callers already require a peer key to exist
+    /// before calling this, so either would mean corrupted state, not a normal "not ready yet" case.</summary>
+    public byte[]? EncryptFor(string peerUserId, string peerPublicKeyBase64, string fromUserId, byte[] nonce, byte[] plaintext)
+    {
+        try
+        {
+            using var chatKey = DeriveChatKey(peerPublicKeyBase64);
+            if (chatKey == null)
+                return null;
+
+            return ChatCipher.Encrypt(chatKey, nonce, BuildAad(fromUserId, peerUserId), plaintext);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to encrypt a cross-DC message for {PeerUserId}", peerUserId);
+            return null;
+        }
+    }
+
+    /// <summary>Decrypts a message from <paramref name="peerUserId"/> (whose X25519 public key is
+    /// <paramref name="peerPublicKeyBase64"/>) addressed to <paramref name="toUserId"/> (this identity's
+    /// own user ID). Null if decryption/authentication fails - a tampered ciphertext, wrong AAD (e.g. it
+    /// was actually addressed to someone else), or a stale/wrong peer key.</summary>
+    public byte[]? DecryptFrom(string peerUserId, string peerPublicKeyBase64, string toUserId, byte[] nonce, byte[] ciphertext)
+    {
+        try
+        {
+            using var chatKey = DeriveChatKey(peerPublicKeyBase64);
+            if (chatKey == null)
+                return null;
+
+            return ChatCipher.Decrypt(chatKey, nonce, BuildAad(peerUserId, toUserId), ciphertext);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to decrypt a cross-DC message from {PeerUserId}", peerUserId);
+            return null;
+        }
+    }
+
+    /// <summary>"{from}->{to}" - the same two user IDs in the same order regardless of which side (sender
+    /// or receiver) is doing the computing, so both always land on the identical associated-data bytes.</summary>
+    private static byte[] BuildAad(string fromUserId, string toUserId) => Encoding.UTF8.GetBytes($"{fromUserId}->{toUserId}");
+
+    /// <summary>X25519 ECDH between this identity's private key and the peer's public key, then
+    /// HKDF-SHA256 into an XChaCha20-Poly1305-sized symmetric key. Caller owns disposing the result.</summary>
+    private Key? DeriveChatKey(string peerPublicKeyBase64)
+    {
+        var peerPublicKeyBytes = Convert.FromBase64String(peerPublicKeyBase64);
+        var peerPublicKey = PublicKey.Import(EncryptionAlgorithm, peerPublicKeyBytes, KeyBlobFormat.RawPublicKey);
+
+        using var shared = EncryptionAlgorithm.Agree(encryptionKey, peerPublicKey, ExportableSecretParams);
+        if (shared == null)
+            return null;
+
+        return ChatKeyDerivation.DeriveKey(shared, ChatKeySalt, ChatKeyInfo, ChatCipher, ExportableKeyParams);
+    }
+
+    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl, Dictionary<string, Dictionary<string, string>> PeerKeysByUrl)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))
             return null;
@@ -141,12 +240,13 @@ public sealed class RelayIdentityService : IDisposable
 
             var signing = Key.Import(SigningAlgorithm, Convert.FromBase64String(stored.SigningKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
             var encryption = Key.Import(EncryptionAlgorithm, Convert.FromBase64String(stored.EncryptionKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
-            // AdminUrls/ContactsByUrl didn't exist in identity files written before those fields were
-            // added - null here just means "none recorded yet", not a corrupt/unreadable file.
+            // AdminUrls/ContactsByUrl/PeerKeysByUrl didn't exist in identity files written before those
+            // fields were added - null here just means "none recorded yet", not a corrupt/unreadable file.
             var adminUrls = new HashSet<string>(stored.AdminUrls ?? Enumerable.Empty<string>());
             var contactsByUrl = (stored.ContactsByUrl ?? new Dictionary<string, List<string>>())
                 .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
-            return (signing, encryption, adminUrls, contactsByUrl);
+            var peerKeysByUrl = stored.PeerKeysByUrl ?? new Dictionary<string, Dictionary<string, string>>();
+            return (signing, encryption, adminUrls, contactsByUrl, peerKeysByUrl);
         }
         catch (Exception ex)
         {
@@ -168,7 +268,8 @@ public sealed class RelayIdentityService : IDisposable
                 Convert.ToBase64String(signingKey.Export(KeyBlobFormat.RawPrivateKey)),
                 Convert.ToBase64String(encryptionKey.Export(KeyBlobFormat.RawPrivateKey)),
                 adminUrls.ToList(),
-                contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()));
+                contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()),
+                peerKeysByUrl);
             File.WriteAllText(path, JsonSerializer.Serialize(stored));
         }
         catch (Exception ex)
@@ -187,5 +288,6 @@ public sealed class RelayIdentityService : IDisposable
         string SigningKeySeed,
         string EncryptionKeySeed,
         List<string>? AdminUrls = null,
-        Dictionary<string, List<string>>? ContactsByUrl = null);
+        Dictionary<string, List<string>>? ContactsByUrl = null,
+        Dictionary<string, Dictionary<string, string>>? PeerKeysByUrl = null);
 }

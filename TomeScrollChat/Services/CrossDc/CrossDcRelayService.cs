@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.WebSockets;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +11,12 @@ using Dalamud.Plugin.Services;
 using TomeScrollChat.Models;
 
 namespace TomeScrollChat.Services.CrossDc;
+
+/// <summary>One decrypted 1:1 cross-DC chat message, in-memory only for now (not persisted to disk the
+/// way native chat history is - a later increment can fold this into <c>ChatHistoryService</c> if this
+/// feature graduates beyond Settings into an actual chat surface). <see cref="SenderUserId"/> is whoever
+/// actually sent it (this identity's own <see cref="CrossDcRelayService.UserId"/> for an outgoing one).</summary>
+public sealed record CrossDcChatMessage(string SenderUserId, string Text, DateTimeOffset Timestamp, bool IsOutgoing);
 
 /// <summary>
 /// Owns the cross-DC relay connection lifecycle - resolves which server to use from
@@ -62,6 +70,9 @@ public sealed class CrossDcRelayService : IDisposable
     private enum PendingAction { None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite }
     private PendingAction pendingAction = PendingAction.None;
     private TaskCompletionSource<bool>? pendingCompletion;
+
+    // In-memory only, see CrossDcChatMessage's own doc comment. Keyed by the *other* party's userId.
+    private readonly Dictionary<string, List<CrossDcChatMessage>> messagesByContact = new();
 
     public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log)
     {
@@ -177,6 +188,75 @@ public sealed class CrossDcRelayService : IDisposable
     public Task<bool> RedeemInviteAsync(string code, CancellationToken cancellationToken = default) =>
         SendAndAwaitAsync(PendingAction.RedeemInvite, new RelayRedeemInviteRequest("redeemInvite", code), cancellationToken);
 
+    /// <summary>Message history with <paramref name="contactUserId"/>, oldest first - empty if there's
+    /// been no exchange with them yet this session (not persisted, see <see cref="CrossDcChatMessage"/>'s
+    /// doc comment).</summary>
+    public IReadOnlyList<CrossDcChatMessage> GetMessages(string contactUserId) =>
+        messagesByContact.TryGetValue(contactUserId, out var messages) ? messages : Array.Empty<CrossDcChatMessage>();
+
+    /// <summary>True once <paramref name="contactUserId"/>'s X25519 public key has been received (an
+    /// automatic <c>keyAnnounce</c> sent right after pairing - see the <c>paired</c> case in
+    /// <see cref="DispatchFrame"/>), so <see cref="SendChatMessageAsync"/> can actually encrypt something
+    /// for them. False doesn't mean anything's wrong - the announcement may simply not have arrived yet
+    /// (it's an ordinary relay message, so it's offline-queued same as anything else if they were
+    /// offline when this identity first paired with them).</summary>
+    public bool HasKeyFor(string contactUserId) =>
+        connectedUrl != null && identity?.GetPeerPublicKey(connectedUrl, contactUserId) != null;
+
+    /// <summary>Encrypts and sends a chat message to an already-paired contact - false (and no local
+    /// history entry added) if there's no live connection, no key for them yet (see
+    /// <see cref="HasKeyFor"/>), or the send itself fails. Unlike the admin-tooling requests, there's no
+    /// relay-level response to a <c>send</c> to wait for, so this returns as soon as the frame is on the
+    /// wire, not once the peer has received it.</summary>
+    public async Task<bool> SendChatMessageAsync(string contactUserId, string text, CancellationToken cancellationToken = default)
+    {
+        if (connectedUrl == null || identity == null || UserId == null)
+            return false;
+
+        var peerKey = identity.GetPeerPublicKey(connectedUrl, contactUserId);
+        if (peerKey == null)
+        {
+            // No key yet - re-announce ours in case the original announcement never arrived (e.g. their
+            // queue was full at the time), rather than leaving both sides stuck with no way to recover.
+            _ = SendKeyAnnounceAsync(contactUserId, cancellationToken);
+            return false;
+        }
+
+        var nonce = RandomNumberGenerator.GetBytes(24); // XChaCha20-Poly1305's nonce size
+        var plaintext = Encoding.UTF8.GetBytes(text);
+        var ciphertext = identity.EncryptFor(contactUserId, peerKey, UserId, nonce, plaintext);
+        if (ciphertext == null)
+            return false;
+
+        var envelope = new ChatMessageEnvelope("chat", Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext));
+        var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
+        if (!await SendRawAsync(new RelaySendRequest("send", contactUserId, payload), cancellationToken).ConfigureAwait(false))
+            return false;
+
+        AppendMessage(contactUserId, new CrossDcChatMessage(UserId, text, DateTimeOffset.UtcNow, IsOutgoing: true));
+        return true;
+    }
+
+    /// <summary>Best-effort, fire-and-forget - failure just means the contact won't get this identity's
+    /// key yet; <see cref="SendChatMessageAsync"/> retries it automatically the next time it's needed.</summary>
+    private async Task SendKeyAnnounceAsync(string contactUserId, CancellationToken cancellationToken)
+    {
+        if (identity == null)
+            return;
+
+        var envelope = new ChatKeyAnnounceEnvelope("keyAnnounce", identity.EncryptionPublicKeyBase64);
+        var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
+        await SendRawAsync(new RelaySendRequest("send", contactUserId, payload), cancellationToken).ConfigureAwait(false);
+    }
+
+    private void AppendMessage(string contactUserId, CrossDcChatMessage message)
+    {
+        if (!messagesByContact.TryGetValue(contactUserId, out var messages))
+            messagesByContact[contactUserId] = messages = new List<CrossDcChatMessage>();
+
+        messages.Add(message);
+    }
+
     /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
     /// <see cref="RelayIdentityService.ForgetAdmin"/>), for when the relay's own admin record no longer
     /// agrees with what this client remembers (e.g. the relay's Redis was flushed independently of
@@ -222,6 +302,34 @@ public sealed class CrossDcRelayService : IDisposable
         {
             pendingAction = PendingAction.None;
             pendingCompletion = null;
+            requestLock.Release();
+        }
+    }
+
+    /// <summary>Sends a frame with no relay-level response to wait for (<c>send</c> is fire-and-forget
+    /// at the protocol level - see TomeScrollRelay's own <c>RouteAsync</c>, which never replies to the
+    /// sender). Still goes through <see cref="requestLock"/>, just for the duration of the write itself
+    /// rather than a full cycle - <see cref="ClientWebSocket"/> only tolerates one send in flight at a
+    /// time, and this lock is already what serializes every other send against that same constraint.</summary>
+    private async Task<bool> SendRawAsync<T>(T message, CancellationToken cancellationToken)
+    {
+        var ws = socket;
+        if (ws is not { State: WebSocketState.Open })
+            return false;
+
+        await requestLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await RelaySocketIo.SendAsync(ws, message, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "TomeScrollChat: failed to send a cross-DC relay message");
+            return false;
+        }
+        finally
+        {
             requestLock.Release();
         }
     }
@@ -376,10 +484,20 @@ public sealed class CrossDcRelayService : IDisposable
                         identity?.AddContact(connectedUrl, withId);
                     Contacts = connectedUrl != null ? identity?.GetContacts(connectedUrl).ToArray() ?? Contacts : Contacts;
                     log.Info("TomeScrollChat: cross-DC relay paired with {With}", withId);
+                    // Announce this identity's encryption key to the new contact right away, so a
+                    // message can actually be sent to them without the player needing to do anything -
+                    // best-effort/fire-and-forget, same as the notification that triggered this.
+                    _ = SendKeyAnnounceAsync(withId, CancellationToken.None);
                 }
                 PairError = null;
                 if (pendingAction == PendingAction.RedeemInvite)
                     pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "message":
+                var incoming = TryDeserialize<RelayMessageEnvelope>(rawJson);
+                if (incoming is { From.Length: > 0, Payload.Length: > 0 })
+                    HandleIncomingPayload(incoming.From, incoming.Payload);
                 break;
 
             case "error":
@@ -410,6 +528,62 @@ public sealed class CrossDcRelayService : IDisposable
 
             default:
                 log.Debug("TomeScrollChat: cross-DC relay frame received (type={Type})", type ?? "(none)");
+                break;
+        }
+    }
+
+    /// <summary>Parses the client-level envelope carried inside a relay <c>message</c>'s opaque
+    /// <c>payload</c> (see <see cref="ChatKeyAnnounceEnvelope"/>/<see cref="ChatMessageEnvelope"/>'s doc
+    /// comment) and handles the two kinds this client understands so far. Anything else is logged and
+    /// dropped - not an error, just not something built yet (groups).</summary>
+    private void HandleIncomingPayload(string fromUserId, string payloadJson)
+    {
+        string? innerType;
+        try
+        {
+            innerType = JsonSerializer.Deserialize<RelayTypeOnly>(payloadJson, RelayProtocolJson.Options)?.Type;
+        }
+        catch (JsonException)
+        {
+            log.Warning("TomeScrollChat: cross-DC relay message from {From} had an unparseable payload", fromUserId);
+            return;
+        }
+
+        switch (innerType)
+        {
+            case "keyAnnounce":
+                var announce = TryDeserialize<ChatKeyAnnounceEnvelope>(payloadJson);
+                if (announce is { PublicKey.Length: > 0 } && connectedUrl != null)
+                {
+                    identity?.SetPeerPublicKey(connectedUrl, fromUserId, announce.PublicKey);
+                    log.Info("TomeScrollChat: received a cross-DC key announcement from {From}", fromUserId);
+                }
+                break;
+
+            case "chat":
+                var chat = TryDeserialize<ChatMessageEnvelope>(payloadJson);
+                if (chat is not { Nonce.Length: > 0, Ciphertext.Length: > 0 } || connectedUrl == null || identity == null || UserId == null)
+                    break;
+
+                var peerKey = identity.GetPeerPublicKey(connectedUrl, fromUserId);
+                if (peerKey == null)
+                {
+                    log.Warning("TomeScrollChat: received a chat message from {From} but have no key for them yet - dropping", fromUserId);
+                    break;
+                }
+
+                var plaintext = identity.DecryptFrom(fromUserId, peerKey, UserId, Convert.FromBase64String(chat.Nonce), Convert.FromBase64String(chat.Ciphertext));
+                if (plaintext == null)
+                {
+                    log.Warning("TomeScrollChat: failed to decrypt a cross-DC message from {From} - dropping", fromUserId);
+                    break;
+                }
+
+                AppendMessage(fromUserId, new CrossDcChatMessage(fromUserId, Encoding.UTF8.GetString(plaintext), DateTimeOffset.UtcNow, IsOutgoing: false));
+                break;
+
+            default:
+                log.Debug("TomeScrollChat: cross-DC relay message from {From} had an unrecognized payload type {Type}", fromUserId, innerType ?? "(none)");
                 break;
         }
     }

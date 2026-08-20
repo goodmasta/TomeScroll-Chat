@@ -7,6 +7,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using TomeScrollChat.Models;
 using TomeScrollChat.Services;
+using TomeScrollChat.Services.CrossDc;
 using TomeScrollChat.Utility;
 
 namespace TomeScrollChat.Windows;
@@ -24,6 +25,8 @@ public sealed class ConfigWindow : Window, IDisposable
     private string crossDcAdminKeyInput = string.Empty;
     private int crossDcLogLines = 100;
     private string crossDcRedeemCodeInput = string.Empty;
+    private string? crossDcSelectedContact;
+    private string crossDcMessageInput = string.Empty;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1460,17 +1463,71 @@ public sealed class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted($"Contacts on this server ({relay.Contacts.Count})");
         if (relay.Contacts.Count > 0)
         {
-            using var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true);
-            if (child.Success)
+            using (var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true))
             {
-                foreach (var contact in relay.Contacts)
-                    ImGui.TextUnformatted(contact);
+                if (child.Success)
+                {
+                    foreach (var contact in relay.Contacts)
+                    {
+                        if (ImGui.Selectable(contact, contact == crossDcSelectedContact))
+                            crossDcSelectedContact = contact;
+                    }
+                }
             }
+
+            DrawCrossDcMessages(relay);
         }
         else
         {
             ImGui.TextDisabled("None yet.");
         }
+    }
+
+    /// <summary>Message history with whichever contact is selected above, plus a box to send a new one -
+    /// only drawn once at least one contact exists. Sending is disabled until this identity has received
+    /// the contact's encryption key (an automatic exchange right after pairing - see
+    /// <see cref="CrossDcRelayService"/>'s <c>keyAnnounce</c> handling), which is usually immediate but
+    /// can take a moment if they were offline when the pairing happened.</summary>
+    private void DrawCrossDcMessages(CrossDcRelayService relay)
+    {
+        crossDcSelectedContact ??= relay.Contacts[0];
+        if (!relay.Contacts.Contains(crossDcSelectedContact))
+            crossDcSelectedContact = relay.Contacts[0];
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"Chat with {crossDcSelectedContact}");
+
+        using (var child = ImRaii.Child("CrossDcMessagesView", new Vector2(0, 160), true))
+        {
+            if (child.Success)
+            {
+                foreach (var message in relay.GetMessages(crossDcSelectedContact))
+                {
+                    var label = message.IsOutgoing ? "You" : message.SenderUserId;
+                    ImGui.TextUnformatted($"[{message.Timestamp.ToLocalTime():HH:mm}] {label}: {message.Text}");
+                }
+            }
+        }
+
+        var hasKey = relay.HasKeyFor(crossDcSelectedContact);
+        using (ImRaii.Disabled(!hasKey))
+        {
+            ImGui.SetNextItemWidth(320);
+            var sendPressed = ImGui.InputTextWithHint("##crossDcMessageInput", "Message...", ref crossDcMessageInput, 500, ImGuiInputTextFlags.EnterReturnsTrue);
+            ImGui.SameLine();
+            sendPressed |= ImGui.Button("Send##crossDcSendMessage");
+
+            if (sendPressed && crossDcMessageInput.Length > 0)
+            {
+                var text = crossDcMessageInput;
+                crossDcMessageInput = string.Empty;
+                var contact = crossDcSelectedContact;
+                _ = relay.SendChatMessageAsync(contact, text);
+            }
+        }
+
+        if (!hasKey)
+            ImGui.TextDisabled("Waiting for this contact's encryption key (usually arrives within moments of pairing) before you can message them.");
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap
