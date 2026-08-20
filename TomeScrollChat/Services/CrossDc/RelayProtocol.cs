@@ -32,6 +32,12 @@ internal sealed record RelayLogsMessage(string? Type, string[]? Lines);
 internal sealed record RelayGetStatsRequest(string Type);
 internal sealed record RelayStatsMessage(string? Type, int? ConnectedClients);
 
+internal sealed record RelayCreateInviteRequest(string Type);
+internal sealed record RelayInviteMessage(string? Type, string? Code);
+
+internal sealed record RelayRedeemInviteRequest(string Type, string Code);
+internal sealed record RelayPairedMessage(string? Type, string? With);
+
 /// <summary>Send/receive helpers for JSON text frames over a <see cref="WebSocket"/> - the client-side
 /// mirror of the relay's own <c>WebSocketJson</c>, so both ends agree on framing as well as casing.</summary>
 internal static class RelaySocketIo

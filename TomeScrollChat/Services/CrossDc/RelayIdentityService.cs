@@ -24,7 +24,11 @@ namespace TomeScrollChat.Services.CrossDc;
 /// <see cref="Configuration.GeminiApiKey"/>'s doc comment gives for being excluded from
 /// <c>ResetToDefaults</c>, taken one step further here - it isn't even in that file at all), and the
 /// admin-URLs list travels with the identity it belongs to for the same reason pairings/groups don't
-/// carry over between relay servers - it's per (identity, server), not a global preference. Instantiated
+/// carry over between relay servers - it's per (identity, server), not a global preference. Same
+/// reasoning covers the paired-contact list (see <see cref="GetContacts"/>/<see cref="AddContact"/>):
+/// the relay has no "list my pairs" query, but this client is always present for every pairing it's
+/// ever part of (either directly redeeming a code, or receiving the resulting notification), so tracking
+/// it locally as pairings happen is enough - no new relay query needed for this. Instantiated
 /// lazily by <see cref="CrossDcRelayService"/> only once <see cref="Configuration.CrossDcRelayMode"/> is
 /// actually non-Disabled, per the explicit "nothing happens at all while the feature is off"
 /// requirement - not even key generation.</para>
@@ -43,6 +47,7 @@ public sealed class RelayIdentityService : IDisposable
     private readonly Key signingKey;
     private readonly Key encryptionKey;
     private readonly HashSet<string> adminUrls;
+    private readonly Dictionary<string, HashSet<string>> contactsByUrl;
 
     public RelayIdentityService(string configDirectory, IPluginLog log)
     {
@@ -56,12 +61,14 @@ public sealed class RelayIdentityService : IDisposable
             signingKey = state.Signing;
             encryptionKey = state.Encryption;
             adminUrls = state.AdminUrls;
+            contactsByUrl = state.ContactsByUrl;
             return;
         }
 
         signingKey = Key.Create(SigningAlgorithm, ExportableKeyParams);
         encryptionKey = Key.Create(EncryptionAlgorithm, ExportableKeyParams);
         adminUrls = new HashSet<string>();
+        contactsByUrl = new Dictionary<string, HashSet<string>>();
         Save();
     }
 
@@ -103,7 +110,25 @@ public sealed class RelayIdentityService : IDisposable
             Save();
     }
 
-    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls)? TryLoad(string path, IPluginLog log)
+    /// <summary>Every userId this identity has ever successfully paired with on <paramref name="url"/> -
+    /// empty if none yet. Never includes anyone unpaired later (there's no unpair feature yet to test
+    /// that against, but <see cref="AddContact"/> is the only way anything gets added here, so removal
+    /// support can be added later without a migration).</summary>
+    public IReadOnlyCollection<string> GetContacts(string url) =>
+        contactsByUrl.TryGetValue(url, out var contacts) ? contacts : Array.Empty<string>();
+
+    /// <summary>Records a successful pairing with <paramref name="userId"/> on <paramref name="url"/>,
+    /// persisted immediately. A no-op if already recorded.</summary>
+    public void AddContact(string url, string userId)
+    {
+        if (!contactsByUrl.TryGetValue(url, out var contacts))
+            contactsByUrl[url] = contacts = new HashSet<string>();
+
+        if (contacts.Add(userId))
+            Save();
+    }
+
+    private static (Key Signing, Key Encryption, HashSet<string> AdminUrls, Dictionary<string, HashSet<string>> ContactsByUrl)? TryLoad(string path, IPluginLog log)
     {
         if (!File.Exists(path))
             return null;
@@ -116,10 +141,12 @@ public sealed class RelayIdentityService : IDisposable
 
             var signing = Key.Import(SigningAlgorithm, Convert.FromBase64String(stored.SigningKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
             var encryption = Key.Import(EncryptionAlgorithm, Convert.FromBase64String(stored.EncryptionKeySeed), KeyBlobFormat.RawPrivateKey, ExportableKeyParams);
-            // AdminUrls didn't exist in identity files written before this field was added - null here
-            // just means "none recorded yet", not a corrupt/unreadable file.
+            // AdminUrls/ContactsByUrl didn't exist in identity files written before those fields were
+            // added - null here just means "none recorded yet", not a corrupt/unreadable file.
             var adminUrls = new HashSet<string>(stored.AdminUrls ?? Enumerable.Empty<string>());
-            return (signing, encryption, adminUrls);
+            var contactsByUrl = (stored.ContactsByUrl ?? new Dictionary<string, List<string>>())
+                .ToDictionary(kvp => kvp.Key, kvp => new HashSet<string>(kvp.Value));
+            return (signing, encryption, adminUrls, contactsByUrl);
         }
         catch (Exception ex)
         {
@@ -140,7 +167,8 @@ public sealed class RelayIdentityService : IDisposable
             var stored = new StoredIdentity(
                 Convert.ToBase64String(signingKey.Export(KeyBlobFormat.RawPrivateKey)),
                 Convert.ToBase64String(encryptionKey.Export(KeyBlobFormat.RawPrivateKey)),
-                adminUrls.ToList());
+                adminUrls.ToList(),
+                contactsByUrl.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToList()));
             File.WriteAllText(path, JsonSerializer.Serialize(stored));
         }
         catch (Exception ex)
@@ -155,5 +183,9 @@ public sealed class RelayIdentityService : IDisposable
         encryptionKey.Dispose();
     }
 
-    private sealed record StoredIdentity(string SigningKeySeed, string EncryptionKeySeed, List<string>? AdminUrls = null);
+    private sealed record StoredIdentity(
+        string SigningKeySeed,
+        string EncryptionKeySeed,
+        List<string>? AdminUrls = null,
+        Dictionary<string, List<string>>? ContactsByUrl = null);
 }

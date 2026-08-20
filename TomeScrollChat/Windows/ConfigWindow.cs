@@ -23,6 +23,7 @@ public sealed class ConfigWindow : Window, IDisposable
     private readonly FileDialogManager fileDialogManager = new();
     private string crossDcAdminKeyInput = string.Empty;
     private int crossDcLogLines = 100;
+    private string crossDcRedeemCodeInput = string.Empty;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1396,6 +1397,10 @@ public sealed class ConfigWindow : Window, IDisposable
             {
                 ImGui.Spacing();
                 ImGui.Separator();
+                DrawCrossDcPairing();
+
+                ImGui.Spacing();
+                ImGui.Separator();
                 DrawCrossDcAdmin();
             }
 
@@ -1403,6 +1408,69 @@ public sealed class ConfigWindow : Window, IDisposable
         }
 
         DrawManagedRelayConsentPopup();
+    }
+
+    /// <summary>Creating/redeeming invite codes and the resulting contact list. The code itself is
+    /// deliberately never sent anywhere by this plugin - copy it and share it however you'd share
+    /// anything else out-of-band (voice, Discord, ...), then the other side pastes it in and redeems it
+    /// here. Actual messaging with a paired contact isn't built yet - this is just establishing who
+    /// you're allowed to message once it is.</summary>
+    private void DrawCrossDcPairing()
+    {
+        var relay = plugin.CrossDcRelayService;
+
+        ImGui.TextUnformatted("Add a contact");
+        ImGui.TextDisabled("Share the code out-of-band (voice, Discord, ...) with the other player - never through in-game chat.");
+
+        if (ImGui.Button("Create invite code"))
+            _ = relay.CreateInviteAsync();
+
+        if (relay.InviteCode != null)
+        {
+            ImGui.SetNextItemWidth(160);
+            var codeDisplay = relay.InviteCode;
+            ImGui.InputText("##crossDcInviteCodeDisplay", ref codeDisplay, codeDisplay.Length, ImGuiInputTextFlags.ReadOnly);
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Copy##crossDcCopyInvite"))
+                ImGui.SetClipboardText(relay.InviteCode);
+            ImGui.TextDisabled("Valid for 10 minutes, single-use.");
+        }
+
+        if (relay.InviteError != null)
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.InviteError);
+
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(160);
+        ImGui.InputTextWithHint("##crossDcRedeemCode", "Invite code", ref crossDcRedeemCodeInput, 16, ImGuiInputTextFlags.CharsUppercase);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(crossDcRedeemCodeInput.Length == 0))
+        {
+            if (ImGui.Button("Redeem"))
+            {
+                var code = crossDcRedeemCodeInput;
+                crossDcRedeemCodeInput = string.Empty;
+                _ = relay.RedeemInviteAsync(code);
+            }
+        }
+
+        if (relay.PairError != null)
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), relay.PairError);
+
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"Contacts on this server ({relay.Contacts.Count})");
+        if (relay.Contacts.Count > 0)
+        {
+            using var child = ImRaii.Child("CrossDcContactsView", new Vector2(0, 100), true);
+            if (child.Success)
+            {
+                foreach (var contact in relay.Contacts)
+                    ImGui.TextUnformatted(contact);
+            }
+        }
+        else
+        {
+            ImGui.TextDisabled("None yet.");
+        }
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap

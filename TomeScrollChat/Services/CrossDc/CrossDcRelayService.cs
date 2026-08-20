@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Threading;
@@ -13,9 +14,11 @@ namespace TomeScrollChat.Services.CrossDc;
 /// Owns the cross-DC relay connection lifecycle - resolves which server to use from
 /// <see cref="Configuration.CrossDcRelayMode"/>, connects, completes the Ed25519 challenge/response
 /// handshake (matching TomeScrollRelay's own <c>RelayHandshake</c>), and keeps a background receive
-/// loop running while connected. Also the client side of the relay's admin tooling - claiming admin
-/// rights, pulling server logs, and reading the connected-client count - since each is just a
-/// request/response pair over the same socket, not a whole feature area of its own.
+/// loop running while connected. Also the client side of the relay's admin tooling (claiming admin
+/// rights, pulling server logs, reading the connected-client count) and 1:1 pairing (creating/redeeming
+/// invite codes, tracking who this identity has paired with) - each just a request/response pair (or, for
+/// pairing, an occasional unsolicited push - see <see cref="DispatchFrame"/>'s <c>paired</c> case) over
+/// the same socket, not a whole feature area of its own. Actual message send/receive isn't built yet.
 ///
 /// <para>Entirely inert while <see cref="Configuration.CrossDcRelayMode"/> is
 /// <see cref="RelayMode.Disabled"/> - <see cref="RelayIdentityService"/> (which is what actually
@@ -31,9 +34,9 @@ namespace TomeScrollChat.Services.CrossDc;
 /// <para><b>No automatic reconnect yet</b> - if the connection drops (network blip, relay restart),
 /// <see cref="IsConnected"/> goes false and stays false until something calls <see cref="Reconcile"/>
 /// again (e.g. the player revisiting Settings). Deliberately deferred rather than built speculatively:
-/// this increment is identity + the handshake working at all, not yet anything that depends on staying
-/// connected unattended - proper reconnect-with-backoff belongs with whatever increment actually needs
-/// it (pairing/messaging).</para>
+/// this is still identity/connection-level scope, not yet anything that depends on staying connected
+/// unattended - proper reconnect-with-backoff belongs with whatever increment actually needs it
+/// (message send/receive).</para>
 /// </summary>
 public sealed class CrossDcRelayService : IDisposable
 {
@@ -56,7 +59,7 @@ public sealed class CrossDcRelayService : IDisposable
     private string? connectedUrl;
     private ClientWebSocket? socket;
 
-    private enum PendingAction { None, ClaimAdmin, GetLogs, GetStats }
+    private enum PendingAction { None, ClaimAdmin, GetLogs, GetStats, CreateInvite, RedeemInvite }
     private PendingAction pendingAction = PendingAction.None;
     private TaskCompletionSource<bool>? pendingCompletion;
 
@@ -104,6 +107,24 @@ public sealed class CrossDcRelayService : IDisposable
     /// one succeeded.</summary>
     public string? StatsError { get; private set; }
 
+    /// <summary>Most recently created invite code, good for 10 minutes and single-use (see
+    /// TomeScrollRelay's own <c>PairingCodeRegistry</c>) - null until the first successful
+    /// <see cref="CreateInviteAsync"/>.</summary>
+    public string? InviteCode { get; private set; }
+
+    /// <summary>Reason the most recent <c>createInvite</c> attempt failed - e.g. the per-user pending-
+    /// invite cap. Null if none yet, or the last one succeeded.</summary>
+    public string? InviteError { get; private set; }
+
+    /// <summary>Every user ID this identity has ever successfully paired with on the *current* relay
+    /// (empty while disconnected) - refreshed on connect and every time a new pairing completes, whether
+    /// this client redeemed a code itself or someone else redeemed one of its invites.</summary>
+    public IReadOnlyList<string> Contacts { get; private set; } = Array.Empty<string>();
+
+    /// <summary>Reason the most recent <c>redeemInvite</c> attempt failed (invalid/expired code, blocked,
+    /// etc.) - null if none yet, or the last one succeeded.</summary>
+    public string? PairError { get; private set; }
+
     /// <summary>Reconciles the live connection against the current config. Safe to call any time,
     /// including repeatedly with nothing changed (a no-op in that case).</summary>
     public void Reconcile()
@@ -143,6 +164,18 @@ public sealed class CrossDcRelayService : IDisposable
     /// <see cref="ConnectedClients"/>/<see cref="StatsError"/>.</summary>
     public Task<bool> RequestStatsAsync(CancellationToken cancellationToken = default) =>
         SendAndAwaitAsync(PendingAction.GetStats, new RelayGetStatsRequest("getStats"), cancellationToken);
+
+    /// <summary>Sends <c>createInvite</c> - result also surfaces as <see cref="InviteCode"/>/
+    /// <see cref="InviteError"/>. The code is meant to be shared entirely out-of-band (voice, Discord,
+    /// whatever) with whoever should redeem it - never sent through this relay or native game chat, per
+    /// the design decision that excluded in-game chat from the invite flow entirely.</summary>
+    public Task<bool> CreateInviteAsync(CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.CreateInvite, new RelayCreateInviteRequest("createInvite"), cancellationToken);
+
+    /// <summary>Sends <c>redeemInvite</c> with a code someone else created and shared out-of-band.
+    /// Result also surfaces as <see cref="Contacts"/> (gains the new pairing)/<see cref="PairError"/>.</summary>
+    public Task<bool> RedeemInviteAsync(string code, CancellationToken cancellationToken = default) =>
+        SendAndAwaitAsync(PendingAction.RedeemInvite, new RelayRedeemInviteRequest("redeemInvite", code), cancellationToken);
 
     /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
     /// <see cref="RelayIdentityService.ForgetAdmin"/>), for when the relay's own admin record no longer
@@ -227,6 +260,7 @@ public sealed class CrossDcRelayService : IDisposable
                 IsAdmin = true;
                 log.Info("TomeScrollChat: cross-DC relay admin rights recalled for {UserId} ({Url})", userId, url);
             }
+            Contacts = identity.GetContacts(url).ToArray();
             log.Info("TomeScrollChat: connected to cross-DC relay as {UserId} ({Url})", userId, url);
 
             while (!cancellationToken.IsCancellationRequested)
@@ -279,10 +313,10 @@ public sealed class CrossDcRelayService : IDisposable
         return connected is { Type: "connected", Id.Length: > 0 } ? connected.Id : null;
     }
 
-    /// <summary>Handles <c>adminGranted</c>/<c>logs</c>/<c>stats</c>/<c>error</c> (the only requests this
-    /// client ever sends right now); everything else is just logged by type - a placeholder for the next
-    /// increment (pairing/messaging), proving the receive loop works end to end without yet having
-    /// anywhere real to route those frames to.</summary>
+    /// <summary>Handles <c>adminGranted</c>/<c>logs</c>/<c>stats</c>/<c>invite</c>/<c>paired</c>/
+    /// <c>error</c>; everything else (actual pairwise messages, groups - not built yet) is just logged
+    /// by type for now, proving the receive loop works end to end without anywhere real to route those
+    /// frames to yet.</summary>
     private void DispatchFrame(string rawJson)
     {
         string? type;
@@ -321,6 +355,33 @@ public sealed class CrossDcRelayService : IDisposable
                 pendingCompletion?.TrySetResult(true);
                 break;
 
+            case "invite":
+                var inviteMessage = TryDeserialize<RelayInviteMessage>(rawJson);
+                InviteCode = inviteMessage?.Code;
+                InviteError = null;
+                pendingCompletion?.TrySetResult(true);
+                break;
+
+            case "paired":
+                // Unlike the other cases above, this can arrive *unsolicited* - the inviter side of a
+                // pairing gets this pushed to them (live, or queued for when they next connect) the
+                // moment someone else redeems their code, without having sent anything themselves. Only
+                // touch pendingCompletion when we're the one who actually sent redeemInvite and is still
+                // waiting on it; otherwise just record the new contact and leave whatever else might
+                // genuinely be pending (e.g. an unrelated getStats) alone.
+                var pairedMessage = TryDeserialize<RelayPairedMessage>(rawJson);
+                if (pairedMessage?.With is { Length: > 0 } withId)
+                {
+                    if (connectedUrl != null)
+                        identity?.AddContact(connectedUrl, withId);
+                    Contacts = connectedUrl != null ? identity?.GetContacts(connectedUrl).ToArray() ?? Contacts : Contacts;
+                    log.Info("TomeScrollChat: cross-DC relay paired with {With}", withId);
+                }
+                PairError = null;
+                if (pendingAction == PendingAction.RedeemInvite)
+                    pendingCompletion?.TrySetResult(true);
+                break;
+
             case "error":
                 var reason = TryDeserialize<RelayErrorMessage>(rawJson)?.Reason ?? "Unknown error";
                 switch (pendingAction)
@@ -333,6 +394,12 @@ public sealed class CrossDcRelayService : IDisposable
                         break;
                     case PendingAction.GetStats:
                         StatsError = reason;
+                        break;
+                    case PendingAction.CreateInvite:
+                        InviteError = reason;
+                        break;
+                    case PendingAction.RedeemInvite:
+                        PairError = reason;
                         break;
                     default:
                         log.Debug("TomeScrollChat: cross-DC relay error with no pending request to attribute it to: {Reason}", reason);
