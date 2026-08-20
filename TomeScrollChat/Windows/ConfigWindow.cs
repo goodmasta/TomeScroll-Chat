@@ -89,6 +89,12 @@ public sealed class ConfigWindow : Window, IDisposable
             if (emotes.Success)
                 DrawEmotes();
         }
+
+        using (var crossDc = ImRaii.TabItem("Cross-DC"))
+        {
+            if (crossDc.Success)
+                DrawCrossDc();
+        }
     }
 
     /// <summary>Every "tell me about something" setting in one place: the in-game popup toast
@@ -1294,6 +1300,130 @@ public sealed class ConfigWindow : Window, IDisposable
                     ImGui.TextUnformatted($"{emote.Code}  [{emote.Provider}]");
             }
         }
+    }
+
+    /// <summary>Cross-datacenter chat (relay-based messaging/groups) - off by default, per explicit
+    /// request. See <see cref="Models.RelayMode"/> for the three states and
+    /// <see cref="Services.ManagedRelayEndpoint"/> for why the managed server's address never appears
+    /// anywhere on this tab.</summary>
+    private void DrawCrossDc()
+    {
+        var managedAvailable = ManagedRelayEndpoint.GetUrl() != null;
+
+        ImGui.TextUnformatted("Cross-datacenter chat");
+        ImGui.TextDisabled("Message or group with players on a different data center, when native /tell can't reach them.");
+        ImGui.Spacing();
+
+        var enabled = configuration.CrossDcRelayMode != RelayMode.Disabled;
+        if (ImGui.Checkbox("Enable cross-DC chat", ref enabled))
+        {
+            if (enabled)
+            {
+                // Re-enabling defaults to whichever mode makes sense: a self-hosted URL already on file
+                // means the player set that up before, so respect it; otherwise fall back to Managed, or
+                // straight to SelfHosted if this build has no managed endpoint at all.
+                configuration.CrossDcRelayMode = !managedAvailable || !string.IsNullOrEmpty(configuration.CrossDcRelaySelfHostedUrl)
+                    ? RelayMode.SelfHosted
+                    : RelayMode.Managed;
+            }
+            else
+            {
+                configuration.CrossDcRelayMode = RelayMode.Disabled;
+            }
+
+            configuration.Save();
+
+            if (configuration.CrossDcRelayMode == RelayMode.Managed && !configuration.CrossDcRelayManagedConsentAcknowledged)
+                ImGui.OpenPopup("TomeScrollChatManagedRelayConsent");
+        }
+
+        using (ImRaii.Disabled(configuration.CrossDcRelayMode == RelayMode.Disabled))
+        {
+            ImGui.Indent();
+            ImGui.Spacing();
+            ImGui.TextUnformatted("Server");
+
+            using (ImRaii.Disabled(!managedAvailable))
+            {
+                if (ImGui.RadioButton("TomeScroll Cloud (recommended)", configuration.CrossDcRelayMode == RelayMode.Managed))
+                {
+                    configuration.CrossDcRelayMode = RelayMode.Managed;
+                    configuration.Save();
+
+                    if (!configuration.CrossDcRelayManagedConsentAcknowledged)
+                        ImGui.OpenPopup("TomeScrollChatManagedRelayConsent");
+                }
+            }
+            if (!managedAvailable)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("(not available in this build)");
+            }
+
+            if (ImGui.RadioButton("Your own server", configuration.CrossDcRelayMode == RelayMode.SelfHosted))
+            {
+                configuration.CrossDcRelayMode = RelayMode.SelfHosted;
+                configuration.Save();
+            }
+
+            using (ImRaii.Disabled(configuration.CrossDcRelayMode != RelayMode.SelfHosted))
+            {
+                var selfHostedUrl = configuration.CrossDcRelaySelfHostedUrl;
+                ImGui.SetNextItemWidth(320);
+                if (ImGui.InputTextWithHint("Server address##crossDcSelfHostedUrl", "wss://your-server/relay", ref selfHostedUrl, 200))
+                {
+                    configuration.CrossDcRelaySelfHostedUrl = selfHostedUrl.Trim();
+                    configuration.Save();
+                }
+
+                if (configuration.CrossDcRelayMode == RelayMode.SelfHosted && selfHostedUrl.Length > 0 && !selfHostedUrl.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+                    ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f), "Must start with wss://");
+            }
+
+            ImGui.Spacing();
+            ImGui.TextDisabled("Switching servers disconnects you from any contacts/groups on the previous one - pairings live on that specific server, not carried with you.");
+            ImGui.Unindent();
+        }
+
+        DrawManagedRelayConsentPopup();
+    }
+
+    /// <summary>One-time notice shown the first time <see cref="RelayMode.Managed"/> is selected -
+    /// TomeScroll Cloud is a real, shared, third-party-operated server, and the player should know that
+    /// before metadata starts flowing through it. Never shown again once acknowledged (see
+    /// <see cref="Configuration.CrossDcRelayManagedConsentAcknowledged"/>), and never for
+    /// <see cref="RelayMode.SelfHosted"/> - there's nothing to consent to on the player's own server.</summary>
+    private void DrawManagedRelayConsentPopup()
+    {
+        var open = true;
+        if (!ImGui.BeginPopupModal("TomeScrollChatManagedRelayConsent", ref open, ImGuiWindowFlags.AlwaysAutoResize))
+            return;
+
+        ImGui.TextUnformatted("Before you continue");
+        ImGui.Spacing();
+        ImGui.TextDisabled(
+            "TomeScroll Cloud is a shared relay server run by the plugin's developer, not by Square\n" +
+            "Enix or your own infrastructure. Message content is end-to-end encrypted on your device\n" +
+            "before it's sent - the server operator can't read it - but metadata (who you're paired or\n" +
+            "grouped with, and roughly when you send messages) does pass through this server.");
+        ImGui.Spacing();
+
+        if (ImGui.Button("I understand, continue"))
+        {
+            configuration.CrossDcRelayManagedConsentAcknowledged = true;
+            configuration.Save();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel"))
+        {
+            configuration.CrossDcRelayMode = RelayMode.Disabled;
+            configuration.Save();
+            ImGui.CloseCurrentPopup();
+        }
+
+        ImGui.EndPopup();
     }
 
     public void Dispose()

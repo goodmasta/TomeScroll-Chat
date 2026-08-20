@@ -2,3 +2,8 @@ bin/
 obj/
 .vs/
 *.user
+
+# Real address of the managed cross-DC relay - see Services/ManagedRelayEndpoint.cs's doc comment for
+# why this can't be committed (this repo is public). Copy ManagedRelayEndpoint.Secret.cs.example to
+# create it locally.
+TomeScrollChat/Services/ManagedRelayEndpoint.Secret.cs

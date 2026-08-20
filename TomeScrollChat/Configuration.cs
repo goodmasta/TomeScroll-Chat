@@ -348,6 +348,26 @@ public class Configuration : IPluginConfiguration
     /// hides the window.</summary>
     public float DialogueTranslationAutoHideSeconds { get; set; } = 30f;
 
+    /// <summary>Master switch for cross-datacenter chat (relay-based messaging/groups for players who
+    /// can't reach each other via native <c>/tell</c>) - <see cref="RelayMode.Disabled"/> by default,
+    /// per explicit request: the whole feature, including identity key generation and any relay
+    /// connection, stays fully inert until the player explicitly turns it on.</summary>
+    public RelayMode CrossDcRelayMode { get; set; } = RelayMode.Disabled;
+
+    /// <summary>Only used/shown when <see cref="CrossDcRelayMode"/> is <see cref="RelayMode.SelfHosted"/> -
+    /// a <c>wss://</c> URL the player typed in themselves. Never populated for
+    /// <see cref="RelayMode.Managed"/>, whose address is a build-time constant
+    /// (<see cref="Services.ManagedRelayEndpoint"/>), not user data - keeping it out of this
+    /// (human-readable, on-disk) config is as much the point as keeping it out of the Settings UI.</summary>
+    public string CrossDcRelaySelfHostedUrl { get; set; } = string.Empty;
+
+    /// <summary>Set once the player has clicked through the one-time "this is a shared, third-party-run
+    /// server" notice shown the first time they select <see cref="RelayMode.Managed"/> - see
+    /// <c>Windows.ConfigWindow.DrawManagedRelayConsentPopup</c>. Never shown again afterwards, and never
+    /// shown at all for <see cref="RelayMode.SelfHosted"/> (the player's own server, nothing to consent
+    /// to).</summary>
+    public bool CrossDcRelayManagedConsentAcknowledged { get; set; }
+
     /// <summary>Resets every *setting* below to its default value - deliberately leaves
     /// <see cref="Tabs"/> itself alone, that's a separate step
     /// (<see cref="Services.TabManager.ResetToDefaults"/>, called alongside this one by
@@ -417,6 +437,11 @@ public class Configuration : IPluginConfiguration
         EnableDialogueTranslationWindow = defaults.EnableDialogueTranslationWindow;
         DialogueTranslationAutoHide = defaults.DialogueTranslationAutoHide;
         DialogueTranslationAutoHideSeconds = defaults.DialogueTranslationAutoHideSeconds;
+        // CrossDcRelaySelfHostedUrl and CrossDcRelayManagedConsentAcknowledged deliberately left alone -
+        // same reasoning as GeminiApiKey above: the URL is data the player typed in, not a preference to
+        // silently wipe, and re-showing the one-time consent notice on an unrelated settings reset would
+        // just be annoying, not meaningfully safer.
+        CrossDcRelayMode = defaults.CrossDcRelayMode;
     }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
