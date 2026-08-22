@@ -1639,7 +1639,11 @@ public sealed class ConfigWindow : Window, IDisposable
                     var memberIsModerator = group.ModeratorIds.Contains(memberId);
                     var memberRole = memberIsOwner ? " (owner)" : memberIsModerator ? " (moderator)" : string.Empty;
                     var isSelf = memberId == myUserId;
-                    ImGui.TextUnformatted($"{relay.GetDisplayName(memberId)}{memberRole}{(isSelf ? " - you" : string.Empty)}");
+                    // The relay userId in parens since GetDisplayName is only ever a first-and-last
+                    // character name now (no world - see its own doc comment), which two members could
+                    // plausibly share; the userId is what promote/demote/kick/transfer actually target,
+                    // so it needs to stay visible somewhere on this row.
+                    ImGui.TextUnformatted($"{relay.GetDisplayName(memberId)} ({memberId}){memberRole}{(isSelf ? " - you" : string.Empty)}");
 
                     if (isSelf)
                         continue;

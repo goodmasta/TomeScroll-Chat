@@ -400,9 +400,16 @@ public sealed class CrossDcRelayService : IDisposable
     /// <summary>The contact's character name (as announced via <c>keyAnnounce</c> - see
     /// <see cref="SendKeyAnnounceAsync"/>/the <c>keyAnnounce</c> case in <see cref="HandleIncomingPayload"/>),
     /// or the raw relay userId if no announcement carrying a name has arrived yet - always something
-    /// non-empty either way, so callers never need their own fallback.</summary>
-    public string GetDisplayName(string contactUserId) =>
-        (connectedUrl != null ? identity?.GetPeerDisplayName(connectedUrl, contactUserId) : null) ?? contactUserId;
+    /// non-empty either way, so callers never need their own fallback. The announced value is actually
+    /// "Name@World" (see <see cref="Plugin.GetLocalPlayerKey"/>) but only the name half is shown here -
+    /// which world a cross-DC contact plays on isn't this identity's information to broadcast just by
+    /// existing in a chat tab, per explicit user request.</summary>
+    public string GetDisplayName(string contactUserId)
+    {
+        var name = (connectedUrl != null ? identity?.GetPeerDisplayName(connectedUrl, contactUserId) : null) ?? contactUserId;
+        var at = name.IndexOf('@');
+        return at > 0 ? name[..at] : name;
+    }
 
     /// <summary>Encrypts and sends a chat message to an already-paired contact - false (and no local
     /// history entry added) if there's no live connection, no key for them yet (see
