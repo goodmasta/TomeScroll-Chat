@@ -28,7 +28,6 @@ public sealed class ConfigWindow : Window, IDisposable
     private string crossDcGroupNameInput = string.Empty;
     private string crossDcGroupRedeemCodeInput = string.Empty;
     private string? crossDcSelectedGroupId;
-    private string crossDcGroupMessageInput = string.Empty;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1598,8 +1597,9 @@ public sealed class ConfigWindow : Window, IDisposable
 
     /// <summary>Member roster (with role-gated promote/demote/transfer-ownership/kick actions - see each
     /// button's own condition, matching TomeScrollRelay's own owner &gt; moderator &gt; member server-side
-    /// enforcement exactly so a button never shows only to fail when clicked) plus the group's chat, for
-    /// whichever group is selected in <see cref="DrawCrossDcGroups"/>.</summary>
+    /// enforcement exactly so a button never shows only to fail when clicked), for whichever group is
+    /// selected in <see cref="DrawCrossDcGroups"/>. Chatting happens in the group's own tab (auto-created
+    /// the moment membership is established - see <c>Plugin.OnCrossDcGroupJoined</c>), not here.</summary>
     private void DrawCrossDcGroupDetails(CrossDcRelayService relay, CrossDcGroupInfo group)
     {
         var myUserId = relay.UserId ?? string.Empty;
@@ -1689,50 +1689,6 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextDisabled("(transfer ownership to someone else first - the relay won't let its owner just walk away)");
         }
-
-        DrawCrossDcGroupMessages(relay, group);
-    }
-
-    /// <summary>Message history for whichever group is selected, plus a box to send a new one - the
-    /// group-chat mirror of <see cref="DrawCrossDcMessages"/>. Sending is disabled until this identity has
-    /// a copy of the group's current key (see <see cref="CrossDcRelayService.HasGroupKey"/>'s doc comment
-    /// for when that can briefly not be the case yet).</summary>
-    private void DrawCrossDcGroupMessages(CrossDcRelayService relay, CrossDcGroupInfo group)
-    {
-        ImGui.Spacing();
-        ImGui.TextUnformatted("Chat");
-
-        using (var child = ImRaii.Child("CrossDcGroupMessagesView", new Vector2(0, 160), true))
-        {
-            if (child.Success)
-            {
-                foreach (var message in relay.GetGroupMessages(group.Id))
-                {
-                    var label = message.IsOutgoing ? "You" : relay.GetDisplayName(message.SenderUserId);
-                    ImGui.TextUnformatted($"[{message.Timestamp.ToLocalTime():HH:mm}] {label}: {message.Text}");
-                }
-            }
-        }
-
-        var hasKey = relay.HasGroupKey(group.Id);
-        using (ImRaii.Disabled(!hasKey))
-        {
-            ImGui.SetNextItemWidth(320);
-            var sendPressed = ImGui.InputTextWithHint("##crossDcGroupMessageInput", "Message...", ref crossDcGroupMessageInput, 500, ImGuiInputTextFlags.EnterReturnsTrue);
-            ImGui.SameLine();
-            sendPressed |= ImGui.Button("Send##crossDcGroupSendMessage");
-
-            if (sendPressed && crossDcGroupMessageInput.Length > 0)
-            {
-                var text = crossDcGroupMessageInput;
-                crossDcGroupMessageInput = string.Empty;
-                var groupId = group.Id;
-                _ = relay.SendGroupMessageAsync(groupId, text);
-            }
-        }
-
-        if (!hasKey)
-            ImGui.TextDisabled("Waiting for an owner/moderator to seal this group's key for you (usually arrives within moments if one's online) before you can message it.");
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap
