@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -79,6 +80,17 @@ public sealed class GeminiService : IDisposable
         if (!IsConfigured)
             return null;
 
+        // Reported live (2026-08-22) as occasionally taking a very long time, then every following call
+        // for a while being instant - logged unconditionally (not just on the slow path) so there's
+        // always a real number in /xllog to compare against next time this happens, rather than only
+        // ever guessing after the fact. The two standing hypotheses this can't distinguish between from
+        // just one data point: (a) SocketsHttpHandler had to open a fresh connection - expected the
+        // first call after any gap longer than PooledConnectionLifetime (5 minutes) below, or after the
+        // very first call this session - or (b) Gemini's own "Flash-Lite" tier has some cold-start
+        // latency server-side after a period with no traffic to this API key/model. A run of several
+        // slow-timestamped log lines with multi-minute gaps between them would point at (a); one-off
+        // slow calls with no such pattern would point at (b).
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             var model = string.IsNullOrWhiteSpace(configuration.GeminiModel) ? DefaultModel : configuration.GeminiModel;
@@ -95,6 +107,7 @@ public sealed class GeminiService : IDisposable
             using var requestContent = new StringContent(requestJson, Encoding.UTF8, "application/json");
             using var response = await http.PostAsync(url, requestContent).ConfigureAwait(false);
             var responseJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            LogElapsed(stopwatch.Elapsed);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -122,10 +135,21 @@ public sealed class GeminiService : IDisposable
         }
         catch (Exception ex)
         {
+            LogElapsed(stopwatch.Elapsed);
             log.Warning(ex, "TomeScrollChat: Gemini request failed");
             notificationService.Show(DescribeException(ex), NotificationSeverity.Warning);
             return null;
         }
+    }
+
+    private static readonly TimeSpan SlowCallThreshold = TimeSpan.FromSeconds(3);
+
+    private void LogElapsed(TimeSpan elapsed)
+    {
+        if (elapsed >= SlowCallThreshold)
+            log.Warning("TomeScrollChat: Gemini request took {ElapsedMs}ms - unusually slow, see GenerateTextAsync's own doc comment", (long)elapsed.TotalMilliseconds);
+        else
+            log.Debug("TomeScrollChat: Gemini request took {ElapsedMs}ms", (long)elapsed.TotalMilliseconds);
     }
 
     /// <summary>Common cases get a specific, actionable message; anything else falls back to a generic
