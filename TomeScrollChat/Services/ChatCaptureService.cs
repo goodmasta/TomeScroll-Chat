@@ -92,8 +92,8 @@ public sealed class ChatCaptureService : IDisposable
     private void Handle(IHandleableChatMessage message)
     {
         var chatType = message.LogKind;
-        var senderText = StripLeadingIconGlyphs(message.Sender.TextValue);
         var senderKey = ExtractSenderKey(message.Sender);
+        var senderText = BuildSenderText(message.Sender, senderKey);
         var isFromLocalPlayer = message.SourceKind == XivChatRelationKind.LocalPlayer;
         var (body, payloadLinks) = BuildBodyAndPayloadLinks(message.Message);
         // IChatMessage.Timestamp reads back 0 for the raw ChatMessage event in the Dalamud version
@@ -206,6 +206,26 @@ public sealed class ChatCaptureService : IDisposable
     /// place <see cref="Handle"/> reads the sender text, fixes both the stray glyph and that comparison
     /// at once. Real player names can never start with a PUA codepoint, so this is safe unconditionally
     /// for every channel, not just Party - a no-op wherever the game doesn't prefix anything.</para></summary>
+    /// <summary>A cross-world sender's name (a tell from another world, or apparently anywhere else the
+    /// game marks a name cross-world - e.g. Party/FC members) inserts an icon-only payload between the
+    /// name and world text runs to visually separate them in the native UI - unlike
+    /// <see cref="StripLeadingIconGlyphs"/>'s PUA character (present in <c>TextValue</c> but unmapped in
+    /// Dalamud's font, so it renders as a stray glyph), this icon payload contributes *no text at all* to
+    /// <c>TextValue</c>, so a plain read silently mashes the two runs together with nothing between them
+    /// at all ("Ren YanagiZodiark" - confirmed live 2026-08-22 via exact codepoint logging: literally zero
+    /// characters between "Yanagi" and "Zodiark", not even the icon glyph itself). When any such icon
+    /// payload is present, <paramref name="senderKey"/> - already built from the sender's
+    /// <see cref="PlayerPayload"/>'s own structured Name/World fields, not text concatenation, so it isn't
+    /// affected by this at all - is authoritative and used instead, giving a legible "Name@World" instead
+    /// of the broken concatenation.</summary>
+    private static string BuildSenderText(SeString sender, string senderKey)
+    {
+        if (!string.IsNullOrEmpty(senderKey) && sender.Payloads.Any(p => p is IconPayload))
+            return senderKey;
+
+        return StripLeadingIconGlyphs(sender.TextValue);
+    }
+
     private static string StripLeadingIconGlyphs(string senderText)
     {
         var start = 0;
