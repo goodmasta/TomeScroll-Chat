@@ -216,6 +216,17 @@ public sealed class DialogueTranslationWindow : Window
                     pendingScrollToBottom = true;
                     lastDrawnCount = entries.Count;
                 }
+
+                // Fixed 2026-08-22: a long enough new entry could leave the view short of the true
+                // bottom - pendingScrollToBottom's one-shot jump targets ScrollMaxY from the *previous*
+                // frame, but a long ImGui.TextWrapped block can still grow a little further once a
+                // scrollbar first appears (which narrows the wrap width, adding another line or two) -
+                // the exact same one-frame content-size lag MainWindow's own message list already
+                // works around with this same "if already at the bottom, keep sticking to it every
+                // frame" check (see its own DrawContent), which this window was missing entirely -
+                // it only ever jumped once instead of continuously re-anchoring.
+                if (!searchMode && ImGui.GetScrollY() >= ImGui.GetScrollMaxY() - 2f)
+                    ImGui.SetScrollHereY(1f);
             }
         }
     }
