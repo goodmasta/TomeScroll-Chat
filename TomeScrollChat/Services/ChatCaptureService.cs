@@ -382,14 +382,17 @@ public sealed class ChatCaptureService : IDisposable
     /// <b>2026-08-17</b>: extended past just "invalid slash command" (<c>The command "/xyz" does not
     /// exist.</c>) to also catch the chat-spam-guard message (<c>Your message was not heard. You must
     /// wait before using /tell, /say, /yell, or /shout again.</c>) - reported live as easy to miss the
-    /// same way the original invalid-command case was. Deliberately a short, exact-phrase allowlist
-    /// rather than a broader heuristic - each addition should be a real message seen live, not a
-    /// guess, to avoid false-positiving on unrelated errors sharing the same chat channels. English-
+    /// same way the original invalid-command case was. <b>2026-08-22</b>: extended again to catch a
+    /// failed outgoing tell (<c>Message to Name could not be sent.</c> - target offline/not found/
+    /// cross-world routing failure/etc.), same "easy to miss" report. Deliberately a short, exact-phrase
+    /// allowlist rather than a broader heuristic - each addition should be a real message seen live, not
+    /// a guess, to avoid false-positiving on unrelated errors sharing the same chat channels. English-
     /// client text only - not verified against other game languages.</summary>
     private static readonly string[] ChatSystemErrorMarkers =
     {
         "does not exist", // invalid slash command, e.g. "/xyz"
         "was not heard", // /tell, /say, /yell, /shout spam guard
+        "could not be sent", // outgoing /tell failed, e.g. "Message to Name could not be sent."
     };
 
     private static bool LooksLikeChatSystemError(string body) =>
