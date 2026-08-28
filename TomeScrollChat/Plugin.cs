@@ -750,22 +750,16 @@ public sealed class Plugin : IDalamudPlugin
         ChatHistoryService.SetMaxBytes(Configuration.MaxHistoryBytes);
     }
 
-    /// <summary>Startup load: uses the disk-cached manifest if it's still within the configured TTL,
-    /// same as before - fast, and doesn't hit BTTV/7TV/the standard-emoji CDN on every launch.</summary>
-    public void RefreshEmotes()
-    {
-        _ = RunEmoteRefresh(() => EmoteService.EnsureLoadedAsync(
-            Configuration.BttvEnabled,
-            Configuration.SevenTvEnabled,
-            Configuration.EmoteCustomChannels,
-            TimeSpan.FromHours(Configuration.EmoteCacheTtlHours)));
-    }
+    /// <summary>Startup load - per explicit user request (reported live: a newly-added standard-emoji
+    /// catalog entry didn't show up after reloading the plugin, because the old TTL-cached-manifest
+    /// path only rebuilt the list once the cache aged out), this now always rebuilds the emote list
+    /// from scratch on every single startup, same as <see cref="ForceRefreshEmotes"/> - just a small
+    /// handful of BTTV/7TV/standard-emoji API calls, not a re-download of every emote image (those stay
+    /// cached on disk independently, see <see cref="EmoteService"/>'s own per-image cache).</summary>
+    public void RefreshEmotes() => ForceRefreshEmotes();
 
-    /// <summary>The Settings "Refresh emotes now" button's handler. Unlike <see cref="RefreshEmotes"/>,
-    /// this always rebuilds the emote list from scratch (BTTV/7TV/standard emoji) regardless of the
-    /// disk cache's age - otherwise clicking it while the cache is still within its TTL (e.g. right
-    /// after adding more entries to the standard emoji catalog and reloading the plugin) would just
-    /// reload the same stale cached list and look like nothing happened.</summary>
+    /// <summary>The Settings "Refresh emotes now" button's handler - also what <see cref="RefreshEmotes"/>
+    /// calls at startup now, the two exist as separate names purely so each call site reads clearly.</summary>
     public void ForceRefreshEmotes()
     {
         _ = RunEmoteRefresh(() => EmoteService.RefreshAsync(Configuration.BttvEnabled, Configuration.SevenTvEnabled, Configuration.EmoteCustomChannels));

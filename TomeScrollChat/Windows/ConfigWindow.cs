@@ -1284,13 +1284,7 @@ public sealed class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
-        var ttl = configuration.EmoteCacheTtlHours;
-        ImGui.SetNextItemWidth(200);
-        if (ImGui.SliderInt("Cache refresh interval (hours)", ref ttl, 1, 168))
-        {
-            configuration.EmoteCacheTtlHours = ttl;
-            configuration.Save();
-        }
+        ImGui.TextDisabled("The full emote list (global sets + any channels below) is re-fetched automatically every time the plugin starts - downloaded emote images stay cached on disk regardless, so this is just a handful of small API calls, not a re-download of everything.");
 
         if (ImGui.Button("Refresh emotes now"))
             plugin.ForceRefreshEmotes();

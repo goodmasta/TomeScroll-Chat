@@ -19,10 +19,14 @@ namespace TomeScrollChat.Services;
 
 /// <summary>
 /// Fetches the BTTV and 7TV *global* emote sets, plus each configured channel's own emotes (see
-/// <see cref="Models.EmoteChannelConfig"/> - Settings &gt; Emotes' "Add channel" list), caches both the
-/// manifest and the raw emote images on disk (TTL-based refresh), and lazily decodes images into ImGui
-/// textures on first use. Dalamud's texture loader has no built-in WebP support, so images are decoded
-/// with ImageSharp into raw RGBA32 and handed to
+/// <see cref="Models.EmoteChannelConfig"/> - Settings &gt; Emotes' "Add channel" list). The full list is
+/// rebuilt from scratch every time <see cref="RefreshAsync"/> runs - see <c>Plugin.RefreshEmotes</c>'s
+/// own doc comment for why this happens unconditionally on every plugin startup rather than being gated
+/// by a disk-cached manifest's age. Downloaded emote *images* still cache to disk independently
+/// (<see cref="GetImageBytesAsync"/>) and are only re-fetched if actually missing, so a full rebuild is
+/// cheap - just the handful of small provider API calls, not re-downloading every image. Images are
+/// lazily decoded into ImGui textures on first use; Dalamud's texture loader has no built-in WebP
+/// support, so images are decoded with ImageSharp into raw RGBA32 and handed to
 /// <see cref="ITextureProvider.CreateFromRawAsync(RawImageSpecification, ReadOnlyMemory{byte}, string?, CancellationToken)"/>
 /// rather than relying on any built-in image format support.
 /// </summary>
@@ -90,18 +94,6 @@ public sealed class EmoteService : IDisposable
 
     /// <summary>True once at least one successful refresh (from disk cache or network) has populated the emote table.</summary>
     public bool IsReady { get; private set; }
-
-    /// <summary>Loads from disk cache if fresh, otherwise refetches from BTTV/7TV. Safe to call repeatedly - a call while a refresh is already running is ignored.</summary>
-    public async Task EnsureLoadedAsync(bool bttvEnabled, bool sevenTvEnabled, IReadOnlyList<EmoteChannelConfig> customChannels, TimeSpan ttl)
-    {
-        if (TryLoadManifestFromDisk(ttl))
-        {
-            IsReady = true;
-            return;
-        }
-
-        await RefreshAsync(bttvEnabled, sevenTvEnabled, customChannels).ConfigureAwait(false);
-    }
 
     public async Task RefreshAsync(bool bttvEnabled, bool sevenTvEnabled, IReadOnlyList<EmoteChannelConfig> customChannels)
     {
@@ -411,34 +403,6 @@ public sealed class EmoteService : IDisposable
         }
 
         throw lastError ?? new InvalidOperationException($"No Twemoji mirrors configured for {def.Code}");
-    }
-
-    private bool TryLoadManifestFromDisk(TimeSpan ttl)
-    {
-        try
-        {
-            if (!File.Exists(manifestPath))
-                return false;
-
-            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(manifestPath) > ttl)
-                return false;
-
-            var json = File.ReadAllText(manifestPath);
-            var entries = JsonSerializer.Deserialize<List<ManifestEntry>>(json);
-            if (entries == null || entries.Count == 0)
-                return false;
-
-            byCode.Clear();
-            foreach (var e in entries)
-                byCode[e.Code] = new EmoteDefinition { Code = e.Code, Id = e.Id, ImageUrl = e.ImageUrl, Provider = e.Provider };
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "TomeScrollChat: failed to load cached emote manifest");
-            return false;
-        }
     }
 
     private void SaveManifestToDisk(List<EmoteDefinition> definitions)

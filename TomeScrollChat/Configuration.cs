@@ -44,9 +44,6 @@ public class Configuration : IPluginConfiguration
 
     public float EmoteScale { get; set; } = 1.0f;
 
-    /// <summary>Hours a cached emote set/image is considered fresh before being re-fetched.</summary>
-    public int EmoteCacheTtlHours { get; set; } = 24;
-
     /// <summary>Hard cap, in bytes, on total chat history stored on disk (default 1 GiB). Oldest messages are pruned first.</summary>
     public long MaxHistoryBytes { get; set; } = 1L * 1024 * 1024 * 1024;
 
@@ -399,7 +396,6 @@ public class Configuration : IPluginConfiguration
         EmoteCustomChannels = defaults.EmoteCustomChannels;
         CrossDcEmoteSyncGroupIds = defaults.CrossDcEmoteSyncGroupIds;
         EmoteScale = defaults.EmoteScale;
-        EmoteCacheTtlHours = defaults.EmoteCacheTtlHours;
         MaxHistoryBytes = defaults.MaxHistoryBytes;
         ChannelBlinkColor = defaults.ChannelBlinkColor;
         ChannelUnreadCountColor = defaults.ChannelUnreadCountColor;
