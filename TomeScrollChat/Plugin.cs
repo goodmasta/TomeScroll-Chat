@@ -103,7 +103,11 @@ public sealed class Plugin : IDalamudPlugin
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
-        TabManager = new TabManager(Configuration);
+        // Novice Network eligibility genuinely isn't known yet if this identity's very first run
+        // happens before the character has finished loading (e.g. the plugin loading at the title
+        // screen) - err toward keeping the tab rather than dropping it for someone who actually is
+        // eligible, only skip it once IsLoaded confirms IsNovice is actually false.
+        TabManager = new TabManager(Configuration, () => !PlayerState.IsLoaded || PlayerState.IsNovice);
         // Cleans up a popped-out floating window for any tab removed from anywhere, including paths
         // that don't already do this inline themselves (SetTabDetached/CloseAllWhisperTabs do, so
         // this is a harmless no-op for those) - added specifically for SyncAutoLinkshellTabs removing

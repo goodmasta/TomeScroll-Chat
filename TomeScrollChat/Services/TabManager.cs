@@ -11,12 +11,18 @@ public sealed class TabManager
 {
     private readonly Configuration configuration;
 
-    public TabManager(Configuration configuration)
+    /// <summary>Whether the built-in "Novice Chat" tab should exist - see
+    /// <see cref="DefaultTabFactory.CreateDefaults"/>'s own doc comment for the "unknown yet" fallback
+    /// this is expected to bake in itself (<c>Plugin</c>'s own delegate does).</summary>
+    private readonly Func<bool> isNoviceEligible;
+
+    public TabManager(Configuration configuration, Func<bool> isNoviceEligible)
     {
         this.configuration = configuration;
+        this.isNoviceEligible = isNoviceEligible;
         if (configuration.Tabs.Count == 0)
         {
-            configuration.Tabs.AddRange(DefaultTabFactory.CreateDefaults());
+            configuration.Tabs.AddRange(DefaultTabFactory.CreateDefaults(isNoviceEligible()));
             configuration.Save();
         }
         else
@@ -81,7 +87,7 @@ public sealed class TabManager
         foreach (var tab in configuration.Tabs.ToList())
             RemoveTab(tab);
 
-        var defaults = DefaultTabFactory.CreateDefaults();
+        var defaults = DefaultTabFactory.CreateDefaults(isNoviceEligible());
         configuration.Tabs.AddRange(defaults);
         configuration.Save();
 

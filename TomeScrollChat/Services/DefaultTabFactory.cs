@@ -75,12 +75,27 @@ public static class DefaultTabFactory
         XivChatType.TellOutgoing,
     };
 
-    public static List<ChatTabConfig> CreateDefaults() => new()
+    /// <summary>The five built-in tabs, minus "Novice Chat" when <paramref name="includeNovice"/> is
+    /// false - per explicit user request, a character no longer in the Novice Network (past the level
+    /// cap, or opted out via the native "Leave the Novice Network" toggle - see
+    /// <see cref="Dalamud.Plugin.Services.IPlayerState.IsNovice"/>, which mirrors the game's own
+    /// eligibility check exactly) shouldn't get a tab for a channel it can't actually use. Callers pass
+    /// <c>true</c> when eligibility genuinely isn't known yet (e.g. this identity's very first run
+    /// happens before a character has finished loading) - erring toward keeping the tab rather than
+    /// silently dropping it for a player who actually is eligible.</summary>
+    public static List<ChatTabConfig> CreateDefaults(bool includeNovice = true)
     {
-        new ChatTabConfig { Name = "Party", Channels = new(PartyChannels), OutgoingChannelCommand = "/p", IsBuiltIn = true },
-        new ChatTabConfig { Name = "General", Channels = new(GeneralChannels), OutgoingChannelCommand = "/s", IsBuiltIn = true },
-        new ChatTabConfig { Name = "Free Company", Channels = new(FreeCompanyChannels), OutgoingChannelCommand = "/fc", IsBuiltIn = true },
-        new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/n", IsBuiltIn = true },
-        new ChatTabConfig { Name = "Log", Channels = new(LogChannels), OutgoingChannelCommand = string.Empty, IsBuiltIn = true },
-    };
+        var defaults = new List<ChatTabConfig>
+        {
+            new() { Name = "Party", Channels = new(PartyChannels), OutgoingChannelCommand = "/p", IsBuiltIn = true },
+            new() { Name = "General", Channels = new(GeneralChannels), OutgoingChannelCommand = "/s", IsBuiltIn = true },
+            new() { Name = "Free Company", Channels = new(FreeCompanyChannels), OutgoingChannelCommand = "/fc", IsBuiltIn = true },
+        };
+
+        if (includeNovice)
+            defaults.Add(new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/n", IsBuiltIn = true });
+
+        defaults.Add(new ChatTabConfig { Name = "Log", Channels = new(LogChannels), OutgoingChannelCommand = string.Empty, IsBuiltIn = true });
+        return defaults;
+    }
 }
