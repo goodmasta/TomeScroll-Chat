@@ -397,18 +397,28 @@ public sealed class CrossDcRelayService : IDisposable
     public bool HasGroupKey(string groupId) =>
         connectedUrl != null && identity?.GetGroup(connectedUrl, groupId)?.KeyBase64 != null;
 
-    /// <summary>The contact's character name (as announced via <c>keyAnnounce</c> - see
-    /// <see cref="SendKeyAnnounceAsync"/>/the <c>keyAnnounce</c> case in <see cref="HandleIncomingPayload"/>),
+    /// <summary>The contact's character name (as announced via 1:1 <c>keyAnnounce</c> or a group
+    /// <c>nameAnnounce</c> - see <see cref="SendKeyAnnounceAsync"/>/<see cref="SendGroupNameAnnounceAsync"/>),
     /// or the raw relay userId if no announcement carrying a name has arrived yet - always something
     /// non-empty either way, so callers never need their own fallback. The announced value is actually
     /// "Name@World" (see <see cref="Plugin.GetLocalPlayerKey"/>) but only the name half is shown here -
     /// which world a cross-DC contact plays on isn't this identity's information to broadcast just by
-    /// existing in a chat tab, per explicit user request.</summary>
+    /// existing in a chat tab, per explicit user request.
+    ///
+    /// <para><paramref name="contactUserId"/> being this identity's *own* <see cref="UserId"/> (e.g. its
+    /// own row in a group member list) is handled specially: nobody ever announces a name to themselves
+    /// (the announce paths only ever fire outward, see <see cref="SendKeyAnnounceAsync"/>/
+    /// <see cref="SendGroupNameAnnounceAsync"/>'s own callers), so <see cref="RelayIdentityService.GetPeerDisplayName"/>
+    /// would never have an entry for it - resolved directly from <c>getLocalPlayerName</c> instead,
+    /// reported live (2026-08-22) as showing the raw userId for "you" in a group's member list otherwise.</para></summary>
     public string GetDisplayName(string contactUserId)
     {
-        var name = (connectedUrl != null ? identity?.GetPeerDisplayName(connectedUrl, contactUserId) : null) ?? contactUserId;
-        var at = name.IndexOf('@');
-        return at > 0 ? name[..at] : name;
+        var raw = contactUserId == UserId
+            ? getLocalPlayerName() ?? contactUserId
+            : (connectedUrl != null ? identity?.GetPeerDisplayName(connectedUrl, contactUserId) : null) ?? contactUserId;
+
+        var at = raw.IndexOf('@');
+        return at > 0 ? raw[..at] : raw;
     }
 
     /// <summary>Encrypts and sends a chat message to an already-paired contact - false (and no local
@@ -511,6 +521,49 @@ public sealed class CrossDcRelayService : IDisposable
 
         AppendGroupMessage(groupId, new CrossDcChatMessage(UserId, text, DateTimeOffset.UtcNow, IsOutgoing: true));
         return true;
+    }
+
+    /// <summary>Re-announces this identity's current character name to a group it has a key for - the
+    /// manual "refresh name" action, group mirror of <see cref="RefreshMyNameAsync"/>. Best-effort/
+    /// fire-and-forget, same reasoning as the 1:1 version.</summary>
+    public Task RefreshMyNameInGroupAsync(string groupId, CancellationToken cancellationToken = default) =>
+        SendGroupNameAnnounceAsync(groupId, cancellationToken);
+
+    /// <summary>Encrypts and broadcasts this identity's current character name to every member of
+    /// <paramref name="groupId"/> - the group mirror of the 1:1 <c>keyAnnounce</c>'s <c>DisplayName</c>
+    /// piggyback (see <see cref="SendKeyAnnounceAsync"/>), just as its own message type on the group's
+    /// already-encrypted channel instead of riding along with a key exchange (a group member's key comes
+    /// from a completely different mechanism - sealing, see <see cref="ApplySealedGroupKey"/> - that has
+    /// no natural place to attach a name to). A no-op if this identity has no name to announce, or no
+    /// group key yet to encrypt it with (nothing meaningful to send in either case). Triggered
+    /// automatically whenever this identity's own group key becomes ready/rotates (<see cref="ApplySealedGroupKey"/>),
+    /// on every reconnect for a group it already has a key for (<see cref="RunAsync"/>), and by an
+    /// existing member noticing someone new join (<see cref="HandleGroupMemberJoined"/>) - covers both
+    /// directions (a joiner announcing themselves, and existing members re-announcing to a new joiner)
+    /// as long as *someone* relevant is online at the right moment, same best-effort contract as every
+    /// other group notification in this class.</summary>
+    private async Task SendGroupNameAnnounceAsync(string groupId, CancellationToken cancellationToken)
+    {
+        if (identity == null || connectedUrl == null || UserId == null)
+            return;
+
+        var myName = getLocalPlayerName();
+        if (string.IsNullOrEmpty(myName))
+            return;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state?.KeyBase64 == null)
+            return;
+
+        var nonce = RandomNumberGenerator.GetBytes(24);
+        var plaintext = Encoding.UTF8.GetBytes(myName);
+        var ciphertext = identity.EncryptGroupMessage(Convert.FromBase64String(state.KeyBase64), groupId, state.Epoch, UserId, nonce, plaintext);
+        if (ciphertext == null)
+            return;
+
+        var envelope = new GroupChatMessageEnvelope("nameAnnounce", Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext), state.Epoch);
+        var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
+        await SendRawAsync(new RelaySendGroupRequest("sendGroup", groupId, payload), cancellationToken).ConfigureAwait(false);
     }
 
     private void AppendGroupMessage(string groupId, CrossDcChatMessage message)
@@ -629,6 +682,10 @@ public sealed class CrossDcRelayService : IDisposable
         state.Epoch = epoch;
         identity.PersistGroups();
         log.Info("TomeScrollChat: cross-DC group {GroupId} key ready (epoch {Epoch})", groupId, epoch);
+
+        // Now able to encrypt for the group for the first time (or again, post-rotation) - announce this
+        // identity's name so members online right now learn/refresh it, same as a fresh 1:1 pairing does.
+        _ = SendGroupNameAnnounceAsync(groupId, CancellationToken.None);
     }
 
     private void UpdateGroupRole(string groupId, string userId, bool isModerator)
@@ -676,8 +733,30 @@ public sealed class CrossDcRelayService : IDisposable
         log.Info("TomeScrollChat: {UserId} joined cross-DC group {GroupId}", newMemberId, groupId);
 
         var myUserId = UserId;
-        if (myUserId != null && state.KeyBase64 != null && (state.OwnerId == myUserId || state.ModeratorIds.Contains(myUserId)))
-            _ = DistributeGroupKeyToMemberAsync(groupId, newMemberId, Convert.FromBase64String(state.KeyBase64), state.Epoch, CancellationToken.None);
+        if (myUserId != null && state.KeyBase64 != null)
+            _ = DistributeKeyThenAnnounceNameAsync(groupId, newMemberId, state, myUserId);
+    }
+
+    /// <summary>Distributes the group's current key to a newly-joined member (if this identity is the
+    /// owner/moderator, i.e. actually able to), *then* announces this identity's own name - deliberately
+    /// sequenced rather than fired as two parallel fire-and-forget tasks. Reported live (2026-08-22): a
+    /// parallel announce regularly raced ahead of the key distribution and reached the new member before
+    /// they had anything to decrypt it with, silently dropped with no retry (unlike an ordinary chat
+    /// message, a lost one-shot announce has no "next one" to fall back on within the same join). Awaiting
+    /// the distribution first doesn't *guarantee* the new member has already applied the key by the time
+    /// the announce arrives (still two separate frames, still no ack from their side) - but since the
+    /// relay pushes them their sealed key as the direct, immediate follow-up to this identity's own
+    /// <c>setGroupMemberKey</c> call completing, in practice they're using it well before this identity
+    /// even finishes distributing it, let alone before the now-later announce arrives.</summary>
+    private async Task DistributeKeyThenAnnounceNameAsync(string groupId, string newMemberId, GroupState state, string myUserId)
+    {
+        if (state.OwnerId == myUserId || state.ModeratorIds.Contains(myUserId))
+            await DistributeGroupKeyToMemberAsync(groupId, newMemberId, Convert.FromBase64String(state.KeyBase64!), state.Epoch, CancellationToken.None).ConfigureAwait(false);
+
+        // The new joiner also announces themselves once *they* get a key (see ApplySealedGroupKey) - this
+        // is the matching other direction, so they also learn *this* identity's name promptly rather than
+        // only picking it up whenever this identity next happens to reconnect.
+        await SendGroupNameAnnounceAsync(groupId, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>Parses the client-level envelope carried inside a relay <c>groupMessage</c>'s opaque
@@ -712,7 +791,25 @@ public sealed class CrossDcRelayService : IDisposable
             return;
         }
 
-        AppendGroupMessage(groupId, new CrossDcChatMessage(fromUserId, Encoding.UTF8.GetString(plaintext), DateTimeOffset.UtcNow, IsOutgoing: false));
+        switch (envelope.Type)
+        {
+            case "chat":
+                AppendGroupMessage(groupId, new CrossDcChatMessage(fromUserId, Encoding.UTF8.GetString(plaintext), DateTimeOffset.UtcNow, IsOutgoing: false));
+                break;
+
+            case "nameAnnounce":
+                // Same table 1:1 pairing uses (peerNamesByUrl, keyed by userId alone, not by group) - a
+                // display name is a fact about the *identity*, not about any one group they happen to
+                // share with this client, so GetDisplayName resolves it uniformly either way.
+                var announcedName = Encoding.UTF8.GetString(plaintext);
+                if (!string.IsNullOrWhiteSpace(announcedName))
+                    identity.SetPeerDisplayName(connectedUrl, fromUserId, announcedName);
+                break;
+
+            default:
+                log.Debug("TomeScrollChat: cross-DC group message from {From} had an unrecognized payload type {Type}", fromUserId, envelope.Type ?? "(none)");
+                break;
+        }
     }
 
     /// <summary>Clears <see cref="IsAdmin"/> and the locally-cached "admin on this URL" fact (see
@@ -836,10 +933,19 @@ public sealed class CrossDcRelayService : IDisposable
             foreach (var (groupId, state) in identity.GetGroups(url).ToArray())
             {
                 GroupJoined?.Invoke(groupId);
-                // Retry in case this identity joined (or missed a rotation) while nobody who could seal a
-                // key was online - best-effort, matches every other group notification's contract.
                 if (state.KeyBase64 == null)
+                {
+                    // Retry in case this identity joined (or missed a rotation) while nobody who could
+                    // seal a key was online - best-effort, matches every other group notification's
+                    // contract.
                     _ = GetGroupMemberKeyAsync(groupId, cancellationToken);
+                }
+                else
+                {
+                    // Re-announce this identity's name too, in case a member who was offline when it was
+                    // last sent is online now.
+                    _ = SendGroupNameAnnounceAsync(groupId, cancellationToken);
+                }
             }
 
             log.Info("TomeScrollChat: connected to cross-DC relay as {UserId} ({Url})", userId, url);

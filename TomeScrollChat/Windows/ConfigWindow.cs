@@ -1689,6 +1689,12 @@ public sealed class ConfigWindow : Window, IDisposable
             ImGui.SameLine();
             ImGui.TextDisabled("(transfer ownership to someone else first - the relay won't let its owner just walk away)");
         }
+
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Refresh my name##crossDcRefreshGroupName"))
+            _ = relay.RefreshMyNameInGroupAsync(group.Id);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Re-announces your current character name to this group - use this if you renamed/switched characters, or if a member who was offline when you joined is online now.");
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap
