@@ -93,7 +93,7 @@ public static class DefaultTabFactory
         };
 
         if (includeNovice)
-            defaults.Add(new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/n", IsBuiltIn = true });
+            defaults.Add(new ChatTabConfig { Name = "Novice Chat", Channels = new(NoviceChannels), OutgoingChannelCommand = "/n", IsBuiltIn = true, IconEmoji = "seedling" });
 
         defaults.Add(new ChatTabConfig { Name = "Log", Channels = new(LogChannels), OutgoingChannelCommand = string.Empty, IsBuiltIn = true });
         return defaults;

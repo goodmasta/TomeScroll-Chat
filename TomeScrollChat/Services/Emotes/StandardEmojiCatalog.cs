@@ -59,5 +59,9 @@ public static class StandardEmojiCatalog
         ("cat", "1f431"), ("dog", "1f436"), ("monkey_face", "1f435"), ("chicken", "1f414"),
         ("penguin", "1f427"), ("unicorn", "1f984"), ("dragon_face", "1f409"), ("trex", "1f996"),
         ("shark", "1f988"), ("octopus", "1f419"), ("crab", "1f980"),
+
+        // Nature - "seedling" is the built-in Novice Chat tab's icon (DefaultTabFactory), the closest
+        // Twemoji equivalent to FFXIV's own green "New Adventurer" sprout mark.
+        ("seedling", "1f331"),
     };
 }
