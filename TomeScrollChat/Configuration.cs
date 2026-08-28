@@ -31,8 +31,16 @@ public class Configuration : IPluginConfiguration
 
     public bool SevenTvEnabled { get; set; } = true;
 
-    /// <summary>Optional Twitch channel (login name) whose BTTV/7TV channel emotes are loaded in addition to the global sets.</summary>
-    public string EmoteTwitchChannel { get; set; } = string.Empty;
+    /// <summary>Additional BTTV/7TV channels (beyond the always-loaded global sets) whose emotes are
+    /// also loaded - see <see cref="Models.EmoteChannelConfig"/>'s own doc comment for why each entry
+    /// is a numeric Twitch ID rather than a channel name.</summary>
+    public List<EmoteChannelConfig> EmoteCustomChannels { get; set; } = new();
+
+    /// <summary>Cross-DC group ids this identity shares its <see cref="EmoteCustomChannels"/> list with
+    /// (and accepts updates from) - see <see cref="Plugin.SyncEmoteChannelsToGroups"/>/
+    /// <see cref="Plugin.OnCrossDcEmoteChannelsSyncReceived"/>. Off (empty) by default; opted into per
+    /// group from that group's own Settings panel, not globally.</summary>
+    public HashSet<string> CrossDcEmoteSyncGroupIds { get; set; } = new();
 
     public float EmoteScale { get; set; } = 1.0f;
 
@@ -388,7 +396,8 @@ public class Configuration : IPluginConfiguration
         OpenLinksOnClick = defaults.OpenLinksOnClick;
         BttvEnabled = defaults.BttvEnabled;
         SevenTvEnabled = defaults.SevenTvEnabled;
-        EmoteTwitchChannel = defaults.EmoteTwitchChannel;
+        EmoteCustomChannels = defaults.EmoteCustomChannels;
+        CrossDcEmoteSyncGroupIds = defaults.CrossDcEmoteSyncGroupIds;
         EmoteScale = defaults.EmoteScale;
         EmoteCacheTtlHours = defaults.EmoteCacheTtlHours;
         MaxHistoryBytes = defaults.MaxHistoryBytes;

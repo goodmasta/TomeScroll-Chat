@@ -102,6 +102,12 @@ internal sealed record RelayGroupMemberLeftMessage(string? Type, string? GroupId
 /// chat where the derived key never changes).</summary>
 internal sealed record GroupChatMessageEnvelope(string Type, string Nonce, string Ciphertext, long Epoch);
 
+/// <summary>The plaintext wrapped inside a <see cref="GroupChatMessageEnvelope"/> whose
+/// <c>Type</c> is <c>"emoteChannels"</c> (see <see cref="CrossDcRelayService.SendEmoteChannelsSyncAsync"/>) -
+/// a JSON array of this shape is what actually gets encrypted, one entry per additional BTTV/7TV
+/// channel the sender has configured (see <see cref="TomeScrollChat.Models.EmoteChannelConfig"/>).</summary>
+internal sealed record EmoteChannelSyncEntry(string TwitchId, string Label);
+
 /// <summary>Client-level envelope carried as the opaque <c>payload</c> of a relay <c>send</c>/
 /// <c>message</c> - the relay never looks inside this, it's purely between the two clients. Two kinds:
 /// <c>keyAnnounce</c> (announce this identity's X25519 public key to a newly-paired contact) and

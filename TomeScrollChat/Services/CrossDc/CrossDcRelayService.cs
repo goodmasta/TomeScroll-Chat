@@ -25,6 +25,12 @@ public sealed record CrossDcChatMessage(string SenderUserId, string Text, DateTi
 /// <see cref="CrossDcRelayService.Groups"/>'s own doc comment for why that can happen.</summary>
 public sealed record CrossDcGroupInfo(string Id, string Name, string OwnerId, IReadOnlyList<string> Members, IReadOnlyList<string> ModeratorIds);
 
+/// <summary>One additional BTTV/7TV channel as carried over a group's emote-channel sync (see
+/// <see cref="CrossDcRelayService.SendEmoteChannelsSyncAsync"/>/<see cref="CrossDcRelayService.EmoteChannelsSyncReceived"/>) -
+/// the cross-DC layer's own copy of <c>TomeScrollChat.Models.EmoteChannelConfig</c>'s two fields, kept
+/// separate so this layer doesn't need a dependency on that model type; <c>Plugin</c> maps between them.</summary>
+public sealed record CrossDcEmoteChannel(string TwitchId, string Label);
+
 /// <summary>
 /// Owns the cross-DC relay connection lifecycle - resolves which server to use from
 /// <see cref="Configuration.CrossDcRelayMode"/>, connects, completes the Ed25519 challenge/response
@@ -129,6 +135,15 @@ public sealed class CrossDcRelayService : IDisposable
 
     /// <summary>The group-chat mirror of <see cref="MessageAppended"/>.</summary>
     public event Action<string, CrossDcChatMessage>? GroupMessageAppended;
+
+    /// <summary>Fired when a group member (any member, not just the owner/moderators - there's no
+    /// server-side concept of "who's allowed to share their emote list") broadcasts their
+    /// <see cref="CrossDcEmoteChannel"/> list via <see cref="SendEmoteChannelsSyncAsync"/>. <c>Plugin</c>
+    /// only actually applies this for a group the player opted into syncing with (see
+    /// <see cref="Configuration.CrossDcEmoteSyncGroupIds"/>) - this event fires regardless of that,
+    /// since <see cref="CrossDcRelayService"/> itself has no concept of local emote settings to check
+    /// against.</summary>
+    public event Action<string, IReadOnlyList<CrossDcEmoteChannel>>? EmoteChannelsSyncReceived;
 
     public CrossDcRelayService(string configDirectory, Configuration configuration, IPluginLog log, Func<string?> getLocalPlayerName)
     {
@@ -566,6 +581,34 @@ public sealed class CrossDcRelayService : IDisposable
         await SendRawAsync(new RelaySendGroupRequest("sendGroup", groupId, payload), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Broadcasts <paramref name="channels"/> to every member of <paramref name="groupId"/> -
+    /// same encrypted group-message channel as <see cref="SendGroupNameAnnounceAsync"/>, just carrying a
+    /// JSON array (<see cref="EmoteChannelSyncEntry"/>) instead of a plain name string. <c>Plugin</c>
+    /// calls this (via a public wrapper it exposes) whenever the local emote-channel list changes and at
+    /// least one group is opted into syncing - see <see cref="EmoteChannelsSyncReceived"/>'s own doc
+    /// comment for why this service itself has no opinion on *which* groups that should be. False (no
+    /// send attempted) if there's no group key yet to encrypt with.</summary>
+    public async Task<bool> SendEmoteChannelsSyncAsync(string groupId, IReadOnlyList<CrossDcEmoteChannel> channels, CancellationToken cancellationToken = default)
+    {
+        if (identity == null || connectedUrl == null || UserId == null)
+            return false;
+
+        var state = identity.GetGroup(connectedUrl, groupId);
+        if (state?.KeyBase64 == null)
+            return false;
+
+        var entries = channels.Select(c => new EmoteChannelSyncEntry(c.TwitchId, c.Label)).ToList();
+        var nonce = RandomNumberGenerator.GetBytes(24);
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(entries, RelayProtocolJson.Options);
+        var ciphertext = identity.EncryptGroupMessage(Convert.FromBase64String(state.KeyBase64), groupId, state.Epoch, UserId, nonce, plaintext);
+        if (ciphertext == null)
+            return false;
+
+        var envelope = new GroupChatMessageEnvelope("emoteChannels", Convert.ToBase64String(nonce), Convert.ToBase64String(ciphertext), state.Epoch);
+        var payload = JsonSerializer.Serialize(envelope, RelayProtocolJson.Options);
+        return await SendRawAsync(new RelaySendGroupRequest("sendGroup", groupId, payload), cancellationToken).ConfigureAwait(false);
+    }
+
     private void AppendGroupMessage(string groupId, CrossDcChatMessage message)
     {
         if (!messagesByGroup.TryGetValue(groupId, out var messages))
@@ -804,6 +847,12 @@ public sealed class CrossDcRelayService : IDisposable
                 var announcedName = Encoding.UTF8.GetString(plaintext);
                 if (!string.IsNullOrWhiteSpace(announcedName))
                     identity.SetPeerDisplayName(connectedUrl, fromUserId, announcedName);
+                break;
+
+            case "emoteChannels":
+                var entries = TryDeserializeBytes<List<EmoteChannelSyncEntry>>(plaintext);
+                if (entries != null)
+                    EmoteChannelsSyncReceived?.Invoke(groupId, entries.Select(e => new CrossDcEmoteChannel(e.TwitchId, e.Label)).ToArray());
                 break;
 
             default:
@@ -1438,6 +1487,23 @@ public sealed class CrossDcRelayService : IDisposable
         catch (JsonException ex)
         {
             log.Warning(ex, "TomeScrollChat: cross-DC relay sent a malformed {Type} frame", typeof(T).Name);
+            return null;
+        }
+    }
+
+    /// <summary>Same as <see cref="TryDeserialize{T}(string)"/>, for a decrypted group-message plaintext
+    /// (already raw bytes, not a JSON string wrapping something else) - used for
+    /// <see cref="EmoteChannelSyncEntry"/> lists, which unlike <c>nameAnnounce</c>'s plain UTF8 name text
+    /// are themselves JSON.</summary>
+    private T? TryDeserializeBytes<T>(byte[] plaintext) where T : class
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(plaintext, RelayProtocolJson.Options);
+        }
+        catch (JsonException ex)
+        {
+            log.Warning(ex, "TomeScrollChat: cross-DC group message had a malformed {Type} payload", typeof(T).Name);
             return null;
         }
     }

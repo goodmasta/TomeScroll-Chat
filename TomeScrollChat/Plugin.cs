@@ -148,6 +148,7 @@ public sealed class Plugin : IDalamudPlugin
         CrossDcRelayService.GroupJoined += OnCrossDcGroupJoined;
         CrossDcRelayService.GroupLeft += OnCrossDcGroupLeft;
         CrossDcRelayService.GroupMessageAppended += OnCrossDcGroupMessageAppended;
+        CrossDcRelayService.EmoteChannelsSyncReceived += OnCrossDcEmoteChannelsSyncReceived;
 
         mainWindow = new MainWindow(this);
         configWindow = new ConfigWindow(this);
@@ -319,6 +320,58 @@ public sealed class Plugin : IDalamudPlugin
             TabMessageBuffer.Append(tab, record);
             if (!message.IsOutgoing)
                 mainWindow.NotifyUnread(tab);
+        });
+
+    /// <summary>Re-broadcasts <see cref="Configuration.EmoteCustomChannels"/> to every cross-DC group
+    /// opted into sync (<see cref="Configuration.CrossDcEmoteSyncGroupIds"/>) - called whenever that
+    /// list changes (Settings &gt; Emotes' add/remove buttons) and whenever a group's sync checkbox is
+    /// first turned on (so it catches up on the current list immediately rather than waiting for the
+    /// next unrelated change). A no-op if no group is currently opted in.</summary>
+    public void SyncEmoteChannelsToGroups()
+    {
+        if (Configuration.CrossDcEmoteSyncGroupIds.Count == 0)
+            return;
+
+        var channels = Configuration.EmoteCustomChannels
+            .Select(c => new CrossDcEmoteChannel(c.TwitchId, c.Label))
+            .ToArray();
+
+        foreach (var groupId in Configuration.CrossDcEmoteSyncGroupIds.ToArray())
+            _ = CrossDcRelayService.SendEmoteChannelsSyncAsync(groupId, channels);
+    }
+
+    /// <summary>A group member broadcast their emote-channel list (see
+    /// <see cref="Services.CrossDc.CrossDcRelayService.EmoteChannelsSyncReceived"/>'s own doc comment on
+    /// why this fires for every group regardless of sync opt-in) - applied only if this identity has
+    /// actually opted this specific group into syncing. *Additive* merge, never a destructive replace:
+    /// a channel the sender has that this identity doesn't gets added; nothing already configured here
+    /// is ever removed just because someone else's list didn't happen to include it (their list not
+    /// having your entry doesn't mean they're asking you to drop it - they may simply not have added it
+    /// themselves yet).</summary>
+    private void OnCrossDcEmoteChannelsSyncReceived(string groupId, IReadOnlyList<CrossDcEmoteChannel> channels) =>
+        Framework.RunOnFrameworkThread(() =>
+        {
+            if (!Configuration.CrossDcEmoteSyncGroupIds.Contains(groupId))
+                return;
+
+            var changed = false;
+            foreach (var channel in channels)
+            {
+                if (string.IsNullOrWhiteSpace(channel.TwitchId))
+                    continue;
+
+                if (Configuration.EmoteCustomChannels.Any(c => c.TwitchId == channel.TwitchId))
+                    continue;
+
+                Configuration.EmoteCustomChannels.Add(new EmoteChannelConfig { TwitchId = channel.TwitchId, Label = channel.Label });
+                changed = true;
+            }
+
+            if (!changed)
+                return;
+
+            Configuration.Save();
+            ForceRefreshEmotes();
         });
 
     /// <summary>Whether a captured message is the local player's own outgoing message - same check
@@ -700,6 +753,7 @@ public sealed class Plugin : IDalamudPlugin
         _ = RunEmoteRefresh(() => EmoteService.EnsureLoadedAsync(
             Configuration.BttvEnabled,
             Configuration.SevenTvEnabled,
+            Configuration.EmoteCustomChannels,
             TimeSpan.FromHours(Configuration.EmoteCacheTtlHours)));
     }
 
@@ -710,7 +764,7 @@ public sealed class Plugin : IDalamudPlugin
     /// reload the same stale cached list and look like nothing happened.</summary>
     public void ForceRefreshEmotes()
     {
-        _ = RunEmoteRefresh(() => EmoteService.RefreshAsync(Configuration.BttvEnabled, Configuration.SevenTvEnabled));
+        _ = RunEmoteRefresh(() => EmoteService.RefreshAsync(Configuration.BttvEnabled, Configuration.SevenTvEnabled, Configuration.EmoteCustomChannels));
     }
 
     private async System.Threading.Tasks.Task RunEmoteRefresh(Func<System.Threading.Tasks.Task> refresh)
@@ -757,6 +811,7 @@ public sealed class Plugin : IDalamudPlugin
         CrossDcRelayService.GroupJoined -= OnCrossDcGroupJoined;
         CrossDcRelayService.GroupLeft -= OnCrossDcGroupLeft;
         CrossDcRelayService.GroupMessageAppended -= OnCrossDcGroupMessageAppended;
+        CrossDcRelayService.EmoteChannelsSyncReceived -= OnCrossDcEmoteChannelsSyncReceived;
 
         WindowSystem.RemoveAllWindows();
         mainWindow.Dispose();

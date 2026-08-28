@@ -18,10 +18,11 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace TomeScrollChat.Services;
 
 /// <summary>
-/// Fetches the BTTV and 7TV *global* emote sets (v1 scope - no per-channel emotes yet), caches
-/// both the manifest and the raw emote images on disk (TTL-based refresh), and lazily decodes
-/// images into ImGui textures on first use. Dalamud's texture loader has no built-in WebP support,
-/// so images are decoded with ImageSharp into raw RGBA32 and handed to
+/// Fetches the BTTV and 7TV *global* emote sets, plus each configured channel's own emotes (see
+/// <see cref="Models.EmoteChannelConfig"/> - Settings &gt; Emotes' "Add channel" list), caches both the
+/// manifest and the raw emote images on disk (TTL-based refresh), and lazily decodes images into ImGui
+/// textures on first use. Dalamud's texture loader has no built-in WebP support, so images are decoded
+/// with ImageSharp into raw RGBA32 and handed to
 /// <see cref="ITextureProvider.CreateFromRawAsync(RawImageSpecification, ReadOnlyMemory{byte}, string?, CancellationToken)"/>
 /// rather than relying on any built-in image format support.
 /// </summary>
@@ -29,6 +30,8 @@ public sealed class EmoteService : IDisposable
 {
     private const string BttvGlobalUrl = "https://api.betterttv.net/3/cached/emotes/global";
     private const string SevenTvGlobalUrl = "https://7tv.io/v3/emote-sets/global";
+    private const string BttvChannelUrlFormat = "https://api.betterttv.net/3/cached/users/twitch/{0}";
+    private const string SevenTvChannelUrlFormat = "https://7tv.io/v3/users/twitch/{0}";
 
     // jsdelivr (the primary Twemoji host) is unreachable from some regions, which otherwise leaves
     // every standard-emoji image stuck permanently unloaded - and ChatMessageRenderer.DrawEmote falls
@@ -89,7 +92,7 @@ public sealed class EmoteService : IDisposable
     public bool IsReady { get; private set; }
 
     /// <summary>Loads from disk cache if fresh, otherwise refetches from BTTV/7TV. Safe to call repeatedly - a call while a refresh is already running is ignored.</summary>
-    public async Task EnsureLoadedAsync(bool bttvEnabled, bool sevenTvEnabled, TimeSpan ttl)
+    public async Task EnsureLoadedAsync(bool bttvEnabled, bool sevenTvEnabled, IReadOnlyList<EmoteChannelConfig> customChannels, TimeSpan ttl)
     {
         if (TryLoadManifestFromDisk(ttl))
         {
@@ -97,10 +100,10 @@ public sealed class EmoteService : IDisposable
             return;
         }
 
-        await RefreshAsync(bttvEnabled, sevenTvEnabled).ConfigureAwait(false);
+        await RefreshAsync(bttvEnabled, sevenTvEnabled, customChannels).ConfigureAwait(false);
     }
 
-    public async Task RefreshAsync(bool bttvEnabled, bool sevenTvEnabled)
+    public async Task RefreshAsync(bool bttvEnabled, bool sevenTvEnabled, IReadOnlyList<EmoteChannelConfig> customChannels)
     {
         var definitions = new List<EmoteDefinition>();
 
@@ -129,6 +132,36 @@ public sealed class EmoteService : IDisposable
             catch (Exception ex)
             {
                 log.Warning(ex, "TomeScrollChat: failed to fetch 7TV global emotes");
+            }
+        }
+
+        foreach (var channel in customChannels)
+        {
+            if (string.IsNullOrWhiteSpace(channel.TwitchId))
+                continue;
+
+            if (bttvEnabled)
+            {
+                try
+                {
+                    definitions.AddRange(await FetchBttvChannelAsync(channel.TwitchId).ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, "TomeScrollChat: failed to fetch BTTV channel emotes for Twitch id {TwitchId}", channel.TwitchId);
+                }
+            }
+
+            if (sevenTvEnabled)
+            {
+                try
+                {
+                    definitions.AddRange(await FetchSevenTvChannelAsync(channel.TwitchId).ConfigureAwait(false));
+                }
+                catch (Exception ex)
+                {
+                    log.Warning(ex, "TomeScrollChat: failed to fetch 7TV channel emotes for Twitch id {TwitchId}", channel.TwitchId);
+                }
             }
         }
 
@@ -163,6 +196,61 @@ public sealed class EmoteService : IDisposable
                 Provider = EmoteProvider.Bttv,
             })
             .ToList();
+    }
+
+    /// <summary>BTTV's per-channel emotes (both the channel's own uploads and ones its owner shared in
+    /// from elsewhere - see <see cref="BttvChannelResponseDto"/>'s own doc comment), keyed by numeric
+    /// Twitch id per <see cref="EmoteChannelConfig"/>'s own doc comment on why not a channel name.</summary>
+    private async Task<List<EmoteDefinition>> FetchBttvChannelAsync(string twitchId)
+    {
+        var json = await http.GetStringAsync(string.Format(BttvChannelUrlFormat, Uri.EscapeDataString(twitchId)), cts.Token).ConfigureAwait(false);
+        var response = JsonSerializer.Deserialize<BttvChannelResponseDto>(json);
+        if (response == null)
+            return new List<EmoteDefinition>();
+
+        return response.ChannelEmotes.Concat(response.SharedEmotes)
+            .Where(e => !string.IsNullOrEmpty(e.Code) && !string.IsNullOrEmpty(e.Id))
+            .Select(e => new EmoteDefinition
+            {
+                Code = e.Code,
+                Id = e.Id,
+                ImageUrl = $"https://cdn.betterttv.net/emote/{e.Id}/2x.{e.ImageType}",
+                Provider = EmoteProvider.Bttv,
+            })
+            .ToList();
+    }
+
+    /// <summary>7TV's per-channel emote set, keyed by numeric Twitch id - see
+    /// <see cref="SevenTvUserConnectionDto"/>'s own doc comment.</summary>
+    private async Task<List<EmoteDefinition>> FetchSevenTvChannelAsync(string twitchId)
+    {
+        var json = await http.GetStringAsync(string.Format(SevenTvChannelUrlFormat, Uri.EscapeDataString(twitchId)), cts.Token).ConfigureAwait(false);
+        var connection = JsonSerializer.Deserialize<SevenTvUserConnectionDto>(json);
+        var emotes = connection?.EmoteSet?.Emotes;
+        if (emotes == null)
+            return new List<EmoteDefinition>();
+
+        var result = new List<EmoteDefinition>();
+        foreach (var emote in emotes)
+        {
+            var host = emote.Data?.Host;
+            if (host == null || host.Files.Count == 0 || string.IsNullOrEmpty(emote.Name) || string.IsNullOrEmpty(emote.Id))
+                continue;
+
+            var file = host.Files.FirstOrDefault(f => f.Name.StartsWith("2x", StringComparison.OrdinalIgnoreCase))
+                       ?? host.Files.First();
+
+            var baseUrl = host.Url.StartsWith("//") ? $"https:{host.Url}" : host.Url;
+            result.Add(new EmoteDefinition
+            {
+                Code = emote.Name,
+                Id = emote.Id,
+                ImageUrl = $"{baseUrl}/{file.Name}",
+                Provider = EmoteProvider.SevenTv,
+            });
+        }
+
+        return result;
     }
 
     /// <summary><see cref="EmoteDefinition.ImageUrl"/> is never actually read for

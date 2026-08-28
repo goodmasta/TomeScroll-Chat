@@ -28,6 +28,8 @@ public sealed class ConfigWindow : Window, IDisposable
     private string crossDcGroupNameInput = string.Empty;
     private string crossDcGroupRedeemCodeInput = string.Empty;
     private string? crossDcSelectedGroupId;
+    private string emoteChannelIdInput = string.Empty;
+    private string emoteChannelLabelInput = string.Empty;
 
     // Cached, not recomputed every frame - EstimateAverageBytesPerMessage queries the actual database,
     // so this is throttled rather than hit on every single draw while the slider's just sitting there.
@@ -1293,7 +1295,8 @@ public sealed class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Refresh emotes now"))
             plugin.ForceRefreshEmotes();
 
-        ImGui.TextDisabled("Only global emote sets are loaded in this version - per-channel Twitch emotes are not yet supported.");
+        ImGui.Separator();
+        DrawEmoteChannels();
 
         ImGui.Separator();
 
@@ -1305,6 +1308,57 @@ public sealed class ConfigWindow : Window, IDisposable
             {
                 foreach (var emote in loaded)
                     ImGui.TextUnformatted($"{emote.Code}  [{emote.Provider}]");
+            }
+        }
+    }
+
+    /// <summary>Additional BTTV/7TV channels beyond the global sets - see
+    /// <see cref="Models.EmoteChannelConfig"/>'s own doc comment for why each entry is a numeric Twitch
+    /// id, not a channel name. Adding/removing a channel re-fetches immediately (same as the "Refresh
+    /// emotes now" button) and, for any cross-DC group this list is synced with (see
+    /// <see cref="DrawCrossDcGroupDetails"/>'s own sync checkbox), re-broadcasts the updated list to it.</summary>
+    private void DrawEmoteChannels()
+    {
+        ImGui.TextUnformatted("Additional channels");
+        ImGui.TextDisabled("BTTV/7TV channel emotes, by numeric Twitch id (not channel name - neither provider looks up by name).");
+
+        ImGui.SetNextItemWidth(140);
+        ImGui.InputTextWithHint("##emoteChannelId", "Twitch id", ref emoteChannelIdInput, 32, ImGuiInputTextFlags.CharsDecimal);
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(160);
+        ImGui.InputTextWithHint("##emoteChannelLabel", "Label (optional)", ref emoteChannelLabelInput, 64);
+        ImGui.SameLine();
+        using (ImRaii.Disabled(emoteChannelIdInput.Trim().Length == 0 || configuration.EmoteCustomChannels.Any(c => c.TwitchId == emoteChannelIdInput.Trim())))
+        {
+            if (ImGui.Button("Add##addEmoteChannel"))
+            {
+                configuration.EmoteCustomChannels.Add(new EmoteChannelConfig { TwitchId = emoteChannelIdInput.Trim(), Label = emoteChannelLabelInput.Trim() });
+                configuration.Save();
+                emoteChannelIdInput = string.Empty;
+                emoteChannelLabelInput = string.Empty;
+                plugin.ForceRefreshEmotes();
+                plugin.SyncEmoteChannelsToGroups();
+            }
+        }
+
+        if (configuration.EmoteCustomChannels.Count > 0)
+        {
+            using var child = ImRaii.Child("EmoteChannelsView", new Vector2(0, 80), true);
+            if (child.Success)
+            {
+                foreach (var channel in configuration.EmoteCustomChannels.ToList())
+                {
+                    var label = string.IsNullOrEmpty(channel.Label) ? channel.TwitchId : $"{channel.Label} ({channel.TwitchId})";
+                    ImGui.TextUnformatted(label);
+                    ImGui.SameLine();
+                    if (ImGui.SmallButton($"Remove##removeEmoteChannel_{channel.TwitchId}"))
+                    {
+                        configuration.EmoteCustomChannels.Remove(channel);
+                        configuration.Save();
+                        plugin.ForceRefreshEmotes();
+                        plugin.SyncEmoteChannelsToGroups();
+                    }
+                }
             }
         }
     }
@@ -1695,6 +1749,21 @@ public sealed class ConfigWindow : Window, IDisposable
             _ = relay.RefreshMyNameInGroupAsync(group.Id);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Re-announces your current character name to this group - use this if you renamed/switched characters, or if a member who was offline when you joined is online now.");
+
+        var syncing = configuration.CrossDcEmoteSyncGroupIds.Contains(group.Id);
+        if (ImGui.Checkbox("Sync custom emote channels with this group##crossDcEmoteSync", ref syncing))
+        {
+            if (syncing)
+                configuration.CrossDcEmoteSyncGroupIds.Add(group.Id);
+            else
+                configuration.CrossDcEmoteSyncGroupIds.Remove(group.Id);
+            configuration.Save();
+
+            if (syncing)
+                plugin.SyncEmoteChannelsToGroups();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Shares your Settings > Emotes \"Additional channels\" list with this group's members (and theirs with you) - additive only, never removes a channel you already have configured just because someone else's list doesn't include it.");
     }
 
     /// <summary>Relay admin tooling - claiming admin rights with the relay's own log-printed bootstrap

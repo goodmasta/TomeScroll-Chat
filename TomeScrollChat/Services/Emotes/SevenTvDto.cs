@@ -53,3 +53,13 @@ public sealed class SevenTvHostFileDto
     [JsonPropertyName("width")]
     public int Width { get; set; }
 }
+
+/// <summary>Shape of 7TV v3's `GET /v3/users/twitch/{twitchId}` object response - the per-channel
+/// lookup <see cref="Services.EmoteService"/> uses for <see cref="Models.EmoteChannelConfig"/> entries.
+/// Only <see cref="EmoteSet"/> is read; the rest of this connection object (username, capacity, etc.)
+/// isn't needed here.</summary>
+public sealed class SevenTvUserConnectionDto
+{
+    [JsonPropertyName("emote_set")]
+    public SevenTvEmoteSetDto? EmoteSet { get; set; }
+}
