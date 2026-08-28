@@ -28,6 +28,7 @@ public sealed class TabManager
         else
         {
             MigrateNoviceCommand();
+            MigrateNoviceIcon();
         }
     }
 
@@ -43,6 +44,29 @@ public sealed class TabManager
             if (tab.IsBuiltIn && tab.OutgoingChannelCommand == "/nov")
             {
                 tab.OutgoingChannelCommand = "/n";
+                changed = true;
+            }
+        }
+
+        if (changed)
+            configuration.Save();
+    }
+
+    /// <summary>Same "fix existing installs too, not just fresh ones" reasoning as
+    /// <see cref="MigrateNoviceCommand"/> - an already-created Novice Chat tab predates the "seedling"
+    /// icon <see cref="DefaultTabFactory.CreateDefaults"/> now sets on brand-new ones, so this sets it
+    /// here too, per explicit user request. Only touches a tab that's never had an icon explicitly set
+    /// (<see cref="ChatTabConfig.IconEmoji"/> still null) - a player who's since picked a different icon
+    /// by hand keeps it, this doesn't fight that choice back every load the way e.g.
+    /// <see cref="Services.NativeChatHider"/> deliberately re-fights *visibility* every frame.</summary>
+    private void MigrateNoviceIcon()
+    {
+        var changed = false;
+        foreach (var tab in configuration.Tabs)
+        {
+            if (tab.IsBuiltIn && tab.IconEmoji == null && tab.Channels.Contains(XivChatType.NoviceNetwork))
+            {
+                tab.IconEmoji = "seedling";
                 changed = true;
             }
         }
