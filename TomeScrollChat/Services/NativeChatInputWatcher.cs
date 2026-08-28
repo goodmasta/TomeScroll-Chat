@@ -2,7 +2,6 @@ using System;
 using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
-using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 
 namespace TomeScrollChat.Services;
 
@@ -36,10 +35,24 @@ namespace TomeScrollChat.Services;
 /// <see cref="Dalamud.Game.Text.SeStringHandling.SeStringBuilder.AddItemLink"/> - sidestepping the
 /// native textbox (and its binary-payload risk) entirely.
 ///
-/// In both cases the native box is cleared and the log window hidden immediately, unconditionally -
-/// see the original tell-only version's history for why that has to happen on every detection, not
-/// just outside some cooldown (a same-target cooldown still exists, but only gates the tell
-/// *callback*, never this cleanup).
+/// In both cases the native input box is cleared immediately, unconditionally - see the original
+/// tell-only version's history for why that has to happen on every detection, not just outside some
+/// cooldown (a same-target cooldown still exists, but only gates the tell *callback*, never this
+/// cleanup).
+///
+/// <para><b>Fixed 2026-08-22</b>: this used to also call <c>AgentChatLog.HideLogWindow()</c> here,
+/// on top of clearing the input - reported live as leaving native chat permanently un-recoverable
+/// after typing "/" even once: unlike <see cref="NativeChatHider"/>'s own <c>IsVisible</c> toggle
+/// (continuously re-applied every frame in both directions, so it never gets stuck), <c>HideLogWindow</c>
+/// has no counterpart "show" method at all (confirmed via reflection over FFXIVClientStructs -
+/// <c>AgentChatLog</c> only exposes <c>ShowAddon</c>/<c>HideAddon</c> and the base
+/// <c>AgentInterface.Show</c>/<c>Hide</c>, neither of which this hides through) - whatever internal
+/// "closed by the player" state it sets apparently isn't undone by forcing <c>IsVisible</c> back to
+/// true, so <see cref="NativeChatHider"/> toggling native chat back on could no longer actually bring
+/// it back. Removed entirely: <see cref="NativeChatHider"/>'s own continuous enforcement already
+/// covers hiding the addon while <see cref="Configuration.HideNativeChat"/> is on, so this was
+/// redundant in that case and actively harmful in the other (native chat intentionally left visible,
+/// where this would irreversibly slam the window shut just because the player typed "/").</para>
 /// </summary>
 public sealed unsafe class NativeChatInputWatcher : IDisposable
 {
@@ -119,13 +132,7 @@ public sealed unsafe class NativeChatInputWatcher : IDisposable
         onTellTargetChanged(name, world);
     }
 
-    private static void ClearNativeInput(AddonChatLog* addon)
-    {
-        addon->TextInput->SetText(string.Empty);
-        var agent = AgentChatLog.Instance();
-        if (agent != null)
-            agent->HideLogWindow();
-    }
+    private static void ClearNativeInput(AddonChatLog* addon) => addon->TextInput->SetText(string.Empty);
 
     public void Dispose() => framework.Update -= OnFrameworkUpdate;
 }
