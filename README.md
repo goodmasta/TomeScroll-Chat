@@ -1,6 +1,6 @@
 # TomeScroll Chat
 
-> **⚠️ Beta - v0.2.0.0.** Under active development, not yet feature-frozen or thoroughly battle-tested. Expect rough edges, and back up `pluginConfigs/TomeScrollChat*` before major updates.
+> **⚠️ Beta - v0.2.0.0** ([changelog](CHANGELOG.md)). Under active development, not yet feature-frozen or thoroughly battle-tested. Expect rough edges, and back up `pluginConfigs/TomeScrollChat*` before major updates.
 
 > **🤖 This entire plugin - every line of code, every feature, this README - was built through an AI coding agent (Claude), directed by a human via natural-language requests rather than hand-written by a developer.** No prior C#/Dalamud codebase was used as a starting point.
 
@@ -30,7 +30,7 @@ Details and building from source: see [Installing](#installing) below.
 2. Add: `https://raw.githubusercontent.com/goodmasta/TomeScroll-Chat/main/pluginmaster.json`
 3. Save, then find "TomeScroll Chat" in `/xlplugins` and install it like any other plugin. Updates are picked up automatically like any other plugin.
 
-`.github/workflows/release.yml` rebuilds and republishes automatically on every push to `main`: it bumps `pluginmaster.json`'s version/timestamp to match the `<Version>` in the `.csproj`, moves a rolling `latest` tag, and updates the `latest` GitHub Release with the freshly packaged zip. Bumping the version only requires editing `<Version>` in `TomeScrollChat/TomeScrollChat.csproj` and pushing.
+`.github/workflows/release.yml` rebuilds and republishes automatically on every push to `main`: it bumps `pluginmaster.json`'s version/timestamp to match the `<Version>` in the `.csproj`, moves a rolling `latest` tag, and updates the `latest` GitHub Release with the freshly packaged zip (this is what the custom repository above actually downloads). It also tags and publishes a permanent, version-numbered release (e.g. `v0.2.0.0`) with notes pulled from [CHANGELOG.md](CHANGELOG.md), so past versions stay browsable on the [Releases page](https://github.com/goodmasta/TomeScroll-Chat/releases) instead of being overwritten. Bumping the version only requires editing `<Version>` in `TomeScrollChat/TomeScrollChat.csproj`, adding a matching `CHANGELOG.md` entry, and pushing.
 
 ### As a dev plugin (for local development)
 
@@ -70,13 +70,24 @@ The main chat window itself has no close button and can't be hidden by Dalamud's
 - Optional extra filter on top of channel membership: keyword-contains or regex.
 - Any tab can be **popped out** into its own floating window and reattached later.
 - Any tab can have a custom name, a custom icon, per-channel message colours, its own unread/blink colours, and an outgoing channel command (e.g. `/p`, `/fc`, `/n`).
-- Five built-in tabs are created on first run: **Party**, **General** (Say/Yell/Shout), **Free Company**, **Novice Chat**, and **Log**.
+- Five built-in tabs are created on first run: **Party**, **General** (Say/Yell/Shout), **Free Company**, **Novice Chat** (only if you're actually eligible for the Novice Network), and **Log**.
 
 ## Whispers
 
 - A tab is created automatically per conversation partner the first time you send or receive a tell.
 - The game's native "Send Tell" (right-click menu, friends list, target, "R" shortcut) is detected and redirected straight into the matching whisper tab.
 - "Close All PM" closes every whisper tab/window at once (history is kept).
+
+## Cross-DC chat
+
+A relay-based channel for reaching players on a different data center, where native `/tell` can't. Off by default - enable it in `/tomescrollc config` → **Cross-DC**.
+
+- **1:1 pairing**: create an invite code and share it out-of-band (voice, Discord, ...) - never through this relay or native chat - then the other side redeems it to pair. Messages are **end-to-end encrypted** (X25519 key exchange, XChaCha20-Poly1305) - the relay server only ever sees ciphertext, never plaintext or your identity's private keys.
+- **Groups** ("relay linkshells"): create or join a multi-member encrypted chat via the same kind of invite code. Owner/moderator roles, kick, and ownership transfer are supported; the group's key automatically rotates on a kick or a member leaving, so they lose access to future messages.
+- Both kinds show up as **real tabs** - auto-created the moment a pairing/membership completes, self-healing if you close them - with their own sidebar badge (`[CD]` for 1:1, `[GRP]` for groups) and the contact/member's actual character name instead of a raw relay ID.
+- **Unpair**/**Block**/**Unblock** a 1:1 contact from Settings → Cross-DC.
+- Custom BTTV/7TV emote channels (see [Emotes](#emotes)) can be synced automatically with a group's members.
+- Optional admin tooling (claim admin, view server logs, live connected-client count) for whoever operates the relay you're connected to.
 
 ## Messages
 
@@ -134,8 +145,11 @@ All AI actions only ever fill the compose box - none of them send anything autom
 ## Emotes
 
 - **BTTV** and **7TV** global emote sets, plus a curated standard-emoji pool rendered as real images via a public emoji CDN.
+- **Custom channels**: add additional BTTV/7TV channels by numeric Twitch ID (not a channel name - neither provider looks up by name) from Settings → Emotes, loaded alongside the global sets.
+- **Cross-DC group sync**: a per-group toggle (in that group's own Cross-DC settings panel) shares your custom-channel list with the group's members and theirs with you - additive only, never removes a channel you already have configured.
 - All sources share one searchable image-grid picker, used for chat input, tab icons, and the friend marker.
 - Emotes must be wrapped in colons (`:cat:`) to render, avoiding accidental matches on plain words.
+- The full emote list (global sets + custom channels) is refetched automatically every time the plugin starts.
 
 ## History
 
@@ -147,11 +161,11 @@ All AI actions only ever fill the compose box - none of them send anything autom
 
 - **General** - native chat hiding, whisper window behaviour, screenshot mode, translation target language, unread colours, friend marker, font size, history size cap.
 - **Tabs** - create/rename/delete tabs, channels, filters, colours, icons, pop out/reattach.
-- **Emotes** - BTTV/7TV toggles, emote size, cache refresh interval, loaded emote list.
+- **Cross-DC** - relay mode, 1:1 pairing/contacts, groups, admin tooling.
+- **Emotes** - BTTV/7TV toggles, emote size, custom channels, loaded emote list.
 - **AI** - Gemini API key, AI reply prompt and memory toggle/limit.
 - **Reset settings to defaults** - available in General, with tabs and all preferences restored to their shipped defaults.
 
 ## Not yet implemented
 
-- Per-Twitch-channel BTTV/7TV emotes (global sets only).
 - Animated emote playback (static frame only).

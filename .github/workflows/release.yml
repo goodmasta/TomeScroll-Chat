@@ -83,3 +83,56 @@ jobs:
             gh release create latest --title "latest" --notes "Automated build - see pluginmaster.json for the version this corresponds to."
           }
           gh release upload latest "TomeScrollChat/bin/x64/Release/TomeScrollChat/latest.zip" --clobber
+
+      - name: Tag and publish a permanent, version-numbered release
+        # The 'latest' release/tag above is what the custom repository actually installs/updates from,
+        # and is deliberately overwritten every push - it has no memory of past versions. This step is
+        # what keeps past versions around as real, permanent, browsable releases (never overwritten,
+        # each with its own notes) instead of only ever existing in git commit history. Skips entirely
+        # if this exact version's tag already exists, so re-running the workflow (or pushing again
+        # without bumping <Version>) doesn't fail trying to recreate it.
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $tag = "v$version"
+
+          if (git tag -l $tag) {
+            Write-Host "Tag $tag already exists - this version was already released, skipping."
+            exit 0
+          }
+
+          # Pulls this version's own section out of CHANGELOG.md (from its "## [version]" heading up
+          # to the next "## [" heading, or end of file) to use as the release notes - falls back to a
+          # generic line if the changelog has no entry for this version yet, rather than failing.
+          $notes = "See CHANGELOG.md for details."
+          if (Test-Path CHANGELOG.md) {
+            $lines = Get-Content CHANGELOG.md
+            $startIdx = -1
+            $endIdx = $lines.Count
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match "^## \[$([regex]::Escape($version))\]") {
+                $startIdx = $i + 1
+                for ($j = $startIdx; $j -lt $lines.Count; $j++) {
+                  if ($lines[$j] -match "^## \[") {
+                    $endIdx = $j
+                    break
+                  }
+                }
+                break
+              }
+            }
+            if ($startIdx -ge 0 -and $startIdx -lt $endIdx) {
+              $notes = ($lines[$startIdx..($endIdx - 1)] -join "`n").Trim()
+            }
+          }
+
+          $notesPath = "$env:RUNNER_TEMP\release-notes.md"
+          Set-Content -Path $notesPath -Value $notes -NoNewline
+
+          git tag $tag
+          git push origin $tag
+
+          gh release create $tag --title $tag --notes-file $notesPath
+          gh release upload $tag "TomeScrollChat/bin/x64/Release/TomeScrollChat/latest.zip" --clobber
