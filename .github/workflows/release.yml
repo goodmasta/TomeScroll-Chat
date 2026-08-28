@@ -30,6 +30,37 @@ jobs:
           Expand-Archive -Path "$env:RUNNER_TEMP\dalamud.zip" -DestinationPath $dalamudDir -Force
           "DALAMUD_HOME=$dalamudDir" >> $env:GITHUB_ENV
 
+      - name: Write the managed relay's secret address (from a repo secret, never committed)
+        # ManagedRelayEndpoint.cs's own doc comment: the "TomeScroll Cloud" URL can't live in this
+        # public repo's source, but a release build still needs it to actually offer that option -
+        # this writes the gitignored ManagedRelayEndpoint.Secret.cs from a GitHub Actions repository
+        # secret (Settings > Secrets and variables > Actions > MANAGED_RELAY_URL) right before the
+        # build, so it only ever exists on the runner's disk, never in git. If the secret isn't set,
+        # this is skipped entirely and the build proceeds without it - GetUrl() just returns null and
+        # Settings disables the Managed option, same as any local clone with no secret file (self-hosted
+        # relay mode and everything else still works).
+        shell: pwsh
+        env:
+          MANAGED_RELAY_URL: ${{ secrets.MANAGED_RELAY_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:MANAGED_RELAY_URL)) {
+            Write-Host "No MANAGED_RELAY_URL secret set - building without TomeScroll Cloud (self-hosted relay mode still works)."
+          } else {
+            # Built as a plain array-of-lines rather than a PowerShell here-string - a here-string's
+            # closing "@ has to sit at column 0, which conflicts with staying indented inside this
+            # YAML block scalar.
+            $lines = @(
+              "namespace TomeScrollChat.Services;"
+              ""
+              "public static partial class ManagedRelayEndpoint"
+              "{"
+              "    static partial void TryGetSecretUrl(ref string? url) => url = ""$env:MANAGED_RELAY_URL"";"
+              "}"
+            )
+            Set-Content -Path "TomeScrollChat/Services/ManagedRelayEndpoint.Secret.cs" -Value $lines
+            Write-Host "Wrote ManagedRelayEndpoint.Secret.cs - TomeScroll Cloud will be available in this build."
+          }
+
       - name: Build (Release)
         run: dotnet build TomeScrollChat.sln -c Release
 
